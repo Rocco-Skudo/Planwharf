@@ -1,74 +1,64 @@
-# PLANWHARFZOMBIE-002-R1 — verifica indipendente: il ritorno
+# PLANWHARFZOMBIE — chiudi il motore
 
 STATUS: COMPLETE  
 VERDICT/GATE: **ACCEPT / PASS**
 
-- **TASK_ID**: PLANWHARFZOMBIE-002 (verifica PLANWHARFZOMBIE-002-R1)
-- **Implementatore effettivo**: Gemini del pool esterno, slot `gemini-2` (COMPLETE, rc=0, 2026-10-08T01:10:25 → 01:23:54). Modello dichiarato dall’implementatore: **Gemini 3.8 Flash (High)**. Non è lavoro del direttore né di un subagente Codex.
-- **Verificatore indipendente**: Grok del pool esterno, **Grok 4.6** (xAI). Eseguito in questa sessione. Nessun worker lanciato, nessun agente nativo Codex, nessuna modifica a NPC-Orchestra-v5/CERP/altri progetti.
+Implementer: this session, files written directly in `D:\benit\Desktop\Projects\Planwharf-zombie`. No NPC-Orchestra-v5, no inbox envelopes, no native agent spawn, no model discovery from the PC.
 
-## Distinzione preesistente vs worker Gemini
+## Files written
 
-Lavoro **preesistente** (task 001 e prototipo, timestamp anteriori a 01:10): `index.html`, `styles.css`, `server.cjs`, `plan.js`, `plan.json`, `verify.cjs`, `verify-file.cjs`, `verify-round.cjs`, `fixtures/`, layout a quattro aree.
+| File | Role |
+|------|------|
+| `engine/attempts.js` | File-backed attempt store (Node directory + browser OPFS). One active attempt per task, one per project. Second claim fails and does not append a row. |
+| `engine/attempts.test.cjs` | Isolated disk tests for claims, reconstruction, and sentinel. |
+| `engine/sentinel.js` | COMPLETE is a result file. Missing verdict closes the attempt. No second attempt while the first is active. |
+| `app.js` | English interface copy and Running integration with the file engine. |
+| `index.html` | Four areas; attempt and Claim refused in Running; technical proof closed. |
+| `server.cjs` | Static whitelist only: serve `models.js`, `models.json`, `engine/attempts.js`, `engine/sentinel.js`, `engine/claims.js`. Plan read/write path unchanged. |
+| `handoff/RESULT.md` | This report. |
 
-Modifiche del **worker Gemini (002)**:
-- Applicative: `app.js` (marker `planwharf_seen_<projectId>`, `projectReturnState`, salto cumulativo, primo accesso senza diff inventato), `README.md`.
-- Test: `verify-jump.cjs` (nuovo), `verify-ui.cjs` (mock localStorage dei marker), `verify-browser.cjs` (primo accesso / salto R3→R5 / reload).
-- Report: `handoff/IMPLEMENTATION-002.md`, `handoff/RESULT.md` (preliminare Gemini, poi questo verdetto Grok).
+Untouched notebook data: `plan.json`, `plan.js`, `models.js`, `models.json`, `engine/claims.js`, `styles.css`. Example plan text stays Italian.
 
-File **non toccati** dal 002 e restati intatti in verifica: `plan.json` (SHA256 `4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469`, mtime 2026-10-08T00:48:55, 2455 byte, invariato prima e dopo i test), `server.cjs`, `plan.js`, `styles.css`, `index.html`.
+## English copy
 
-Buste conservate in `handoff/`: `PLANWHARFZOMBIE-001.json`, `PLANWHARFZOMBIE-002.json`, `PLANWHARFZOMBIE-002-R1.json`.
+Present in `app.js` / `index.html`: Where this goes, Where it stands, Decided, Still open, Nothing new, Running, Claim refused.
 
-## Criteri di accettazione
+## Tests
 
-| # | Criterio | Esito | Evidenza |
-|---|----------|-------|----------|
-| 1 | Chiudere/riaprire ricorda l’ultima revisione vista, per progetto | **PASS** | `app.js` chiavi `planwharf_seen_<id>`; `verify-jump` test 2/4/6; Edge reload in `verify-browser.cjs` |
-| 2 | Salto vista precedente → corrente, anche saltando intermedie; marker aggiornato senza cancellare il confronto di sessione | **PASS** | `projectReturnState` tipo `jump`; `verify-jump` test 3 (R1→R2, marker a 2, confronto ancora visibile) e test 5 (R1→R4, via del Porto + decisioni R3/R4, contesto `Da R1 a R4`); Edge `Da R3 a R5` con Passo 4 e Passo 5 |
-| 3 | Nessuna revisione nata → "nessuna novità", nessun diff inventato | **PASS** | Primo accesso e reload a parità di revisione; test 1/2/4; screenshot Edge: «Nessuna novità. Primo accesso…» e «Nessuna novità dall’ultima visita»; assente il diff di esempio «via del Porto» al primo accesso |
-| 4 | Quattro aree; `plan.json` unico quaderno; niente quaderno parallelo in localStorage | **PASS** | `index.html` 4 `<section class="card">`; localStorage solo marker stringa; mock test vieta chiavi `plan`/`notebook`; hash `plan.json` produzione immutato |
-| 5 | Test automatici reali: salto, nessuna novità, riapertura, isolamento; rieseguiti; production `plan.json` non mutato | **PASS** | Suite sotto, tutte EXIT=0; SHA256 invariato |
+Command (run twice, both exit 0, `passed=10 failed=0`):
 
-## Test rieseguiti dal verificatore (2026-10-08, fixture isolate)
+```
+node engine/attempts.test.cjs
+node engine/attempts.test.cjs
+```
 
-Comandi da `D:\benit\Desktop\Projects\Planwharf-zombie`:
+Outcomes:
 
-1. `node verify.cjs` — **PASS** (`OK: due progetti, tre modi ammessi…`)
-2. `node verify-file.cjs` — **PASS** (file temporaneo isolato)
-3. `node verify-round.cjs` — **PASS** (copia isolata, non scrive production)
-4. `node verify-ui.cjs` — **PASS** (simulazione DOM; **non** è verifica visiva)
-5. `node verify-jump.cjs` — **PASS** (8 scenari: primo accesso, nessuna novità, salto 1, salto R1→R4, isolamento biblioteca/orto, immutabilità `plan.json`, marker corrotti)
-6. `node verify-browser.cjs` — **PASS** (Microsoft Edge reale, DevTools protocol, fixture `validation/browser-plan-*.json`)
+- First claim writes `attempts.json`.
+- Second claim same task: `ok=false`, reason `task already assigned`, file unchanged, no extra row. Winner `attempt-1`.
+- Second claim same project, different task: `ok=false`, reason `project already assigned`, no extra row.
+- New engine on the same directory reconstructs the same attempt id.
+- COMPLETE result file ends waiting while a simulated process is still alive.
+- Missing verdict closes the attempt (`closedReason=no verdict`).
+- While the first claim is active, a second claim is refused.
 
-`plan.json` produzione: SHA256 identico prima e dopo (`4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469`).
+Screen (real Edge, isolated plan copy, not production `plan.json`): four areas; English labels; attempt visible in Running; `Claim refused:` after a second claim; `details.claim-panel` stays closed.
 
-## Verifica visiva Edge
+No real model spawn.
 
-**ESEGUITA** (non simulazione DOM). `verify-browser.cjs` ha avviato Microsoft Edge (`msedge.exe`, profilo isolato in `validation/`), aperto localhost, esercitato primo accesso, creazione R3, salto R3→R5, reload, grill, mobile, progetto orto.
+## plan.json hash
 
-Screenshot ispezionati dal verificatore:
-- `validation/desktop-example.png` — quattro aree; R2 attuale; «Nessuna novità. Primo accesso al progetto»; nessun diff di esempio.
-- `validation/desktop-new-revision.png` — R5 dopo reload successivo al salto; «Nessuna novità dall’ultima visita»; storico R1–R5; quattro aree.
-- `validation/mobile-new-revision.png` — stesso stato, viewport mobile, quattro aree impilate.
-- `validation/report.txt` — `PASS: real Edge opens localhost; four areas; first access nessuna novità; manual R3; jump R3->R5; reload nessuna novità; grill R6; mobile layout; orto isolated.`
+| | SHA256 | bytes | mtime |
+|--|--------|-------|-------|
+| Before | `4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469` | 2455 | 2026-10-07T22:48:55.923Z |
+| After | `4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469` | 2455 | 2026-10-07T22:48:55.923Z |
 
-Il salto `Da R3 a R5` (Passo 4 chiuso / Passo 5 chiuso) è asserito sul DOM di Edge prima dello screenshot post-reload; lo screenshot cattura lo stato «nessuna novità» dopo aver consumato il salto, coerente col requisito del marker.
+Production plan is unchanged.
 
-## File toccati
+## OPEN_ISSUES
 
-- **Implementazione Gemini (non modificata da Grok)**: `app.js`, `README.md`, `verify-jump.cjs`, `verify-ui.cjs`, `verify-browser.cjs`.
-- **Report Grok (questa verifica)**: `handoff/RESULT.md`.
-- **Evidenze test (output di `verify-browser.cjs` rieseguito)**: `validation/desktop-example.png`, `validation/desktop-new-revision.png`, `validation/mobile-new-revision.png`, `validation/report.txt`, profili `validation/edge-profile-*` (artefatti del test, fixture isolate).
-
-## Problemi aperti
-
-Nessun blocco funzionale sui criteri 1–5.
-
-Nota non bloccante: gli screenshot Edge del salto cumulativo in sé non sono salvati (lo script fotografa dopo il reload che deve mostrare «nessuna novità»); il salto è comunque verificato sul DOM Edge nella stessa sessione.
-
-Nota di processo: `gemini-3` ha registrato FAILED rc=999 sullo stesso TASK_ID in parallelo a `gemini-2`; l’esecuzione riuscita è `gemini-2` rc=0. Non attribuire il codice a Codex.
+None on the requested gate. The next round (real spawn / PC discovery / unregister) stays closed.
 
 ## NEXT_ACTION
 
-Accettare PLANWHARFZOMBIE-002. Task chiuso dal punto di vista della verifica indipendente. Nessun redispatch, nessuna correzione da implementare.
+Use `node server.cjs` and http://127.0.0.1:4173. Claim from Running's technical panel (leave it closed). The attempt and refusal stay visible in Running.

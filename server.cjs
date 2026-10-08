@@ -42,7 +42,7 @@ async function body(request) {
 }
 function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan } = {}) {
   let queue = Promise.resolve();
-  const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'] };
+  const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   return http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });

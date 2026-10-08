@@ -2,8 +2,8 @@
 (() => {
   const $ = id => document.getElementById(id);
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const date = value => new Date(value).toLocaleDateString('it-IT', { day: '2-digit', month: 'short', year: 'numeric' });
-  const labels = { direction: 'Dove si va', state: 'Stato dell’arte', closed: 'Decisioni chiuse', open: 'Cosa è aperto' };
+  const date = value => new Date(value).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  const labels = { direction: 'Where this goes', state: 'Where it stands', closed: 'Decided', open: 'Still open' };
   let data = null;
   let projectId = null;
   const project = () => data.schema === 2 ? data.projects.find(p => p.project.id === projectId) : data;
@@ -38,7 +38,7 @@
 
     let state;
     if (lastSeenId === null) {
-      // Primo accesso: nessun diff inventato, definisci primo accesso senza inventare una revisione vista
+      // First access: no invented diff, define first access without inventing a seen revision
       setSeenRevision(pId, current.id);
       state = {
         type: 'first_access',
@@ -49,7 +49,7 @@
         changes: []
       };
     } else if (lastSeenId === current.id) {
-      // Nessuna novità dall'ultima visita
+      // Nothing new since last visit
       state = {
         type: 'no_changes',
         lastSeenId,
@@ -59,11 +59,11 @@
         changes: []
       };
     } else if (lastSeenId < current.id) {
-      // Salto dalla revisione precedentemente vista alla corrente (anche di più revisioni)
+      // Jump from previously seen revision to current (even across multiple revisions)
       const fromRevision = p.revisions.find(r => r.id === lastSeenId);
       if (fromRevision) {
         const changes = Planwharf.diff(fromRevision, current);
-        // Aggiorna il marker visto a quella corrente senza perdere il confronto da mostrare durante la riapertura
+        // Update seen marker to current without losing comparison shown during reopen
         setSeenRevision(pId, current.id);
         state = {
           type: 'jump',
@@ -100,28 +100,80 @@
     return state;
   }
 
-  function notice(message) { $('storage-notice').textContent = message; $('storage-notice').hidden = false; }
+  const claimReasonTranslations = {
+    'dati non validi': 'invalid data',
+    'nessun modello acceso': 'no model enabled',
+    'modello non presente': 'model not present',
+    'modello spento': 'model disabled',
+    'modello non candidabile': 'model not eligible',
+    'task già assegnato': 'task already assigned',
+    'progetto già assegnato': 'project already assigned',
+    'motore claim non disponibile': 'claim engine not available'
+  };
+
+  function translateClaimReason(reason) {
+    if (!reason || typeof reason !== 'string') return '';
+    const clean = reason.trim().toLowerCase();
+    return claimReasonTranslations[clean] || reason;
+  }
+
+  const errorTranslations = {
+    'Il file locale non è raggiungibile. Avvia server.cjs e apri il suo indirizzo locale.': 'The local file is unreachable. Start server.cjs and open its local address.',
+    'Salvataggio non riuscito.': 'Save failed.',
+    'Il file del piano non è valido.': 'The plan file is invalid.',
+    'Il quaderno salvato non è valido.': 'The saved notebook is invalid.',
+    'Il quaderno aggiornato non è valido.': 'The updated notebook is invalid.',
+    'Compila titolo, direzione e stato dell’arte.': 'Fill in title, where this goes, and where it stands.',
+    'La nuova revisione non è valida.': 'The new revision is invalid.',
+    'Rispondi alle domande aperte della revisione corrente.': 'Answer the open questions of the current revision.',
+    'Ogni risposta deve indicare la domanda corrente e una scelta valida.': 'Each answer must indicate the current question and a valid choice.',
+    'Scegli una sola nuova direzione per giro.': 'Choose only one new direction per round.',
+    'JSON di importazione non valido.': 'Invalid import JSON.',
+    'Importa un oggetto con titolo, direzione, stato, decisioni chiuse e domande aperte.': 'Import an object with title, where this goes, where it stands, decided decisions, and open questions.',
+    'Questo progetto ha già un task in corso. Nessun secondo task è stato creato.': 'This project already has a running task. No second task was created.',
+    'Il task richiede titolo e una revisione esistente.': 'The task requires a title and an existing revision.',
+    'Il piano è cambiato. Ricarica la pagina prima di salvare.': 'The plan has changed. Reload the page before saving.',
+    'Progetto non trovato.': 'Project not found.',
+    'Usa JSON per la revisione.': 'Use JSON for the revision.',
+    'Dati non validi.': 'Invalid data.',
+    'Apri la schermata dal suo indirizzo locale.': 'Open the interface from its local address.',
+    'Risorsa non disponibile.': 'Resource unavailable.',
+    'Lettura o salvataggio del file non riuscito. Nessuna revisione è stata aggiunta.': 'Failed to read or save file. No revision was added.',
+    'Revisione troppo grande.': 'Revision too large.',
+    'Richiesta non leggibile.': 'Request unreadable.',
+    'File non leggibile.': 'File unreadable.',
+    'Disco non disponibile.': 'Disk unavailable.'
+  };
+
+  function translateError(msg) {
+    if (!msg || typeof msg !== 'string') return '';
+    const trimmed = msg.trim();
+    if (errorTranslations[trimmed]) return errorTranslations[trimmed];
+    return msg;
+  }
+
+  function notice(message) { $('storage-notice').textContent = translateError(message); $('storage-notice').hidden = false; }
   async function request(url, options) {
     let response;
     try { response = await fetch(url, options); }
-    catch { throw new Error('Il file locale non è raggiungibile. Avvia server.cjs e apri il suo indirizzo locale.'); }
+    catch { throw new Error('The local file is unreachable. Start server.cjs and open its local address.'); }
     const result = await response.json();
-    if (!response.ok) throw new Error(result.error || 'Salvataggio non riuscito.');
-    if (!Planwharf.validate(result.plan) || typeof result.version !== 'string') throw new Error('Il file del piano non è valido.');
+    if (!response.ok) throw new Error(translateError(result.error) || 'Save failed.');
+    if (!Planwharf.validate(result.plan) || typeof result.version !== 'string') throw new Error('The plan file is invalid.');
     return result;
   }
-  const list = items => items.length ? `<ul>${items.map(x => `<li>${escape(x)}</li>`).join('')}</ul>` : '<p>Nessuna voce.</p>';
+  const list = items => items.length ? `<ul>${items.map(x => `<li>${escape(x)}</li>`).join('')}</ul>` : '<p>No items.</p>';
 
-  function renderChanges(changes, emptyMessage = 'Il piano è invariato. Una nuova revisione ne conserva il punto attuale.') {
+  function renderChanges(changes, emptyMessage = 'The plan is unchanged. A new revision preserves the current point.') {
     if (!changes || !changes.length) return `<p class="muted">${escape(emptyMessage)}</p>`;
     return changes.map(change => {
-      if (change.key === 'reopened') return `<div class="diff-item"><h3>Decisione riaperta esplicitamente</h3>${list(change.after)}</div>`;
+      if (change.key === 'reopened') return `<div class="diff-item"><h3>Decision explicitly reopened</h3>${list(change.after)}</div>`;
       if (Array.isArray(change.after)) {
         const added = change.after.filter(x => !change.before.includes(x));
         const removed = change.before.filter(x => !change.after.includes(x));
-        return `<div class="diff-item"><h3>${labels[change.key]}</h3>${removed.map(x => `<p class="diff-old"><b>RIMOSSO</b> · ${escape(x)}</p>`).join('')}${added.map(x => `<p class="diff-new"><b>AGGIUNTO</b> · ${escape(x)}</p>`).join('')}${!added.length && !removed.length ? '<p>Ordine delle voci aggiornato.</p>' : ''}</div>`;
+        return `<div class="diff-item"><h3>${labels[change.key]}</h3>${removed.map(x => `<p class="diff-old"><b>REMOVED</b> · ${escape(x)}</p>`).join('')}${added.map(x => `<p class="diff-new"><b>ADDED</b> · ${escape(x)}</p>`).join('')}${!added.length && !removed.length ? '<p>Item order updated.</p>' : ''}</div>`;
       }
-      return `<div class="diff-item"><h3>${labels[change.key]}</h3><p class="diff-old"><b>PRIMA</b> · ${escape(change.before)}</p><p class="diff-new"><b>ADESSO</b> · ${escape(change.after)}</p></div>`;
+      return `<div class="diff-item"><h3>${labels[change.key]}</h3><p class="diff-old"><b>BEFORE</b> · ${escape(change.before)}</p><p class="diff-new"><b>NOW</b> · ${escape(change.after)}</p></div>`;
     }).join('');
   }
 
@@ -136,39 +188,38 @@
     const previous = project().revisions[index - 1];
     const newest = index === project().revisions.length - 1;
     $('revision-select').innerHTML = [...project().revisions].reverse().map(r => `<option value="${r.id}" ${r.id === selected ? 'selected' : ''}>R${r.id} · ${escape(r.title)}</option>`).join('');
-    $('revision-badge').textContent = `R${revision.id} · ${revision.mode} · ${newest ? 'Attuale' : 'Storico'}`;
+    $('revision-badge').textContent = `R${revision.id} · ${revision.mode} · ${newest ? 'Current' : 'Historical'}`;
     $('plan-content').innerHTML = Object.keys(labels).map(key => `<div class="plan-block ${key}"><h3>${labels[key]}</h3>${Array.isArray(revision[key]) ? list(revision[key]) : `<p>${escape(revision[key])}</p>`}</div>`).join('');
-    $('revision-footer').textContent = `${revision.title} · ${date(revision.createdAt)} · Revisione conservata`;
+    $('revision-footer').textContent = `${revision.title} · ${date(revision.createdAt)} · Preserved revision`;
 
     if (newest) {
       const returnState = projectReturnState.get(projectId);
       if (!returnState || returnState.type === 'first_access') {
-        $('change-context').textContent = `R${revision.id} · Nessuna novità.`;
-        $('changes-content').innerHTML = '<p class="muted">Nessuna novità. Primo accesso al progetto: nessuna revisione vista in precedenza.</p>';
+        $('change-context').textContent = `R${revision.id} · Nothing new.`;
+        $('changes-content').innerHTML = '<p class="muted">Nothing new. First visit to the project: no revision seen previously.</p>';
       } else if (returnState.type === 'no_changes') {
-        $('change-context').textContent = `R${revision.id} · Nessuna novità.`;
-        $('changes-content').innerHTML = '<p class="muted">Nessuna novità dall’ultima visita.</p>';
+        $('change-context').textContent = `R${revision.id} · Nothing new.`;
+        $('changes-content').innerHTML = '<p class="muted">Nothing new since your last visit.</p>';
       } else if (returnState.type === 'jump' || returnState.type === 'created') {
         const from = returnState.fromRevision;
-        $('change-context').textContent = `Da R${from.id} a R${revision.id} · ${revision.title}`;
-        $('changes-content').innerHTML = renderChanges(returnState.changes, 'Nessuna novità: il piano è invariato dalla revisione vista.');
+        $('change-context').textContent = `From R${from.id} to R${revision.id} · ${revision.title}`;
+        $('changes-content').innerHTML = renderChanges(returnState.changes, 'Nothing new: the plan is unchanged from the seen revision.');
       }
     } else {
-      $('change-context').textContent = previous ? `Da R${previous.id} a R${revision.id} · ${revision.title}` : 'R1 · La prima fotografia del progetto.';
+      $('change-context').textContent = previous ? `From R${previous.id} to R${revision.id} · ${revision.title}` : 'R1 · The initial snapshot of the project.';
       const changes = Planwharf.diff(previous, revision);
-      $('changes-content').innerHTML = previous ? renderChanges(changes) : '<p class="muted">Da qui inizia lo storico. Le revisioni successive mostrano cosa cambia.</p>';
+      $('changes-content').innerHTML = previous ? renderChanges(changes) : '<p class="muted">Project history starts here. Subsequent revisions show what changes.</p>';
     }
 
     $('history-list').innerHTML = [...project().revisions].reverse().map(r => `<button type="button" class="history-row ${r.id === selected ? 'active' : ''}" data-revision="${r.id}" ${r.id === selected ? 'aria-current="true"' : ''}><span>R${r.id}</span><span>${escape(r.title)}</span><time datetime="${escape(r.createdAt)}">${date(r.createdAt)}</time></button>`).join('');
     const running = project().tasks.filter(t => t.status === 'running');
-    $('running-count').textContent = `1 progetto · ${running.length} task`;
-    $('task-content').innerHTML = running.map(t => `<article class="task"><div class="task-top"><span>● IN CORSO · R${t.revision_id}</span><span>${escape(project().project.name)}</span></div><h3>${escape(t.title)}</h3><p>${escape(t.detail)}</p></article>`).join('');
-    $('waiting-count').textContent = `${revision.open.length} ${revision.open.length === 1 ? 'decisione' : 'decisioni'}`;
-    $('waiting-content').innerHTML = revision.open.length ? revision.open.map(x => `<div class="waiting-item"><span>↳</span><p>${escape(x)}</p></div>`).join('') : '<p class="muted">Nessuna decisione in attesa.</p>';
+    $('running-count').textContent = `1 project · ${running.length} ${running.length === 1 ? 'task' : 'tasks'}`;
+    $('task-content').innerHTML = running.map(t => `<article class="task"><div class="task-top"><span>● Running · R${t.revision_id}</span><span>${escape(project().project.name)}</span></div><h3>${escape(t.title)}</h3><p>${escape(t.detail)}</p></article>`).join('');
+    $('waiting-count').textContent = `${revision.open.length} ${revision.open.length === 1 ? 'decision' : 'decisions'}`;
+    $('waiting-content').innerHTML = revision.open.length ? revision.open.map(x => `<div class="waiting-item"><span>↳</span><p>${escape(x)}</p></div>`).join('') : '<p class="muted">No decisions waiting.</p>';
     renderClaims();
   }
 
-  // --- Modelli worker & Claim engine in memoria ---
   let models = [
     { id: 'gemini', label: 'Gemini', enabled: true },
     { id: 'grok', label: 'Grok', enabled: true },
@@ -182,20 +233,32 @@
     return null;
   }
 
-  function getClaimsApi() {
-    if (typeof window !== 'undefined' && window.PlanwharfClaims) return window.PlanwharfClaims;
-    if (typeof globalThis !== 'undefined' && globalThis.PlanwharfClaims) return globalThis.PlanwharfClaims;
-    if (typeof PlanwharfClaims !== 'undefined') return PlanwharfClaims;
+  function getAttemptsApi() {
+    if (typeof window !== 'undefined' && window.PlanwharfAttempts) return window.PlanwharfAttempts;
+    if (typeof globalThis !== 'undefined' && globalThis.PlanwharfAttempts) return globalThis.PlanwharfAttempts;
+    if (typeof PlanwharfAttempts !== 'undefined') return PlanwharfAttempts;
     return null;
   }
 
   let claimEngine = null;
+  let engineError = '';
   function getEngine() {
-    if (!claimEngine) {
-      const api = getClaimsApi();
-      if (api && typeof api.createClaimEngine === 'function') {
-        claimEngine = api.createClaimEngine();
-      }
+    return claimEngine;
+  }
+
+  async function openEngine() {
+    if (claimEngine) return claimEngine;
+    const api = getAttemptsApi();
+    if (!api || typeof api.openAttemptEngine !== 'function') {
+      engineError = 'attempt file store is unavailable';
+      return null;
+    }
+    try {
+      claimEngine = await api.openAttemptEngine();
+      engineError = '';
+    } catch (error) {
+      engineError = error && error.message ? error.message : 'attempt file store is unavailable';
+      claimEngine = null;
     }
     return claimEngine;
   }
@@ -220,7 +283,7 @@
     const engine = getEngine();
     const modelsApi = getModelsApi();
     if (!engine) {
-      lastClaimResult = { ok: false, reason: 'motore claim non disponibile', taskId, projectId: pId, modelId };
+      lastClaimResult = { ok: false, reason: engineError || 'claim engine not available', taskId, projectId: pId, modelId };
       renderClaims();
       return lastClaimResult;
     }
@@ -257,12 +320,12 @@
 
     const summaryEl = $('models-summary');
     if (summaryEl) {
-      summaryEl.textContent = allDisabled ? 'nessun modello acceso' : `${enabledList.length} accesi su ${models.length}`;
+      summaryEl.textContent = allDisabled ? 'no model enabled' : `${enabledList.length} enabled of ${models.length}`;
     }
     const noModelsNotice = $('no-models-notice');
     if (noModelsNotice) {
       if (allDisabled) {
-        noModelsNotice.textContent = 'nessun modello acceso';
+        noModelsNotice.textContent = 'no model enabled';
         noModelsNotice.hidden = false;
       } else {
         noModelsNotice.hidden = true;
@@ -272,15 +335,15 @@
     modelsListEl.innerHTML = models.map(m => {
       const isEnabled = Boolean(m && m.enabled === true);
       const statusBadge = isEnabled
-        ? '<span class="badge green" style="padding:2px 6px;font-size:10px;">acceso</span>'
-        : '<span class="badge" style="padding:2px 6px;font-size:10px;background:#f0e5e5;color:#854d4d;">spento</span>';
+        ? '<span class="badge green" style="padding:2px 6px;font-size:10px;">enabled</span>'
+        : '<span class="badge" style="padding:2px 6px;font-size:10px;background:#f0e5e5;color:#854d4d;">disabled</span>';
       return `<div style="display:flex;justify-content:space-between;align-items:center;background:#fff;border:1px solid var(--border);border-radius:6px;padding:6px 10px;">` +
         `<div style="display:flex;align-items:center;gap:8px;">` +
         `<span style="font-weight:600;font-size:12px;">${escape(m.label || m.id)}</span>` +
         statusBadge +
         `</div>` +
         `<button type="button" class="secondary" data-toggle-model="${escape(m.id)}" style="padding:4px 8px;font-size:10px;">` +
-        `${isEnabled ? 'Spegni' : 'Accendi'}` +
+        `${isEnabled ? 'Disable' : 'Enable'}` +
         `</button>` +
         `</div>`;
     }).join('');
@@ -289,7 +352,7 @@
     if (modelSelect) {
       const currentSelected = modelSelect.value;
       if (models.length === 0) {
-        modelSelect.innerHTML = '<option value="" disabled selected>Nessun modello disponibile</option>';
+        modelSelect.innerHTML = '<option value="" disabled selected>No models available</option>';
         modelSelect.disabled = true;
       } else {
         modelSelect.disabled = allDisabled;
@@ -297,7 +360,7 @@
           const isEnabled = Boolean(m && m.enabled === true);
           const sel = (m.id === currentSelected && isEnabled) ? 'selected' : '';
           return `<option value="${escape(m.id)}" ${isEnabled ? '' : 'disabled'} ${sel}>` +
-            `${escape(m.label || m.id)} ${isEnabled ? '(acceso)' : '(spento)'}` +
+            `${escape(m.label || m.id)} ${isEnabled ? '(enabled)' : '(disabled)'}` +
             `</option>`;
         }).join('');
         if (!enabledList.some(m => m.id === modelSelect.value) && enabledList.length > 0) {
@@ -315,8 +378,8 @@
       taskInput._autoFilled = true;
     }
 
-    const activeAttemptEl = $('claim-active-attempt');
-    if (activeAttemptEl) {
+    const runningAttemptEl = $('running-attempt');
+    if (runningAttemptEl) {
       const curTaskId = taskInput ? taskInput.value.trim() : '';
       const active = engine ? engine.getActiveAttempt({ taskId: curTaskId, projectId }) : null;
       const allAttempts = engine ? engine.getAttempts() : [];
@@ -324,21 +387,23 @@
       const toShow = active || anyActiveInProject;
 
       if (toShow) {
-        activeAttemptEl.innerHTML =
-          `<article class="task" style="border-color:#b4cfbb;background:#edf5ee;">` +
-          `<div class="task-top"><span>● ATTEMPT ENGINE ATTIVO (IN MEMORIA)</span><span>${escape(toShow.id)}</span></div>` +
-          `<h3>Modello: ${escape(toShow.modelId)}</h3>` +
-          `<p style="font-size:11px;">Task: <b>${escape(toShow.taskId)}</b> · Progetto: <b>${escape(toShow.projectId)}</b> · Status: <b>${escape(toShow.status)}</b></p>` +
+        runningAttemptEl.innerHTML =
+          `<article class="task">` +
+          `<div class="task-top"><span>● Running</span><span>${escape(toShow.id)}</span></div>` +
+          `<h3>Model: ${escape(toShow.modelId)}</h3>` +
+          `<p>Task: <b>${escape(toShow.taskId)}</b> · Project: <b>${escape(toShow.projectId)}</b> · Status: <b>${escape(toShow.status)}</b></p>` +
           `</article>`;
+      } else if (engineError) {
+        runningAttemptEl.innerHTML = `<p class="muted">${escape(engineError)}</p>`;
       } else {
-        activeAttemptEl.innerHTML = '<p class="muted" style="margin:0;font-size:11px;">Nessun attempt attivo per questo progetto nell’engine in memoria.</p>';
+        runningAttemptEl.innerHTML = '<p class="muted">No active attempt for this project.</p>';
       }
     }
 
     const reasonEl = $('claim-rejection-reason');
     if (reasonEl) {
       if (lastClaimResult && !lastClaimResult.ok && lastClaimResult.reason) {
-        reasonEl.textContent = `Claim rifiutato: ${lastClaimResult.reason}`;
+        reasonEl.textContent = `Claim refused: ${translateClaimReason(lastClaimResult.reason)}`;
         reasonEl.hidden = false;
       } else {
         reasonEl.hidden = true;
@@ -414,31 +479,11 @@
     });
   }
 
-  const claimResetBtn = $('claim-reset-btn');
-  if (claimResetBtn) {
-    claimResetBtn.addEventListener('click', () => {
-      const claimsApi = getClaimsApi();
-      if (claimsApi && typeof claimsApi.createClaimEngine === 'function') {
-        claimEngine = claimsApi.createClaimEngine();
-      } else {
-        claimEngine = null;
-      }
-      lastClaimResult = null;
-      renderClaims();
-    });
-  }
-
   if (typeof globalThis !== 'undefined') {
     globalThis.PlanwharfApp = {
       getModels: () => models,
       getEngine: () => getEngine(),
-      executeClaim,
-      resetEngine: () => {
-        const claimsApi = getClaimsApi();
-        claimEngine = claimsApi && typeof claimsApi.createClaimEngine === 'function' ? claimsApi.createClaimEngine() : null;
-        lastClaimResult = null;
-        renderClaims();
-      }
+      executeClaim
     };
   }
 
@@ -486,9 +531,9 @@
         changes: Planwharf.diff(prevLatest, newLatest)
       });
       render(); dialog.close();
-      $('toast').textContent = `R${selected} salvata nel file. Le ${project().revisions.length - 1} revisioni precedenti restano nello storico.`;
+      $('toast').textContent = `R${selected} saved to file. The ${project().revisions.length - 1} earlier revisions remain in history.`;
       clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
-    } catch (error) { $('form-error').textContent = error.message; $('form-error').hidden = false; }
+    } catch (error) { $('form-error').textContent = translateError(error.message); $('form-error').hidden = false; }
     finally { saving = false; $('save-revision').disabled = false; }
   });
 
@@ -517,9 +562,9 @@
         });
       }
       render(); $(dialogId).close();
-      $('toast').textContent = field === 'task' ? `Task salvato da R${payload.revision_id}.` : `R${selected} salvata nel file. Lo storico è conservato.`;
+      $('toast').textContent = field === 'task' ? `Task saved from R${payload.revision_id}.` : `R${selected} saved to file. History is preserved.`;
       clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
-    } catch (error) { $(errorId).textContent = error.message; $(errorId).hidden = false; }
+    } catch (error) { $(errorId).textContent = translateError(error.message); $(errorId).hidden = false; }
     finally { saving = false; }
   }
 
@@ -529,9 +574,9 @@
   $('grill-open').addEventListener('click', () => {
     const latest = project().revisions.at(-1);
     if (!latest.open.length) return;
-    $('grill-form').elements.title.value = `Grillbench da R${latest.id}`;
-    $('grill-context').textContent = `Un giro sulle domande aperte della revisione corrente R${latest.id}.`;
-    $('grill-questions').innerHTML = latest.open.map((question, i) => `<div class="plan-block"><h3>${escape(question)}</h3><label>Azione<select name="action-${i}"><option value="keep">Lascia aperta</option><option value="close">Chiudi con questa decisione</option><option value="direction">Chiudi e cambia direzione</option></select></label><label>Risposta / nuova direzione<textarea name="answer-${i}" rows="2" maxlength="1500"></textarea></label></div>`).join('');
+    $('grill-form').elements.title.value = `Grillbench from R${latest.id}`;
+    $('grill-context').textContent = `A round on the open questions of current revision R${latest.id}.`;
+    $('grill-questions').innerHTML = latest.open.map((question, i) => `<div class="plan-block"><h3>${escape(question)}</h3><label>Action<select name="action-${i}"><option value="keep">Keep open</option><option value="close">Close with this decision</option><option value="direction">Close and change direction</option></select></label><label>Answer / new direction<textarea name="answer-${i}" rows="2" maxlength="1500"></textarea></label></div>`).join('');
     $('grill-error').hidden = true;
     $('grill-dialog').showModal();
   });
@@ -553,7 +598,7 @@
   let taskRevision;
   $('new-task').addEventListener('click', () => {
     taskRevision = selected;
-    $('task-context').textContent = `Il task nasce da R${taskRevision}, la revisione che stai leggendo.`;
+    $('task-context').textContent = `The task originates from R${taskRevision}, the revision you are reading.`;
     $('task-form').elements.title.value = '';
     $('task-form').elements.detail.value = '';
     $('task-error').hidden = true;
@@ -570,8 +615,9 @@
     initProjectReturnState(projectId);
     selected = project().revisions[project().revisions.length - 1].id;
     await fetchModels();
+    await openEngine();
     render();
     $('new-revision').disabled = false;
     $('revision-select').disabled = false;
-  }).catch(error => notice(error.message));
+  }).catch(error => notice(translateError(error.message)));
 })();
