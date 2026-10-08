@@ -1,0 +1,17 @@
+[
+  {
+    "id": "gemini",
+    "label": "Gemini",
+    "enabled": true
+  },
+  {
+    "id": "grok",
+    "label": "Grok",
+    "enabled": true
+  },
+  {
+    "id": "luna",
+    "label": "Luna",
+    "enabled": false
+  }
+]

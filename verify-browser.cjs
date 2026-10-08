@@ -1,0 +1,165 @@
+// Real browser acceptance check, using Edge's DevTools protocol without dependencies.
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const Plan = require('./plan.js');
+const { createServer } = require('./server.cjs');
+const { spawn } = require('node:child_process');
+const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+const output = path.join(__dirname, 'validation');
+fs.mkdirSync(output, { recursive: true });
+const profile = path.join(output, `edge-profile-${Date.now()}`);
+const planFile = path.join(output, `browser-plan-${Date.now()}.json`);
+fs.writeFileSync(planFile, fs.readFileSync(path.join(__dirname, 'plan.json')));
+const server = createServer({ planFile });
+const browser = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+let ws;
+let command;
+let browserError;
+browser.on('error', error => { browserError = error; });
+(async () => {
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  const appUrl = `http://127.0.0.1:${server.address().port}`;
+  let port;
+  for (let i = 0; i < 100; i++) {
+    if (browserError) throw browserError;
+    try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); if (port) break; } catch (_) {}
+    await pause(100);
+  }
+  assert.ok(port, 'Edge DevTools did not start');
+  const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+  const page = pages.find(target => target.type === 'page');
+  assert.ok(page, 'Edge page missing');
+  ws = new WebSocket(page.webSocketDebuggerUrl);
+  await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
+  let sequence = 0;
+  const waiting = new Map();
+  ws.addEventListener('message', event => {
+    const response = JSON.parse(event.data);
+    const pending = waiting.get(response.id);
+    if (pending) { clearTimeout(pending.timer); waiting.delete(response.id); response.error ? pending.reject(new Error(response.error.message)) : pending.resolve(response.result); }
+  });
+  command = (method, params = {}) => new Promise((resolve, reject) => {
+    const id = ++sequence;
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`Timeout: ${method}`)); }, 10000);
+    waiting.set(id, { resolve, reject, timer });
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  const evaluate = async expression => {
+    const result = await command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
+    if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
+    return result.result.value;
+  };
+  await command('Emulation.setDeviceMetricsOverride', { width: 1365, height: 1100, deviceScaleFactor: 1, mobile: false });
+  await command('Page.navigate', { url: appUrl });
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R2')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.querySelectorAll('.dashboard > section').length"), 4);
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R2 · manual · Attuale');
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.toLowerCase().includes('nessuna novità')"), 'First access must show nessuna novità');
+  assert.equal(await evaluate("document.getElementById('changes-content').textContent.includes('via del Porto')"), false, 'Must not show example diff on first access');
+  assert.equal(await evaluate("document.querySelectorAll('.task').length"), 1);
+  const initial = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+  fs.writeFileSync(path.join(output, 'desktop-example.png'), Buffer.from(initial.data, 'base64'));
+  await evaluate("document.querySelector('[data-revision=\"1\"]').click()");
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R1 · manual · Storico');
+  assert.ok(await evaluate("document.getElementById('plan-content').textContent.includes('Individuati due locali possibili')"));
+  await evaluate("document.getElementById('new-revision').click()");
+  assert.ok(await evaluate("document.getElementById('revision-form').elements.state.value.includes('Scelta la sede')"), 'Draft must use latest revision even while R1 selected');
+  await evaluate("(() => { const form = document.getElementById('revision-form'); form.elements.title.value = 'Turni confermati'; form.elements.state.value = 'Calendario completato; quattro volontari confermati.'; form.elements.closed.value += '\\nApertura il sabato mattina.'; form.elements.open.value = 'Chi segue il primo turno di apertura?'; form.requestSubmit(); })()");
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R3')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R3 · manual · Attuale');
+  assert.equal(await evaluate("document.querySelectorAll('.history-row').length"), 3);
+  const persisted = JSON.parse(fs.readFileSync(planFile, 'utf8'));
+  assert.deepEqual(persisted.projects[0].revisions.slice(0, 2), Plan.example().revisions);
+  assert.equal(persisted.projects[0].tasks[0].revision_id, 2);
+  assert.ok(await evaluate("document.getElementById('task-content').textContent.includes('R2')"));
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.includes('Calendario completato')"));
+  await command('Page.reload');
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R3')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R3 · manual · Attuale');
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.toLowerCase().includes('nessuna novità')"), 'Reload without new revisions must show nessuna novità');
+
+  // Multi-revision jump test: append R4 and R5 behind the scenes to planFile, reload, and verify jump Da R3 a R5
+  const multiPlan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
+  const lib = multiPlan.projects.find(p => p.project.id === 'biblioteca');
+  const r4 = Plan.appendRevision(lib, { title: 'R4 Intermedio', direction: 'Direzione R4.', state: 'Stato R4.', closed: [...lib.revisions.at(-1).closed, 'Passo 4 chiuso.'], open: ['Domanda 4?'] });
+  const r5 = Plan.appendRevision(r4, { title: 'R5 Finale', direction: 'Direzione R5 finale.', state: 'Stato R5 finale.', closed: [...r4.revisions.at(-1).closed, 'Passo 5 chiuso.'], open: ['Chi segue il primo turno di apertura?'] });
+  multiPlan.projects[0] = r5;
+  fs.writeFileSync(planFile, JSON.stringify(multiPlan, null, 2) + '\n');
+
+  await command('Page.reload');
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R5')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R5 · manual · Attuale');
+  assert.ok(await evaluate("document.getElementById('change-context').textContent.includes('Da R3 a R5')"), 'Must show jump Da R3 a R5');
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.includes('Passo 4 chiuso')"), 'Jump must include intermediate R4 changes');
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.includes('Passo 5 chiuso')"), 'Jump must include R5 changes');
+
+  // Reopen after jump: must now show nessuna novità
+  await command('Page.reload');
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R5')")) break;
+    await pause(50);
+  }
+  assert.ok(await evaluate("document.getElementById('changes-content').textContent.toLowerCase().includes('nessuna novità')"), 'Subsequent reload must show nessuna novità');
+
+  const updated = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+  fs.writeFileSync(path.join(output, 'desktop-new-revision.png'), Buffer.from(updated.data, 'base64'));
+  await command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  assert.equal(await evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'Mobile layout must not overflow');
+  const mobile = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
+  fs.writeFileSync(path.join(output, 'mobile-new-revision.png'), Buffer.from(mobile.data, 'base64'));
+  assert.equal(await evaluate("document.getElementById('project-select').options.length"), 2);
+  await evaluate("document.getElementById('grill-open').click()");
+  assert.equal(await evaluate("document.getElementById('grill-questions').textContent.includes('Prestito gratuito')"), false);
+  await evaluate("(() => { const f = document.getElementById('grill-form'); f.elements['action-0'].value = 'close'; f.elements['answer-0'].value = 'Marta segue il primo turno.'; f.requestSubmit(); })()");
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('grill')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R6 · grill · Attuale');
+  await evaluate("(() => { const s = document.getElementById('project-select'); s.value = 'orto'; s.dispatchEvent(new Event('change')); })()");
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R1 · import · Attuale');
+  await evaluate("document.getElementById('new-task').click()");
+  await evaluate("(() => { const f = document.getElementById('task-form'); f.elements.title.value = 'Definire irrigazione'; f.requestSubmit(); })()");
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('task-content')?.textContent.includes('Definire irrigazione')")) break;
+    await pause(50);
+  }
+  assert.ok(await evaluate("document.getElementById('task-content').textContent.includes('R1')"));
+  await evaluate("document.getElementById('new-task').click()");
+  await evaluate("(() => { const f = document.getElementById('task-form'); f.elements.title.value = 'Secondo task'; f.requestSubmit(); })()");
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("!document.getElementById('task-error').hidden")) break;
+    await pause(50);
+  }
+  assert.ok(await evaluate("document.getElementById('task-error').textContent.includes('già un task')"));
+  await evaluate("document.getElementById('task-cancel').click()");
+  await evaluate("document.getElementById('import-revision').click()");
+  await evaluate("(() => { const f = document.getElementById('import-form'); f.elements.json.value = JSON.stringify({title:'Importato',direction:'Coltivare erbe aromatiche.',state:'Pronto.',closed:[],open:[]}); f.requestSubmit(); })()");
+  for (let i = 0; i < 100; i++) {
+    if (await evaluate("document.getElementById('revision-badge')?.textContent.includes('R2')")) break;
+    await pause(50);
+  }
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R2 · import · Attuale');
+  const report = 'PASS: real Edge opens localhost; four areas; first access nessuna novità; manual R3; jump R3->R5; reload nessuna novità; grill R6; mobile layout; orto isolated.\n';
+  fs.writeFileSync(path.join(output, 'report.txt'), report);
+  console.log(report.trim());
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+  if (command) { try { await command('Browser.close'); } catch (_) {} }
+  if (ws) ws.close();
+  browser.kill();
+  if (server.listening) await new Promise(resolve => server.close(resolve));
+  fs.rmSync(planFile, { force: true });
+});

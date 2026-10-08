@@ -1,0 +1,112 @@
+'use strict';
+const assert = require('node:assert/strict');
+const fs = require('node:fs/promises');
+const path = require('node:path');
+const crypto = require('node:crypto');
+const Plan = require('./plan.js');
+const { createServer, writePlan, readPlan } = require('./server.cjs');
+const file = path.join(__dirname, `.verify-round-${crypto.randomUUID()}.json`);
+const originalFile = path.join(__dirname, 'plan.json');
+const servers = [];
+const draftOf = (revision, title) => Object.fromEntries(['title', 'direction', 'state', 'closed', 'open'].map(key => [key, key === 'title' ? title : structuredClone(revision[key])]));
+async function start(options = {}) {
+  const server = createServer({ planFile: file, ...options });
+  servers.push(server);
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  return { server, base: `http://127.0.0.1:${server.address().port}` };
+}
+async function stop(server) { await new Promise(resolve => server.close(resolve)); }
+(async () => {
+  const sourceBytes = await fs.readFile(originalFile, 'utf8');
+  const notebook = JSON.parse(sourceBytes);
+  assert.equal(notebook.schema, 2);
+  assert.equal(notebook.projects.length, 2);
+  assert.equal(Plan.validate(notebook), true);
+  const library = notebook.projects.find(p => p.project.id === 'biblioteca');
+  const orto = notebook.projects.find(p => p.project.id === 'orto');
+  assert.deepEqual(library.revisions, Plan.example().revisions);
+  assert.equal(library.tasks[0].revision_id, 2);
+  assert.equal(orto.tasks.length, 0);
+  const original = JSON.stringify(notebook);
+  const latest = library.revisions.at(-1);
+  const round = { title: 'Giro di verifica', answers: latest.open.map((question, i) => ({ question, action: i ? 'direction' : 'close', answer: i ? 'Aprire la biblioteca due mattine a settimana.' : 'Il primo turno sarà seguito da Marta.' })) };
+  const grilled = Plan.grill(library, round, '2026-10-08T09:00:00Z');
+  assert.equal(grilled.revisions.at(-1).mode, 'grill');
+  assert.equal(grilled.revisions.at(-1).open.length, 0);
+  assert.deepEqual(grilled.revisions.slice(0, -1), library.revisions);
+  assert.deepEqual(grilled.revisions.at(-1).closed.slice(0, latest.closed.length), latest.closed);
+  assert.equal(grilled.revisions.at(-1).direction, round.answers[1].answer);
+  assert.ok(grilled.revisions.at(-1).closed.includes(`${latest.open[0]} → ${round.answers[0].answer}`));
+  assert.ok(Plan.diff(latest, grilled.revisions.at(-1)).some(change => change.key === 'direction'));
+  assert.deepEqual(grilled.tasks, library.tasks);
+  assert.throws(() => Plan.grill(library, { ...round, answers: [{ ...round.answers[0], question: latest.closed[0] }, round.answers[1]] }));
+  const reopenedDraft = draftOf(latest, 'Decisione da rivedere');
+  reopenedDraft.closed = reopenedDraft.closed.slice(1);
+  reopenedDraft.open.push(' ' + latest.closed[0].toUpperCase() + ' ');
+  const reopened = Plan.appendRevision(library, reopenedDraft);
+  assert.deepEqual(Plan.diff(latest, reopened.revisions.at(-1)).find(change => change.key === 'reopened').after, [latest.closed[0]]);
+  const reopenedImport = Plan.importRevision(library, JSON.stringify(reopenedDraft));
+  assert.ok(Plan.diff(latest, reopenedImport.revisions.at(-1)).some(change => change.key === 'reopened'));
+  assert.equal(Plan.importRevision(library, JSON.stringify(latest)).revisions.at(-1).mode, 'import');
+  assert.equal(JSON.stringify(notebook), original);
+
+  await writePlan(file, notebook);
+  let running = await start();
+  let saved = await (await fetch(running.base + '/api/plan')).json();
+  async function send(endpoint, projectId, field, payload) {
+    return fetch(running.base + endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: saved.version, projectId, [field]: payload }) });
+  }
+  const manual = draftOf(latest, 'Turni manuali');
+  manual.state = 'Nuova situazione manuale.';
+  let response = await send('/api/revisions', 'biblioteca', 'draft', manual);
+  assert.equal(response.status, 201);
+  saved = await response.json();
+  assert.equal(saved.plan.projects[0].revisions.at(-1).mode, 'manual');
+  assert.deepEqual(saved.plan.projects[0].revisions.slice(0, 2), library.revisions);
+  assert.deepEqual(saved.plan.projects[1], orto);
+  response = await send('/api/grill', 'biblioteca', 'round', round);
+  assert.equal(response.status, 201);
+  saved = await response.json();
+  const savedLibrary = saved.plan.projects[0];
+  assert.equal(savedLibrary.revisions.at(-1).mode, 'grill');
+  assert.equal(savedLibrary.revisions.at(-1).direction, round.answers[1].answer);
+  assert.equal(savedLibrary.revisions.at(-1).open.length, 0);
+  assert.deepEqual(savedLibrary.tasks, library.tasks);
+  const ortoDraft = draftOf(orto.revisions[0], 'Turni orto aggiornati');
+  ortoDraft.state = 'Raccolta la disponibilità di due vicini.';
+  response = await send('/api/revisions', 'orto', 'draft', ortoDraft);
+  assert.equal(response.status, 201); saved = await response.json();
+  response = await send('/api/tasks', 'orto', 'task', { title: 'Definire irrigazione', detail: 'Task da una revisione storica.', revision_id: 1 });
+  assert.equal(response.status, 201); saved = await response.json();
+  assert.equal(saved.plan.projects[1].tasks[0].revision_id, 1);
+  const beforeRejected = await fs.readFile(file, 'utf8');
+  response = await send('/api/tasks', 'orto', 'task', { title: 'Secondo task', detail: '', revision_id: 2 });
+  assert.equal(response.status, 400);
+  assert.ok((await response.json()).error.includes('già un task'));
+  assert.equal(await fs.readFile(file, 'utf8'), beforeRejected);
+  for (const invalid of ['{', '{}', JSON.stringify({ ...ortoDraft, mode: 'chat' }), JSON.stringify({ ...ortoDraft, closed: 'non array' })]) {
+    response = await send('/api/import', 'orto', 'json', invalid);
+    assert.equal(response.status, 400);
+    assert.equal(await fs.readFile(file, 'utf8'), beforeRejected);
+  }
+  const previousOrto = structuredClone(saved.plan.projects[1]);
+  response = await send('/api/import', 'orto', 'json', JSON.stringify({ ...ortoDraft, title: 'Importazione completa', direction: 'Coltivare prima le erbe aromatiche.' }));
+  assert.equal(response.status, 201); saved = await response.json();
+  assert.equal(saved.plan.projects[1].revisions.at(-1).mode, 'import');
+  assert.deepEqual(saved.plan.projects[1].revisions.slice(0, -1), previousOrto.revisions);
+  assert.deepEqual(saved.plan.projects[1].tasks, previousOrto.tasks);
+  assert.deepEqual(await readPlan(file), saved.plan);
+  await stop(running.server);
+  running = await start();
+  assert.deepEqual(await (await fetch(running.base + '/api/plan')).json(), saved);
+  const failing = await start({ save: async () => { throw new Error('write failed'); } });
+  const beforeFailure = await fs.readFile(file, 'utf8');
+  response = await fetch(failing.base + '/api/import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: saved.version, projectId: 'orto', json: JSON.stringify(ortoDraft) }) });
+  assert.equal(response.status, 500);
+  assert.equal(await fs.readFile(file, 'utf8'), beforeFailure);
+  assert.equal(await fs.readFile(originalFile, 'utf8'), sourceBytes);
+  console.log('PASS: due progetti reali; manual immutabile; grill chiude e cambia direzione; riapertura esplicita nel diff; task da R1 storico; secondo running rifiutato; import valido/invalidi; persistenza al riavvio e errore disco.');
+})().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+  for (const server of servers) if (server.listening) await stop(server);
+  await fs.rm(file, { force: true });
+});

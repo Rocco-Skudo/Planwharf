@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "project": { "id": "orto", "name": "Orto condiviso" },
+  "revisions": [
+    {
+      "id": 1,
+      "mode": "import",
+      "title": "Il terreno disponibile",
+      "createdAt": "2026-10-07T08:00:00Z",
+      "direction": "Avviare un orto condiviso nel cortile del quartiere.",
+      "state": "Il terreno è disponibile; manca il calendario di irrigazione.",
+      "closed": ["Usare il cortile comune."],
+      "open": ["Chi irriga nel fine settimana?"]
+    }
+  ],
+  "tasks": [
+    { "id": "irrigazione", "projectId": "orto", "revision_id": 1, "title": "Preparare i turni di irrigazione", "detail": "Raccogliere la disponibilità dei vicini.", "status": "running" }
+  ]
+}
