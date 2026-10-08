@@ -1,0 +1,3 @@
+validation/edge-profile-*/
+validation/**/*.dmp
+*.dmp
