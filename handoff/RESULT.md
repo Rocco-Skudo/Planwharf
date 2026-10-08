@@ -1,64 +1,47 @@
-# PLANWHARFZOMBIE — chiudi il motore
+# Notebook for any number of projects
 
 STATUS: COMPLETE  
 VERDICT/GATE: **ACCEPT / PASS**
 
-Implementer: this session, files written directly in `D:\benit\Desktop\Projects\Planwharf-zombie`. No NPC-Orchestra-v5, no inbox envelopes, no native agent spawn, no model discovery from the PC.
+Work only in `D:\benit\Desktop\Projects\Planwharf-zombie`. No NPC-Orchestra-v5, no inbox, no model spawn.
 
-## Files written
+## Files touched
 
-| File | Role |
-|------|------|
-| `engine/attempts.js` | File-backed attempt store (Node directory + browser OPFS). One active attempt per task, one per project. Second claim fails and does not append a row. |
-| `engine/attempts.test.cjs` | Isolated disk tests for claims, reconstruction, and sentinel. |
-| `engine/sentinel.js` | COMPLETE is a result file. Missing verdict closes the attempt. No second attempt while the first is active. |
-| `app.js` | English interface copy and Running integration with the file engine. |
-| `index.html` | Four areas; attempt and Claim refused in Running; technical proof closed. |
-| `server.cjs` | Static whitelist only: serve `models.js`, `models.json`, `engine/attempts.js`, `engine/sentinel.js`, `engine/claims.js`. Plan read/write path unchanged. |
+| File | Change |
+|------|--------|
+| `plan.js` | `createProject({ name, direction })` appends a project with an empty `manual` R1. Existing projects and revisions are cloned, not rewritten. Project ids are derived from the name; collisions add `-2`, `-3`, … with no fixed N. Empty revision titles are valid. |
+| `server.cjs` | `POST /api/projects`. Attempts live in a directory next to the plan file (`GET`/`POST /api/attempts`), not in memory or OPFS. |
+| `app.js` | Add-project flow; menu lists every project; claims go to the server file; Running badge is the current project's task count. |
+| `index.html` | Add project button and dialog. Four areas: For you, Running, The plan, What changed. |
+| `verify-projects.cjs` | Add project, reload, old revisions stay, second claim refused, attempts survive a new server. |
+| `verify-file.cjs` | Isolated attempt dir, cleaned after the run. |
+| `.gitignore` | `.attempts-*/` |
 | `handoff/RESULT.md` | This report. |
 
-Untouched notebook data: `plan.json`, `plan.js`, `models.js`, `models.json`, `engine/claims.js`, `styles.css`. Example plan text stays Italian.
-
-## English copy
-
-Present in `app.js` / `index.html`: Where this goes, Where it stands, Decided, Still open, Nothing new, Running, Claim refused.
+`plan.json` of production was not rewritten by these tests.
 
 ## Tests
 
-Command (run twice, both exit 0, `passed=10 failed=0`):
-
 ```
+node verify.cjs
+node verify-file.cjs
 node engine/attempts.test.cjs
-node engine/attempts.test.cjs
+node verify-projects.cjs
 ```
 
-Outcomes:
+All exit 0.
 
-- First claim writes `attempts.json`.
-- Second claim same task: `ok=false`, reason `task already assigned`, file unchanged, no extra row. Winner `attempt-1`.
-- Second claim same project, different task: `ok=false`, reason `project already assigned`, no extra row.
-- New engine on the same directory reconstructs the same attempt id.
-- COMPLETE result file ends waiting while a simulated process is still alive.
-- Missing verdict closes the attempt (`closedReason=no verdict`).
-- While the first claim is active, a second claim is refused.
+- Adding Alpha/Beta/Gamma does not change Biblioteca or Orto revisions or the R2 `calendario` task.
+- After server restart the new projects are still there.
+- Second claim on the same project: HTTP 409, `project already assigned`, still one active row.
+- After another server restart the same attempt id is still on disk.
 
-Screen (real Edge, isolated plan copy, not production `plan.json`): four areas; English labels; attempt visible in Running; `Claim refused:` after a second claim; `details.claim-panel` stays closed.
-
-No real model spawn.
-
-## plan.json hash
-
-| | SHA256 | bytes | mtime |
-|--|--------|-------|-------|
-| Before | `4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469` | 2455 | 2026-10-07T22:48:55.923Z |
-| After | `4B0CDE6DE531BDB0861415638B37F2092AE5169C3DFBC7C1C8AEEF3AAEEA1469` | 2455 | 2026-10-07T22:48:55.923Z |
-
-Production plan is unchanged.
+Edge (isolated plan copy): add Piazza nuova, reload, it remains; second claim shows `Claim refused:`; original revisions unchanged.
 
 ## OPEN_ISSUES
 
-None on the requested gate. The next round (real spawn / PC discovery / unregister) stays closed.
+None.
 
 ## NEXT_ACTION
 
-Use `node server.cjs` and http://127.0.0.1:4173. Claim from Running's technical panel (leave it closed). The attempt and refusal stay visible in Running.
+Push this branch to `origin/main`.

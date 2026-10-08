@@ -21,7 +21,7 @@
     if (!data || data.schema !== 1 || typeof data.project?.id !== 'string' || !data.project.id.trim() || typeof data.project.name !== 'string' || !data.project.name.trim() || !Array.isArray(data.revisions) || !data.revisions.length || !Array.isArray(data.tasks)) return false;
     const ids = new Set();
     for (const r of data.revisions) {
-      if (!r || !Number.isSafeInteger(r.id) || r.id < 1 || ids.has(r.id) || !['manual', 'grill', 'import'].includes(r.mode) || typeof r.title !== 'string' || !r.title.trim() || typeof r.createdAt !== 'string' || !Number.isFinite(Date.parse(r.createdAt)) || typeof r.direction !== 'string' || typeof r.state !== 'string' || !Array.isArray(r.closed) || !Array.isArray(r.open) || ![...r.closed, ...r.open].every(x => typeof x === 'string')) return false;
+      if (!r || !Number.isSafeInteger(r.id) || r.id < 1 || ids.has(r.id) || !['manual', 'grill', 'import'].includes(r.mode) || typeof r.title !== 'string' || typeof r.createdAt !== 'string' || !Number.isFinite(Date.parse(r.createdAt)) || typeof r.direction !== 'string' || typeof r.state !== 'string' || !Array.isArray(r.closed) || !Array.isArray(r.open) || ![...r.closed, ...r.open].every(x => typeof x === 'string')) return false;
       ids.add(r.id);
     }
     const activeProjects = new Set();
@@ -86,6 +86,32 @@
     if (!draft || typeof draft !== 'object' || Array.isArray(draft) || Object.keys(draft).some(key => !['id', 'mode', 'createdAt', 'title', 'direction', 'state', 'closed', 'open'].includes(key)) || ('id' in draft && (!Number.isSafeInteger(draft.id) || draft.id < 1)) || ('mode' in draft && !['manual', 'grill', 'import'].includes(draft.mode)) || ('createdAt' in draft && (typeof draft.createdAt !== 'string' || !Number.isFinite(Date.parse(draft.createdAt))))) throw new Error('Importa un oggetto con titolo, direzione, stato, decisioni chiuse e domande aperte.');
     return append(data, draft, 'import', timestamp);
   }
+  function projectIdFromName(name, used) {
+    const base = name.trim().toLowerCase().normalize('NFKD').replace(/[^\p{L}\p{N}]+/gu, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'project';
+    if (!used.has(base)) return base;
+    let n = 2;
+    while (used.has(`${base}-${n}`)) n += 1;
+    return `${base}-${n}`;
+  }
+  function createProject(data, input, timestamp = new Date().toISOString()) {
+    if (!validate(data)) throw new Error('Il quaderno salvato non è valido.');
+    if (!input || typeof input.name !== 'string' || !input.name.trim() || typeof input.direction !== 'string' || !input.direction.trim()) throw new Error('Compila nome e direzione.');
+    const notebook = data.schema === 2 ? clone(data) : { schema: 2, projects: [clone(data)] };
+    const used = new Set(notebook.projects.map(item => item.project.id));
+    const id = projectIdFromName(input.name, used);
+    const previous = notebook.projects.map(item => clone(item));
+    notebook.projects.push({
+      schema: 1,
+      project: { id, name: input.name.trim() },
+      revisions: [{ id: 1, mode: 'manual', title: '', createdAt: timestamp, direction: input.direction.trim(), state: '', closed: [], open: [] }],
+      tasks: []
+    });
+    if (!validate(notebook)) throw new Error('Il quaderno aggiornato non è valido.');
+    previous.forEach((item, index) => {
+      if (JSON.stringify(item) !== JSON.stringify(notebook.projects[index])) throw new Error('Il quaderno aggiornato non è valido.');
+    });
+    return notebook;
+  }
   function createTask(data, input) {
     if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
     if (data.tasks.some(task => task.status === 'running')) throw new Error('Questo progetto ha già un task in corso. Nessun secondo task è stato creato.');
@@ -103,5 +129,5 @@
     if (reopened.length) changes.push({ key: 'reopened', before: [], after: reopened });
     return changes;
   }
-  return { example, validate, validateProject, appendRevision, grill, importRevision, createTask, diff };
+  return { example, validate, validateProject, appendRevision, grill, importRevision, createProject, createTask, diff };
 });

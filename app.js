@@ -142,7 +142,8 @@
     'Revisione troppo grande.': 'Revision too large.',
     'Richiesta non leggibile.': 'Request unreadable.',
     'File non leggibile.': 'File unreadable.',
-    'Disco non disponibile.': 'Disk unavailable.'
+    'Disco non disponibile.': 'Disk unavailable.',
+    'Compila nome e direzione.': 'Fill in name and where this goes.'
   };
 
   function translateError(msg) {
@@ -180,7 +181,7 @@
   function render() {
     const projects = data.schema === 2 ? data.projects : [data];
     $('project-select').innerHTML = projects.map(p => `<option value="${escape(p.project.id)}" ${p.project.id === projectId ? 'selected' : ''}>${escape(p.project.name)}</option>`).join('');
-    for (const id of ['project-select', 'new-task', 'import-revision']) $(id).disabled = false;
+    for (const id of ['project-select', 'new-task', 'import-revision', 'new-project']) $(id).disabled = false;
     $('grill-open').disabled = !project().revisions.at(-1).open.length;
     $('project-name').textContent = project().project.name;
     const index = project().revisions.findIndex(r => r.id === selected);
@@ -213,7 +214,7 @@
 
     $('history-list').innerHTML = [...project().revisions].reverse().map(r => `<button type="button" class="history-row ${r.id === selected ? 'active' : ''}" data-revision="${r.id}" ${r.id === selected ? 'aria-current="true"' : ''}><span>R${r.id}</span><span>${escape(r.title)}</span><time datetime="${escape(r.createdAt)}">${date(r.createdAt)}</time></button>`).join('');
     const running = project().tasks.filter(t => t.status === 'running');
-    $('running-count').textContent = `1 project · ${running.length} ${running.length === 1 ? 'task' : 'tasks'}`;
+    $('running-count').textContent = `${running.length} ${running.length === 1 ? 'task' : 'tasks'}`;
     $('task-content').innerHTML = running.map(t => `<article class="task"><div class="task-top"><span>● Running · R${t.revision_id}</span><span>${escape(project().project.name)}</span></div><h3>${escape(t.title)}</h3><p>${escape(t.detail)}</p></article>`).join('');
     $('waiting-count').textContent = `${revision.open.length} ${revision.open.length === 1 ? 'decision' : 'decisions'}`;
     $('waiting-content').innerHTML = revision.open.length ? revision.open.map(x => `<div class="waiting-item"><span>↳</span><p>${escape(x)}</p></div>`).join('') : '<p class="muted">No decisions waiting.</p>';
@@ -233,28 +234,45 @@
     return null;
   }
 
-  function getAttemptsApi() {
-    if (typeof window !== 'undefined' && window.PlanwharfAttempts) return window.PlanwharfAttempts;
-    if (typeof globalThis !== 'undefined' && globalThis.PlanwharfAttempts) return globalThis.PlanwharfAttempts;
-    if (typeof PlanwharfAttempts !== 'undefined') return PlanwharfAttempts;
-    return null;
-  }
-
   let claimEngine = null;
   let engineError = '';
   function getEngine() {
     return claimEngine;
   }
 
+  function createServerAttemptEngine() {
+    let cache = [];
+    function getAttempts() { return cache.slice(); }
+    function getActiveAttempt(query) {
+      if (!query || typeof query !== 'object') return null;
+      return cache.find(item => {
+        if (item.status !== 'active') return false;
+        if (query.taskId && item.taskId !== query.taskId) return false;
+        if (query.projectId && item.projectId !== query.projectId) return false;
+        return Boolean(query.taskId || query.projectId);
+      }) || null;
+    }
+    async function load() {
+      const response = await fetch('/api/attempts');
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.error || 'attempt file store is unavailable');
+      cache = Array.isArray(body.attempts) ? body.attempts : [];
+      return cache;
+    }
+    async function claim(input) {
+      const response = await fetch('/api/attempts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) });
+      const body = await response.json();
+      if (Array.isArray(body.attempts)) cache = body.attempts;
+      return { ok: Boolean(body.ok), reason: body.reason, attempt: body.attempt };
+    }
+    return { load, claim, getAttempts, getActiveAttempt };
+  }
+
   async function openEngine() {
     if (claimEngine) return claimEngine;
-    const api = getAttemptsApi();
-    if (!api || typeof api.openAttemptEngine !== 'function') {
-      engineError = 'attempt file store is unavailable';
-      return null;
-    }
     try {
-      claimEngine = await api.openAttemptEngine();
+      claimEngine = createServerAttemptEngine();
+      await claimEngine.load();
       engineError = '';
     } catch (error) {
       engineError = error && error.message ? error.message : 'attempt file store is unavailable';
@@ -279,7 +297,7 @@
     } catch (_) {}
   }
 
-  function executeClaim(taskId, pId, modelId) {
+  async function executeClaim(taskId, pId, modelId) {
     const engine = getEngine();
     const modelsApi = getModelsApi();
     if (!engine) {
@@ -297,7 +315,7 @@
       }
     }
 
-    const res = engine.claim({
+    const res = await engine.claim({
       taskId,
       projectId: pId,
       modelId,
@@ -458,24 +476,24 @@
 
   const claimExecBtn = $('claim-execute-btn');
   if (claimExecBtn) {
-    claimExecBtn.addEventListener('click', () => {
+    claimExecBtn.addEventListener('click', async () => {
       const modelSelect = $('claim-model-select');
       const taskInput = $('claim-task-input');
       const modelId = modelSelect ? modelSelect.value : '';
       const taskId = taskInput ? taskInput.value.trim() : `task-${projectId}`;
-      executeClaim(taskId, projectId, modelId);
+      await executeClaim(taskId, projectId, modelId);
     });
   }
 
   const claimDoubleBtn = $('claim-double-btn');
   if (claimDoubleBtn) {
-    claimDoubleBtn.addEventListener('click', () => {
+    claimDoubleBtn.addEventListener('click', async () => {
       const modelSelect = $('claim-model-select');
       const taskInput = $('claim-task-input');
       const modelId = modelSelect ? modelSelect.value : '';
       const taskId = taskInput ? taskInput.value.trim() : `task-${projectId}`;
-      executeClaim(taskId, projectId, modelId);
-      executeClaim(taskId, projectId, modelId);
+      await executeClaim(taskId, projectId, modelId);
+      await executeClaim(taskId, projectId, modelId);
     });
   }
 
@@ -568,9 +586,36 @@
     finally { saving = false; }
   }
 
-  for (const kind of ['grill', 'import', 'task']) {
+  for (const kind of ['grill', 'import', 'task', 'project']) {
     $(`${kind}-cancel`).addEventListener('click', () => $(`${kind}-dialog`).close());
   }
+  $('new-project').addEventListener('click', () => {
+    $('project-form').elements.name.value = '';
+    $('project-form').elements.direction.value = '';
+    $('project-error').hidden = true;
+    $('project-dialog').showModal();
+  });
+  $('project-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (!data || saving) return;
+    saving = true;
+    $('project-error').hidden = true;
+    try {
+      const form = $('project-form');
+      const saved = await request('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, project: { name: form.elements.name.value, direction: form.elements.direction.value } }) });
+      const added = saved.plan.projects.at(-1);
+      data = saved.plan;
+      version = saved.version;
+      projectId = added.project.id;
+      initProjectReturnState(projectId);
+      selected = added.revisions.at(-1).id;
+      render();
+      $('project-dialog').close();
+      $('toast').textContent = `${added.project.name} added. Earlier projects and revisions stay.`;
+      clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+    } catch (error) { $('project-error').textContent = translateError(error.message); $('project-error').hidden = false; }
+    finally { saving = false; }
+  });
   $('grill-open').addEventListener('click', () => {
     const latest = project().revisions.at(-1);
     if (!latest.open.length) return;

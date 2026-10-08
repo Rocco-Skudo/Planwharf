@@ -6,9 +6,10 @@ const crypto = require('node:crypto');
 const Plan = require('./plan.js');
 const { createServer, readPlan, writePlan } = require('./server.cjs');
 const file = path.join(__dirname, `.verify-plan-${crypto.randomUUID()}.json`);
+const attemptsDir = path.join(__dirname, `.attempts-${path.basename(file, '.json')}`);
 const servers = [];
 async function start(options = {}) {
-  const server = createServer({ planFile: file, ...options });
+  const server = createServer({ planFile: file, attemptsDir, ...options });
   servers.push(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { server, base: `http://127.0.0.1:${server.address().port}` };
@@ -62,4 +63,5 @@ async function post(base, payload, headers = {}) {
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const server of servers) if (server.listening) await stop(server);
   await fs.rm(file, { force: true });
+  await fs.rm(attemptsDir, { recursive: true, force: true });
 });

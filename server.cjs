@@ -4,6 +4,7 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const Plan = require('./plan.js');
+const { createAttemptEngine } = require('./engine/attempts.js');
 
 const version = plan => crypto.createHash('sha256').update(JSON.stringify(plan)).digest('hex');
 class RequestError extends Error {
@@ -40,8 +41,10 @@ async function body(request) {
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
   catch { throw new RequestError(400, 'Richiesta non leggibile.'); }
 }
-function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan } = {}) {
+function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir } = {}) {
   let queue = Promise.resolve();
+  const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
+  const attempts = createAttemptEngine({ dir: storeDir });
   const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   return http.createServer(async (request, response) => {
     const json = (status, value) => {
@@ -55,6 +58,34 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
       if (request.method === 'GET' && pathname === '/api/plan') {
         const plan = await readPlan(planFile);
         return json(200, { plan, version: version(plan) });
+      }
+      if (request.method === 'GET' && pathname === '/api/attempts') {
+        return json(200, { attempts: attempts.getAttempts() });
+      }
+      if (request.method === 'POST' && pathname === '/api/attempts') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        const result = attempts.claim(input);
+        return json(result.ok ? 201 : 409, { ...result, attempts: attempts.getAttempts() });
+      }
+      if (request.method === 'POST' && pathname === '/api/projects') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (!input || typeof input.version !== 'string' || input.project === undefined || Object.keys(input).some(key => !['version', 'project'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['name', 'direction'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        const pending = queue.then(async () => {
+          const current = await readPlan(planFile);
+          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          let next;
+          try {
+            next = Plan.createProject(current, input.project);
+            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
+          } catch (error) { throw new RequestError(400, error.message); }
+          await save(planFile, next);
+          return { plan: next, version: version(next) };
+        });
+        queue = pending.catch(() => {});
+        return json(201, await pending);
       }
       if (request.method === 'POST' && ['/api/revisions', '/api/grill', '/api/import', '/api/tasks'].includes(pathname)) {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
