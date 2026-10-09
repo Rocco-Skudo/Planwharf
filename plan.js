@@ -17,8 +17,42 @@
       tasks: [{ id: 'calendario', projectId: 'biblioteca', revision_id: 2, title: 'Preparare il calendario del mese di prova', detail: 'Definire quattro turni e raccogliere la disponibilità dei volontari.', status: 'running' }]
     };
   }
+  function isFolderPath(value) {
+    if (typeof value !== 'string' || !value.length || value.length > 500 || value.includes('\0')) return false;
+    if (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\')) return true;
+    return value.startsWith('/') && value.length > 1;
+  }
+  function isGithubUrl(value) {
+    return typeof value === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
+  }
+  function normalizeFolder(value) {
+    let folder = value.trim().replace(/^["']+|["']+$/g, '').trim();
+    folder = folder.replace(/^file:\/\//i, '');
+    if (/^\/[A-Za-z]:/.test(folder)) folder = folder.slice(1);
+    return folder;
+  }
+  function normalizeGithub(value) {
+    let github = value.trim();
+    github = github.replace(/^git@github\.com:/i, 'https://github.com/');
+    github = github.replace(/^https?:\/\/(www\.)?github\.com\//i, 'https://github.com/');
+    const match = github.match(/^https:\/\/github\.com\/([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+?)(?:\.git)?(?:\/.*)?$/i);
+    return match ? `https://github.com/${match[1]}/${match[2].replace(/\.git$/i, '')}` : github.replace(/\/+$/, '');
+  }
+  function placeFrom(input) {
+    const folder = typeof input?.folder === 'string' ? normalizeFolder(input.folder) : '';
+    const github = typeof input?.github === 'string' ? normalizeGithub(input.github) : '';
+    if (folder && !isFolderPath(folder)) throw new Error('Percorso cartella non valido.');
+    if (github && !isGithubUrl(github)) throw new Error('GitHub deve essere un URL https://github.com/proprietario/repo.');
+    return { folder, github };
+  }
+  function projectRecord(id, name, place) {
+    const project = { id, name };
+    if (place.folder) project.folder = place.folder;
+    if (place.github) project.github = place.github;
+    return project;
+  }
   function validateProject(data) {
-    if (!data || data.schema !== 1 || typeof data.project?.id !== 'string' || !data.project.id.trim() || typeof data.project.name !== 'string' || !data.project.name.trim() || !Array.isArray(data.revisions) || !data.revisions.length || !Array.isArray(data.tasks)) return false;
+    if (!data || data.schema !== 1 || typeof data.project?.id !== 'string' || !data.project.id.trim() || typeof data.project.name !== 'string' || !data.project.name.trim() || Object.keys(data.project).some(key => !['id', 'name', 'folder', 'github'].includes(key)) || ('folder' in data.project && !isFolderPath(data.project.folder)) || ('github' in data.project && !isGithubUrl(data.project.github)) || !Array.isArray(data.revisions) || !data.revisions.length || !Array.isArray(data.tasks)) return false;
     const ids = new Set();
     for (const r of data.revisions) {
       if (!r || !Number.isSafeInteger(r.id) || r.id < 1 || ids.has(r.id) || !['manual', 'grill', 'import'].includes(r.mode) || typeof r.title !== 'string' || typeof r.createdAt !== 'string' || !Number.isFinite(Date.parse(r.createdAt)) || typeof r.direction !== 'string' || typeof r.state !== 'string' || !Array.isArray(r.closed) || !Array.isArray(r.open) || ![...r.closed, ...r.open].every(x => typeof x === 'string')) return false;
@@ -53,6 +87,53 @@
     return next;
   }
   function appendRevision(data, draft, timestamp) { return append(data, draft, 'manual', timestamp); }
+  function starterFrontier() {
+    return [
+      'What is the smallest next slice that still serves the current goal?',
+      'What is explicitly out of scope for this slice?',
+      'How will we know this slice is done?',
+      'Which assumption, if wrong, would waste the most work?',
+      'What must stay true (local, existing files, no paid APIs)?'
+    ];
+  }
+  function docsFrontier(docs) {
+    const names = (Array.isArray(docs) ? docs : []).map(name => String(name).trim()).filter(Boolean).slice(0, 12);
+    const listed = names.length ? names.join(', ') : 'the project docs';
+    return [
+      ...starterFrontier(),
+      `What in ${listed} should bound the next slice?`,
+      'What in those docs is explicitly out of scope for this slice?',
+      'Which documented file, command, or constraint must stay true?'
+    ];
+  }
+  function beginGrill(data, title, open, timestamp = new Date().toISOString()) {
+    if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
+    const latest = data.revisions.at(-1);
+    if (latest.open.length) return data;
+    if (!latest.direction.trim()) throw new Error('Compila titolo, direzione e stato dell’arte.');
+    const previous = clone(data.revisions);
+    const next = clone(data);
+    next.revisions.push({
+      id: Math.max(...data.revisions.map(r => r.id)) + 1,
+      mode: 'manual',
+      title,
+      createdAt: timestamp,
+      direction: latest.direction,
+      state: latest.state,
+      closed: clone(latest.closed),
+      open
+    });
+    if (!validate(next) || JSON.stringify(next.revisions.slice(0, -1)) !== JSON.stringify(previous) || JSON.stringify(next.tasks) !== JSON.stringify(data.tasks)) throw new Error('Il quaderno aggiornato non è valido.');
+    return next;
+  }
+  function startGrill(data, timestamp = new Date().toISOString()) {
+    return beginGrill(data, 'Grill me', starterFrontier(), timestamp);
+  }
+  function startGrillDocs(data, docs, timestamp = new Date().toISOString()) {
+    const names = (Array.isArray(docs) ? docs : []).map(name => String(name).trim()).filter(Boolean).slice(0, 12);
+    if (!names.length) throw new Error('Nessun documento nella cartella.');
+    return beginGrill(data, 'Grill with the docs', docsFrontier(names), timestamp);
+  }
   function grill(data, round, timestamp) {
     if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
     const latest = data.revisions.at(-1);
@@ -96,19 +177,60 @@
   function createProject(data, input, timestamp = new Date().toISOString()) {
     if (!validate(data)) throw new Error('Il quaderno salvato non è valido.');
     if (!input || typeof input.name !== 'string' || !input.name.trim() || typeof input.direction !== 'string' || !input.direction.trim()) throw new Error('Compila nome e direzione.');
+    const place = placeFrom(input);
     const notebook = data.schema === 2 ? clone(data) : { schema: 2, projects: [clone(data)] };
     const used = new Set(notebook.projects.map(item => item.project.id));
     const id = projectIdFromName(input.name, used);
     const previous = notebook.projects.map(item => clone(item));
     notebook.projects.push({
       schema: 1,
-      project: { id, name: input.name.trim() },
+      project: projectRecord(id, input.name.trim(), place),
       revisions: [{ id: 1, mode: 'manual', title: '', createdAt: timestamp, direction: input.direction.trim(), state: '', closed: [], open: [] }],
       tasks: []
     });
     if (!validate(notebook)) throw new Error('Il quaderno aggiornato non è valido.');
     previous.forEach((item, index) => {
       if (JSON.stringify(item) !== JSON.stringify(notebook.projects[index])) throw new Error('Il quaderno aggiornato non è valido.');
+    });
+    return notebook;
+  }
+  function setPlace(data, input) {
+    if (!validate(data)) throw new Error('Il quaderno salvato non è valido.');
+    if (!input || typeof input.id !== 'string' || !input.id.trim()) throw new Error('Progetto non trovato.');
+    const place = placeFrom(input);
+    if (data.schema === 1) {
+      if (input.id !== data.project.id) throw new Error('Progetto non trovato.');
+      const next = clone(data);
+      next.project = projectRecord(data.project.id, data.project.name, place);
+      if (!validate(next) || JSON.stringify(next.revisions) !== JSON.stringify(data.revisions) || JSON.stringify(next.tasks) !== JSON.stringify(data.tasks)) throw new Error('Il quaderno aggiornato non è valido.');
+      return next;
+    }
+    const notebook = clone(data);
+    const index = notebook.projects.findIndex(item => item.project.id === input.id);
+    if (index < 0) throw new Error('Progetto non trovato.');
+    const previous = notebook.projects.map(item => clone(item));
+    const current = notebook.projects[index];
+    notebook.projects[index] = { schema: current.schema, project: projectRecord(current.project.id, current.project.name, place), revisions: clone(current.revisions), tasks: clone(current.tasks) };
+    if (!validate(notebook)) throw new Error('Il quaderno aggiornato non è valido.');
+    previous.forEach((item, i) => {
+      if (i === index) {
+        if (JSON.stringify(item.revisions) !== JSON.stringify(notebook.projects[i].revisions) || JSON.stringify(item.tasks) !== JSON.stringify(notebook.projects[i].tasks) || item.project.id !== notebook.projects[i].project.id || item.project.name !== notebook.projects[i].project.name) throw new Error('Il quaderno aggiornato non è valido.');
+      } else if (JSON.stringify(item) !== JSON.stringify(notebook.projects[i])) throw new Error('Il quaderno aggiornato non è valido.');
+    });
+    return notebook;
+  }
+  function removeProject(data, input) {
+    if (!validate(data)) throw new Error('Il quaderno salvato non è valido.');
+    if (!input || typeof input.id !== 'string' || !input.id.trim()) throw new Error('Progetto non trovato.');
+    if (data.schema === 1 || !Array.isArray(data.projects) || data.projects.length < 2) throw new Error('Il quaderno deve contenere almeno un progetto.');
+    const notebook = clone(data);
+    const index = notebook.projects.findIndex(item => item.project.id === input.id);
+    if (index < 0) throw new Error('Progetto non trovato.');
+    const remaining = notebook.projects.filter((_, i) => i !== index).map(item => clone(item));
+    notebook.projects.splice(index, 1);
+    if (!validate(notebook)) throw new Error('Il quaderno aggiornato non è valido.');
+    remaining.forEach((item, i) => {
+      if (JSON.stringify(item) !== JSON.stringify(notebook.projects[i])) throw new Error('Il quaderno aggiornato non è valido.');
     });
     return notebook;
   }
@@ -122,6 +244,16 @@
     next.tasks.push({ id: `task-${counter}`, projectId: data.project.id, revision_id: input.revision_id, title: input.title.trim(), detail: input.detail.trim(), status: 'running' });
     return next;
   }
+  function removeTask(data, input) {
+    if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
+    if (!input || typeof input.id !== 'string' || !input.id.trim()) throw new Error('Task non trovato.');
+    const next = clone(data);
+    const index = next.tasks.findIndex(task => task.id === input.id);
+    if (index < 0) throw new Error('Task non trovato.');
+    next.tasks.splice(index, 1);
+    if (!validate(next) || JSON.stringify(next.revisions) !== JSON.stringify(data.revisions) || JSON.stringify(next.project) !== JSON.stringify(data.project)) throw new Error('Il quaderno aggiornato non è valido.');
+    return next;
+  }
   function diff(previous, current) {
     const changes = fields.filter(key => JSON.stringify(previous?.[key]) !== JSON.stringify(current[key])).map(key => ({ key, before: previous?.[key], after: current[key] }));
     const normalize = value => value.trim().toLocaleLowerCase('it-IT');
@@ -129,5 +261,5 @@
     if (reopened.length) changes.push({ key: 'reopened', before: [], after: reopened });
     return changes;
   }
-  return { example, validate, validateProject, appendRevision, grill, importRevision, createProject, createTask, diff };
+  return { example, validate, validateProject, appendRevision, startGrill, startGrillDocs, grill, importRevision, createProject, removeProject, setPlace, createTask, removeTask, diff, isFolderPath, isGithubUrl, starterFrontier, docsFrontier };
 });

@@ -6,7 +6,8 @@ const crypto = require('node:crypto');
 const Plan = require('./plan.js');
 const { createServer, writePlan, readPlan } = require('./server.cjs');
 const file = path.join(__dirname, `.verify-round-${crypto.randomUUID()}.json`);
-const originalFile = path.join(__dirname, 'plan.json');
+const originalFile = path.join(__dirname, 'fixtures', 'notebook.json');
+const productionFile = path.join(__dirname, 'plan.json');
 const servers = [];
 const draftOf = (revision, title) => Object.fromEntries(['title', 'direction', 'state', 'closed', 'open'].map(key => [key, key === 'title' ? title : structuredClone(revision[key])]));
 async function start(options = {}) {
@@ -18,6 +19,7 @@ async function start(options = {}) {
 async function stop(server) { await new Promise(resolve => server.close(resolve)); }
 (async () => {
   const sourceBytes = await fs.readFile(originalFile, 'utf8');
+  const productionBytes = await fs.readFile(productionFile, 'utf8');
   const notebook = JSON.parse(sourceBytes);
   assert.equal(notebook.schema, 2);
   assert.equal(notebook.projects.length, 2);
@@ -105,6 +107,7 @@ async function stop(server) { await new Promise(resolve => server.close(resolve)
   assert.equal(response.status, 500);
   assert.equal(await fs.readFile(file, 'utf8'), beforeFailure);
   assert.equal(await fs.readFile(originalFile, 'utf8'), sourceBytes);
+  assert.equal(await fs.readFile(productionFile, 'utf8'), productionBytes);
   console.log('PASS: due progetti reali; manual immutabile; grill chiude e cambia direzione; riapertura esplicita nel diff; task da R1 storico; secondo running rifiutato; import valido/invalidi; persistenza al riavvio e errore disco.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const server of servers) if (server.listening) await stop(server);

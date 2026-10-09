@@ -1,17 +1,92 @@
 [
   {
-    "id": "gemini",
-    "label": "Gemini",
-    "enabled": true
+    "id": "luna",
+    "label": "GPT-5.6 Luna",
+    "enabled": true,
+    "plan": "ChatGPT",
+    "kind": "local",
+    "cost": 1,
+    "limit": 200
+  },
+  {
+    "id": "gpt-5-mini",
+    "label": "GPT-5 mini",
+    "enabled": true,
+    "plan": "ChatGPT",
+    "kind": "local",
+    "cost": 1,
+    "limit": 150
+  },
+  {
+    "id": "gpt-5",
+    "label": "GPT-5",
+    "enabled": true,
+    "plan": "ChatGPT",
+    "kind": "default",
+    "cost": 3,
+    "limit": 60
+  },
+  {
+    "id": "gpt-5.5",
+    "label": "GPT-5.5",
+    "enabled": true,
+    "plan": "ChatGPT",
+    "kind": "premium",
+    "cost": 6,
+    "limit": 30
+  },
+  {
+    "id": "grok-fast",
+    "label": "Grok 4.1 Fast",
+    "enabled": true,
+    "plan": "Grok",
+    "kind": "local",
+    "cost": 1,
+    "limit": 120
+  },
+  {
+    "id": "grok-build",
+    "label": "Grok Build",
+    "enabled": true,
+    "plan": "Grok",
+    "kind": "default",
+    "cost": 3,
+    "limit": 50
+  },
+  {
+    "id": "grok-4-20",
+    "label": "Grok 4.20",
+    "enabled": true,
+    "plan": "Grok",
+    "kind": "default",
+    "cost": 4,
+    "limit": 40
   },
   {
     "id": "grok",
-    "label": "Grok",
-    "enabled": true
+    "label": "Grok 4.7",
+    "enabled": true,
+    "plan": "Grok",
+    "kind": "premium",
+    "cost": 8,
+    "limit": 20
   },
   {
-    "id": "luna",
-    "label": "Luna",
-    "enabled": false
+    "id": "gemini-flash",
+    "label": "Gemini Flash",
+    "enabled": false,
+    "plan": "Gemini",
+    "kind": "local",
+    "cost": 1,
+    "limit": 80
+  },
+  {
+    "id": "gemini",
+    "label": "Gemini Pro",
+    "enabled": false,
+    "plan": "Gemini",
+    "kind": "default",
+    "cost": 2,
+    "limit": 80
   }
 ]

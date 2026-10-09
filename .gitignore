@@ -2,3 +2,5 @@ validation/edge-profile-*/
 validation/**/*.dmp
 *.dmp
 .attempts-*/
+.planwharf-window/
+plan.local.json

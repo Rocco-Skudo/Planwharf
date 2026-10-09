@@ -5,7 +5,7 @@ const vm = require('node:vm');
 const path = require('node:path');
 const Planwharf = require('./plan.js');
 const copy = value => JSON.parse(JSON.stringify(value));
-const disk = { plan: JSON.parse(fs.readFileSync(path.join(__dirname, 'plan.json'), 'utf8')), version: 'v1', failLoad: false, failSave: false };
+const disk = { plan: JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json'), 'utf8')), version: 'v1', failLoad: false, failSave: false };
 const initial = copy(disk.plan);
 const seenStore = new Map();
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -15,7 +15,7 @@ async function openApp() {
     if (!nodes.has(id)) nodes.set(id, { textContent: '', innerHTML: '', hidden: true, disabled: true, listeners: {}, addEventListener(event, handler) { this.listeners[event] = handler; }, showModal() { this.open = true; }, close() { this.open = false; } });
     return nodes.get(id);
   }
-  for (const [kind, fields] of Object.entries({ revision: ['title', 'direction', 'state', 'closed', 'open'], grill: ['title'], import: ['json'], task: ['title', 'detail'] })) {
+  for (const [kind, fields] of Object.entries({ revision: ['title', 'direction', 'state', 'closed', 'open'], grill: ['title'], import: ['json'], task: ['title', 'detail'], project: ['name', 'direction', 'folder', 'github'], place: ['folder', 'github'] })) {
     node(kind + '-form').elements = Object.fromEntries(fields.map(key => [key, { value: '' }]));
   }
   const context = vm.createContext({ Planwharf, document: { getElementById: node },
@@ -53,11 +53,11 @@ const selectRevision = (app, id) => app.node('revision-select').listeners.change
 const selectProject = (app, id) => app.node('project-select').listeners.change({ target: { value: id } });
 (async () => {
   const app = await openApp();
-  assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-  assert.ok(app.node('changes-content').innerHTML.toLowerCase().includes('nessuna novità'));
+  assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+  assert.ok(app.node('changes-content').innerHTML.toLowerCase().includes('nothing new'));
   assert.equal(app.node('changes-content').innerHTML.includes('via del Porto'), false);
   assert.ok(app.node('project-select').innerHTML.includes('orto'));
-  assert.ok(app.node('task-content').innerHTML.includes('IN CORSO · R2'));
+  assert.equal(app.node('task-content').innerHTML, '');
   selectRevision(app, 1);
   app.node('new-revision').listeners.click();
   assert.ok(app.form.elements.state.value.includes('Scelta la sede'));
@@ -65,14 +65,14 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   app.form.elements.state.value = 'Quattro volontari confermati.';
   disk.failSave = true;
   await submit(app.form);
-  assert.equal(app.node('revision-badge').textContent, 'R1 · manual · Storico');
+  assert.equal(app.node('revision-badge').textContent, 'R1 · manual · Historical');
   assert.equal(disk.plan.projects[0].revisions.length, 2);
   assert.equal(app.node('revision-dialog').open, true);
   assert.equal(app.node('form-error').hidden, false);
   assert.equal(app.node('toast').textContent, '');
   disk.failSave = false;
   await submit(app.form);
-  assert.equal(app.node('revision-badge').textContent, 'R3 · manual · Attuale');
+  assert.equal(app.node('revision-badge').textContent, 'R3 · manual · Current');
   assert.deepEqual(disk.plan.projects[0].revisions.slice(0, 2), initial.projects[0].revisions);
   assert.ok(app.node('changes-content').innerHTML.includes('Quattro volontari confermati'));
   selectRevision(app, 1);
@@ -88,12 +88,11 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   grillForm.elements['action-1'] = { value: 'direction' };
   grillForm.elements['answer-1'] = { value: 'Aprire la biblioteca due giorni a settimana.' };
   await submit(grillForm);
-  assert.equal(app.node('revision-badge').textContent, 'R4 · grill · Attuale');
-  assert.equal(app.node('waiting-count').textContent, '0 decisioni');
+  assert.equal(app.node('revision-badge').textContent, 'R4 · grill · Current');
+  assert.equal(app.node('waiting-count').textContent, '1 decision');
   assert.ok(app.node('changes-content').innerHTML.includes('Aprire la biblioteca due giorni'));
-  assert.ok(app.node('task-content').innerHTML.includes('IN CORSO · R2'));
   selectProject(app, 'orto');
-  assert.equal(app.node('revision-badge').textContent, 'R1 · import · Attuale');
+  assert.equal(app.node('revision-badge').textContent, 'R1 · import · Current');
   app.node('new-revision').listeners.click();
   app.form.elements.title.value = 'Un orto pronto';
   app.form.elements.state.value = 'Due vicini disponibili.';
@@ -105,13 +104,13 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   taskForm.elements.title.value = 'Definire irrigazione';
   await submit(taskForm);
   assert.equal(disk.plan.projects[1].tasks[0].revision_id, 1);
-  assert.equal(app.node('revision-badge').textContent, 'R1 · import · Storico');
+  assert.equal(app.node('revision-badge').textContent, 'R1 · import · Historical');
   app.node('new-task').listeners.click();
   taskForm.elements.title.value = 'Secondo task';
   const beforeSecond = JSON.stringify(disk.plan);
   await submit(taskForm);
   assert.equal(app.node('task-error').hidden, false);
-  assert.ok(app.node('task-error').textContent.includes('già un task'));
+  assert.ok(app.node('task-error').textContent.includes('already has a running task'));
   assert.equal(JSON.stringify(disk.plan), beforeSecond);
   app.node('task-cancel').listeners.click();
   app.node('import-revision').listeners.click();
@@ -124,19 +123,19 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   const reopenedDecision = lastOrto.closed[0];
   importForm.elements.json.value = JSON.stringify({ title: 'Una decisione da rivedere', direction: 'Coltivare erbe aromatiche.', state: 'Confronto da riaprire.', closed: [], open: [reopenedDecision] });
   await submit(importForm);
-  assert.equal(app.node('revision-badge').textContent, 'R3 · import · Attuale');
-  assert.ok(app.node('changes-content').innerHTML.includes('Decisione riaperta esplicitamente'));
+  assert.equal(app.node('revision-badge').textContent, 'R3 · import · Current');
+  assert.ok(app.node('changes-content').innerHTML.includes('Decision explicitly reopened'));
   assert.equal(disk.plan.projects[1].tasks[0].revision_id, 1);
   const reopened = await openApp();
   selectProject(reopened, 'orto');
-  assert.equal(reopened.node('revision-badge').textContent, 'R3 · import · Attuale');
-  assert.ok(reopened.node('changes-content').innerHTML.toLowerCase().includes('nessuna novità'));
-  assert.ok(reopened.node('task-content').innerHTML.includes('IN CORSO · R1'));
+  assert.equal(reopened.node('revision-badge').textContent, 'R3 · import · Current');
+  assert.ok(reopened.node('changes-content').innerHTML.toLowerCase().includes('nothing new'));
+  assert.equal(reopened.node('task-content').innerHTML, '');
   disk.failLoad = true;
   const unavailable = await openApp();
   assert.equal(unavailable.node('new-revision').disabled, true);
   assert.equal(unavailable.node('revision-badge').textContent, '');
-  assert.equal(unavailable.node('storage-notice').textContent, 'File non leggibile.');
+  assert.equal(unavailable.node('storage-notice').textContent, 'File unreadable.');
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
   assert.equal((html.match(/<section class="card /g) || []).length, 4);
   for (const id of ['project-select', 'grill-dialog', 'import-dialog', 'task-dialog']) assert.ok(html.includes(`id="${id}"`));

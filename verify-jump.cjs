@@ -45,7 +45,9 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
       revision: ['title', 'direction', 'state', 'closed', 'open'],
       grill: ['title'],
       import: ['json'],
-      task: ['title', 'detail']
+      task: ['title', 'detail'],
+      project: ['name', 'direction', 'folder', 'github'],
+      place: ['folder', 'github']
     })) {
       node(kind + '-form').elements = Object.fromEntries(fields.map(key => [key, { value: '' }]));
     }
@@ -104,11 +106,11 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
 }
 
 (async () => {
-  const basePlan = JSON.parse(fs.readFileSync(path.join(__dirname, 'plan.json'), 'utf8'));
+  const basePlan = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json'), 'utf8'));
 
   // Test 1: First access on a project with multiple revisions (biblioteca has R1 and R2).
   // - No seen revision marker exists in store.
-  // - Shows "nessuna novità" (does NOT show the example diff between R1 and R2).
+  // - Shows "nothing new" (does NOT show the example diff between R1 and R2).
   // - Does not invent a seen revision.
   // - Updates marker to R2.
   {
@@ -116,9 +118,9 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), undefined);
 
     const app = await harness.openApp();
-    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.toLowerCase().includes('nessuna novità'));
-    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+    assert.ok(app.node('change-context').textContent.toLowerCase().includes('nothing new'));
+    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(app.node('changes-content').innerHTML.includes('diff-item'), false, 'First access must not show any diff items');
     assert.equal(app.node('changes-content').innerHTML.includes('via del Porto'), false, 'First access must not show the example diff');
 
@@ -128,15 +130,15 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
 
   // Test 2: Reopen without changes (same revision).
   // - Closing and reopening preserves marker = 2.
-  // - Shows "nessuna novità" and no diff items.
+  // - Shows "nothing new" and no diff items.
   {
     const store = new Map([['planwharf_seen_biblioteca', '2']]);
     const harness = createHarness({ initialPlan: basePlan, initialStore: store });
     const app = await harness.openApp();
 
-    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.toLowerCase().includes('nessuna novità'));
-    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+    assert.ok(app.node('change-context').textContent.toLowerCase().includes('nothing new'));
+    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(app.node('changes-content').innerHTML.includes('diff-item'), false);
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
   }
@@ -150,8 +152,8 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     const harness = createHarness({ initialPlan: basePlan, initialStore: store });
     const app = await harness.openApp();
 
-    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.includes('Da R1 a R2'));
+    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+    assert.ok(app.node('change-context').textContent.includes('From R1 to R2'));
     assert.ok(app.node('changes-content').textContent.includes('via del Porto'));
     assert.ok(app.node('changes-content').innerHTML.includes('diff-item'));
 
@@ -160,22 +162,22 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
 
     // Clicking R1 and clicking back to R2 preserves the jump comparison during this view
     app.node('revision-select').listeners.change({ target: { value: '1' } });
-    assert.equal(app.node('revision-badge').textContent, 'R1 · manual · Storico');
-    assert.ok(app.node('changes-content').textContent.includes('Da qui inizia lo storico'));
+    assert.equal(app.node('revision-badge').textContent, 'R1 · manual · Historical');
+    assert.ok(app.node('change-context').textContent.includes('The initial snapshot'));
 
     app.node('revision-select').listeners.change({ target: { value: '2' } });
-    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.includes('Da R1 a R2'));
+    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+    assert.ok(app.node('change-context').textContent.includes('From R1 to R2'));
     assert.ok(app.node('changes-content').textContent.includes('via del Porto'));
   }
 
-  // Test 4: Subsequent reopen after jump shows "nessuna novità".
+  // Test 4: Subsequent reopen after jump shows "nothing new".
   {
     const store = new Map([['planwharf_seen_biblioteca', '2']]);
     const harness = createHarness({ initialPlan: basePlan, initialStore: store });
     const app = await harness.openApp();
 
-    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(app.node('changes-content').innerHTML.includes('diff-item'), false);
   }
 
@@ -206,8 +208,8 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     const harness = createHarness({ initialPlan: multiPlan, initialStore: store });
     const app = await harness.openApp();
 
-    assert.equal(app.node('revision-badge').textContent, 'R4 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.includes('Da R1 a R4'));
+    assert.equal(app.node('revision-badge').textContent, 'R4 · manual · Current');
+    assert.ok(app.node('change-context').textContent.includes('From R1 to R4'));
 
     // Check that changes from intermediate revisions are present:
     // "via del Porto" from R2
@@ -222,10 +224,10 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     // Marker in store updated to 4
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '4');
 
-    // Reopen immediately: must show "nessuna novità"
+    // Reopen immediately: must show "nothing new"
     const nextHarness = createHarness({ initialPlan: multiPlan, initialStore: harness.store });
     const nextApp = await nextHarness.openApp();
-    assert.ok(nextApp.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.ok(nextApp.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(nextApp.node('changes-content').innerHTML.includes('diff-item'), false);
   }
 
@@ -259,16 +261,16 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     const harness = createHarness({ initialPlan: multiPlan, initialStore: store });
     const app = await harness.openApp();
 
-    // Active project is biblioteca: marker is 2, current is 2 -> nessuna novità
+    // Active project is biblioteca: marker is 2, current is 2 -> nothing new
     assert.equal(app.node('project-name').textContent, 'Biblioteca di quartiere');
-    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
 
     // Switch to orto: lastSeen was 1, current is 3 -> jump from R1 to R3!
     app.node('project-select').listeners.change({ target: { value: 'orto' } });
     assert.equal(app.node('project-name').textContent, 'Orto condiviso');
-    assert.equal(app.node('revision-badge').textContent, 'R3 · manual · Attuale');
-    assert.ok(app.node('change-context').textContent.includes('Da R1 a R3'));
+    assert.equal(app.node('revision-badge').textContent, 'R3 · manual · Current');
+    assert.ok(app.node('change-context').textContent.includes('From R1 to R3'));
     assert.ok(app.node('changes-content').textContent.includes('Pozzo installato'));
     assert.ok(app.node('changes-content').textContent.includes('Raccolto pronto'));
 
@@ -277,20 +279,23 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     // Marker for biblioteca is still 2
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
 
-    // Switch back to biblioteca: still nessuna novità
+    // Switch back to biblioteca: still nothing new
     app.node('project-select').listeners.change({ target: { value: 'biblioteca' } });
     assert.equal(app.node('project-name').textContent, 'Biblioteca di quartiere');
-    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+    assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
   }
 
-  // Test 7: Production plan.json is pristine and immutable to viewing/jumping.
+  // Test 7: Production plan.json is the empty skeleton, not a personal notebook.
   {
     const prodFile = path.join(__dirname, 'plan.json');
     const content = fs.readFileSync(prodFile, 'utf8');
     const parsed = JSON.parse(content);
-    assert.equal(parsed.projects[0].revisions.length, 2);
-    assert.equal(parsed.projects[1].revisions.length, 1);
-    assert.equal(parsed.projects[0].tasks[0].revision_id, 2);
+    assert.equal(parsed.schema, 2);
+    assert.equal(parsed.projects.length, 1);
+    assert.equal(parsed.projects[0].project.id, 'first-project');
+    assert.equal(parsed.projects[0].revisions.length, 1);
+    assert.equal(parsed.projects[0].tasks.length, 0);
+    assert.equal('folder' in parsed.projects[0].project, false);
     assert.equal(Planwharf.validate(parsed), true);
   }
 
@@ -300,13 +305,13 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
       const store = new Map([['planwharf_seen_biblioteca', badValue]]);
       const harness = createHarness({ initialPlan: basePlan, initialStore: store });
       const app = await harness.openApp();
-      assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Attuale');
-      assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nessuna novità'));
+      assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+      assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
       assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
     }
   }
 
-  console.log('PASS: verify-jump.cjs — salto revisioni, salti multipli, nessuna novità, riapertura, primo accesso pulito, isolamento progetti, robustezza store.');
+  console.log('PASS: verify-jump.cjs — salto revisioni, salti multipli, nothing new, riapertura, primo accesso pulito, isolamento progetti, robustezza store.');
 })().catch(err => {
   console.error(err);
   process.exitCode = 1;

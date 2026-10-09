@@ -10,7 +10,7 @@ const output = path.join(__dirname, 'validation');
 fs.mkdirSync(output, { recursive: true });
 const profile = path.join(output, `edge-profile-${Date.now()}`);
 const planFile = path.join(output, `browser-plan-${Date.now()}.json`);
-fs.writeFileSync(planFile, fs.readFileSync(path.join(__dirname, 'plan.json')));
+fs.writeFileSync(planFile, fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json')));
 const server = createServer({ planFile });
 const browser = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
 let ws;
@@ -64,7 +64,7 @@ browser.on('error', error => { browserError = error; });
   const initial = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   fs.writeFileSync(path.join(output, 'desktop-example.png'), Buffer.from(initial.data, 'base64'));
   await evaluate("document.querySelector('[data-revision=\"1\"]').click()");
-  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R1 · manual · Storico');
+  assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R1 · manual · Historical');
   assert.ok(await evaluate("document.getElementById('plan-content').textContent.includes('Individuati due locali possibili')"));
   await evaluate("document.getElementById('new-revision').click()");
   assert.ok(await evaluate("document.getElementById('revision-form').elements.state.value.includes('Scelta la sede')"), 'Draft must use latest revision even while R1 selected');
@@ -88,7 +88,7 @@ browser.on('error', error => { browserError = error; });
   assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R3 · manual · Attuale');
   assert.ok(await evaluate("document.getElementById('changes-content').textContent.toLowerCase().includes('nessuna novità')"), 'Reload without new revisions must show nessuna novità');
 
-  // Multi-revision jump test: append R4 and R5 behind the scenes to planFile, reload, and verify jump Da R3 a R5
+  // Multi-revision jump test: append R4 and R5 behind the scenes to planFile, reload, and verify jump From R3 to R5
   const multiPlan = JSON.parse(fs.readFileSync(planFile, 'utf8'));
   const lib = multiPlan.projects.find(p => p.project.id === 'biblioteca');
   const r4 = Plan.appendRevision(lib, { title: 'R4 Intermedio', direction: 'Direzione R4.', state: 'Stato R4.', closed: [...lib.revisions.at(-1).closed, 'Passo 4 chiuso.'], open: ['Domanda 4?'] });
@@ -102,7 +102,7 @@ browser.on('error', error => { browserError = error; });
     await pause(50);
   }
   assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R5 · manual · Attuale');
-  assert.ok(await evaluate("document.getElementById('change-context').textContent.includes('Da R3 a R5')"), 'Must show jump Da R3 a R5');
+  assert.ok(await evaluate("document.getElementById('change-context').textContent.includes('From R3 to R5')"), 'Must show jump From R3 to R5');
   assert.ok(await evaluate("document.getElementById('changes-content').textContent.includes('Passo 4 chiuso')"), 'Jump must include intermediate R4 changes');
   assert.ok(await evaluate("document.getElementById('changes-content').textContent.includes('Passo 5 chiuso')"), 'Jump must include R5 changes');
 

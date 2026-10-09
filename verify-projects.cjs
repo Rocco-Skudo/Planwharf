@@ -13,8 +13,14 @@ const planFile = path.join(dir, 'plan.json');
 const attemptsDir = path.join(dir, 'attempts');
 const servers = [];
 
+const opened = [];
 async function start() {
-  const server = createServer({ planFile, attemptsDir });
+  const server = createServer({
+    planFile,
+    attemptsDir,
+    openFolder: folder => opened.push(['folder', folder]),
+    openUrl: url => opened.push(['url', url])
+  });
   servers.push(server);
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   return { server, base: `http://127.0.0.1:${server.address().port}` };
@@ -25,7 +31,7 @@ const production = JSON.parse(fs.readFileSync(path.join(__dirname, 'plan.json'),
 const productionSnapshot = JSON.stringify(production);
 
 (async () => {
-  const notebook = JSON.parse(JSON.stringify(production));
+  const notebook = JSON.parse(fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json'), 'utf8'));
   const preserved = JSON.parse(JSON.stringify(notebook.projects));
   await writePlan(planFile, notebook);
 
@@ -100,8 +106,93 @@ const productionSnapshot = JSON.stringify(production);
   const fileEngine = createAttemptEngine({ dir: attemptsDir });
   assert.equal(fileEngine.getAttempts()[0].id, one.attempt.id);
 
+  const placeRes = await fetch(again.base + '/api/place', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: reopened.version, project: { id: 'biblioteca', folder: dir, github: 'https://github.com/benitz94/Planwharf-zombie' } })
+  });
+  assert.equal(placeRes.status, 201);
+  const placed = await placeRes.json();
+  const biblioteca = placed.plan.projects.find(item => item.project.id === 'biblioteca');
+  assert.equal(biblioteca.project.folder, dir);
+  assert.equal(biblioteca.project.github, 'https://github.com/benitz94/Planwharf-zombie');
+  assert.deepEqual(biblioteca.revisions, preserved[0].revisions);
+  const missing = await fetch(again.base + '/api/place', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: placed.version, project: { id: 'biblioteca', folder: path.join(dir, 'no-such-folder'), github: '' } })
+  });
+  assert.equal(missing.status, 400);
+  const still = await readPlan(planFile);
+  assert.equal(still.projects.find(item => item.project.id === 'biblioteca').project.folder, dir);
+  const openFolder = await fetch(again.base + '/api/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'biblioteca', target: 'folder' })
+  });
+  assert.equal(openFolder.status, 200);
+  const openGit = await fetch(again.base + '/api/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'biblioteca', target: 'github' })
+  });
+  assert.equal(openGit.status, 200);
+  assert.deepEqual(opened, [['folder', dir], ['url', 'https://github.com/benitz94/Planwharf-zombie']]);
+  const noFolder = await fetch(again.base + '/api/open', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId: 'orto', target: 'folder' })
+  });
+  assert.equal(noFolder.status, 400);
+
+  const afterPlace = await (await fetch(again.base + '/api/plan')).json();
+  const emptyId = afterPlace.plan.projects.find(item => !item.revisions.at(-1).open.length).project.id;
+  const beforeEmpty = afterPlace.plan.projects.find(item => item.project.id === emptyId);
+  const grillStart = await fetch(again.base + '/api/grill-start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: afterPlace.version, projectId: emptyId })
+  });
+  assert.equal(grillStart.status, 201);
+  const grilledEmpty = await grillStart.json();
+  const started = grilledEmpty.plan.projects.find(item => item.project.id === emptyId);
+  assert.ok(started.revisions.at(-1).open.length > 0);
+  assert.equal(started.revisions.at(-1).title, 'Grill me');
+  assert.deepEqual(started.revisions.slice(0, -1), beforeEmpty.revisions);
+  const already = await fetch(again.base + '/api/grill-start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: grilledEmpty.version, projectId: emptyId })
+  });
+  assert.equal(already.status, 201);
+  const againGrill = await already.json();
+  assert.equal(againGrill.plan.projects.find(item => item.project.id === emptyId).revisions.length, started.revisions.length);
+
+  const beforeRemove = await (await fetch(again.base + '/api/plan')).json();
+  const jobOwner = beforeRemove.plan.projects.find(item => item.tasks.some(task => task.status === 'running'));
+  const job = jobOwner.tasks.find(task => task.status === 'running');
+  const removedJob = await fetch(again.base + '/api/remove-task', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: beforeRemove.version, projectId: jobOwner.project.id, task: { id: job.id } })
+  });
+  assert.equal(removedJob.status, 201);
+  const afterJob = await removedJob.json();
+  assert.equal(afterJob.plan.projects.find(item => item.project.id === jobOwner.project.id).tasks.some(task => task.id === job.id), false);
+  assert.deepEqual(afterJob.plan.projects.find(item => item.project.id === jobOwner.project.id).revisions, jobOwner.revisions);
+  const extra = afterJob.plan.projects.find(item => !['biblioteca', 'orto', 'raceengineer'].includes(item.project.id)) || afterJob.plan.projects.at(-1);
+  const removedProject = await fetch(again.base + '/api/remove-project', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version: afterJob.version, projectId: extra.project.id })
+  });
+  assert.equal(removedProject.status, 201);
+  const afterProject = await removedProject.json();
+  assert.equal(afterProject.plan.projects.some(item => item.project.id === extra.project.id), false);
+  assert.ok(afterProject.plan.projects.length >= 1);
+
   assert.equal(JSON.stringify(JSON.parse(fs.readFileSync(path.join(__dirname, 'plan.json'), 'utf8'))), productionSnapshot);
-  console.log('OK: add project, reload keeps it, old revisions stay, second claim refused, attempts on server file.');
+  console.log('OK: add project, reload keeps it, old revisions stay, second claim refused, attempts on server file, place and open.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const server of servers) if (server.listening) await stop(server);
   await fsp.rm(dir, { recursive: true, force: true });

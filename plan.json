@@ -4,75 +4,19 @@
     {
       "schema": 1,
       "project": {
-        "id": "biblioteca",
-        "name": "Biblioteca di quartiere"
+        "id": "first-project",
+        "name": "First project"
       },
       "revisions": [
         {
           "id": 1,
           "mode": "manual",
-          "title": "Il punto di partenza",
-          "createdAt": "2026-10-06T09:00:00+02:00",
-          "direction": "Aprire una piccola biblioteca di quartiere, accessibile a tutti.",
-          "state": "Individuati due locali possibili. Raccolta iniziale: 120 libri donati.",
-          "closed": [
-            "Prestito gratuito per i residenti.",
-            "Partire con una sola sede."
-          ],
-          "open": [
-            "Quale locale scegliamo?",
-            "Chi segue il primo turno di apertura?"
-          ]
-        },
-        {
-          "id": 2,
-          "mode": "manual",
-          "title": "Una sede, un primo passo",
-          "createdAt": "2026-10-07T10:30:00+02:00",
-          "direction": "Aprire la biblioteca in via del Porto, con un primo mese di prova.",
-          "state": "Scelta la sede di via del Porto. Catalogati 120 libri. Il calendario di prova è in preparazione.",
-          "closed": [
-            "Prestito gratuito per i residenti.",
-            "Partire con una sola sede.",
-            "Usare il locale di via del Porto."
-          ],
-          "open": [
-            "Chi segue il primo turno di apertura?",
-            "Confermiamo l’apertura il sabato mattina?"
-          ]
-        }
-      ],
-      "tasks": [
-        {
-          "id": "calendario",
-          "projectId": "biblioteca",
-          "revision_id": 2,
-          "title": "Preparare il calendario del mese di prova",
-          "detail": "Definire quattro turni e raccogliere la disponibilità dei volontari.",
-          "status": "running"
-        }
-      ]
-    },
-    {
-      "schema": 1,
-      "project": {
-        "id": "orto",
-        "name": "Orto condiviso"
-      },
-      "revisions": [
-        {
-          "id": 1,
-          "mode": "import",
-          "title": "Il terreno disponibile",
-          "createdAt": "2026-10-07T08:00:00Z",
-          "direction": "Avviare un orto condiviso nel cortile del quartiere.",
-          "state": "Il terreno è disponibile; manca il calendario di irrigazione.",
-          "closed": [
-            "Usare il cortile comune."
-          ],
-          "open": [
-            "Chi irriga nel fine settimana?"
-          ]
+          "title": "",
+          "createdAt": "2026-10-09T00:00:00.000Z",
+          "direction": "",
+          "state": "",
+          "closed": [],
+          "open": []
         }
       ],
       "tasks": []
