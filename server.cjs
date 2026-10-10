@@ -18,7 +18,7 @@ class RequestError extends Error {
 }
 async function readPlan(file) {
   const plan = JSON.parse(await fs.readFile(file, 'utf8'));
-  if (!Plan.validate(plan)) throw new Error('Il file del piano non è valido.');
+  if (!Plan.validate(plan)) throw new Error('The plan file is invalid.');
   return plan;
 }
 async function writePlan(file, plan) {
@@ -41,11 +41,11 @@ async function body(request) {
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 65536) throw new RequestError(413, 'Revisione troppo grande.');
+    if (size > 65536) throw new RequestError(413, 'Revision too large.');
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
-  catch { throw new RequestError(400, 'Richiesta non leggibile.'); }
+  catch { throw new RequestError(400, 'Request unreadable.'); }
 }
 function defaultOpenFolder(folder) {
   const opts = { detached: true, stdio: 'ignore' };
@@ -61,11 +61,46 @@ function defaultOpenUrl(url) {
 async function assertFolder(folder) {
   if (!folder) return;
   let st;
-  try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Cartella non trovata.'); }
-  if (!st.isDirectory()) throw new RequestError(400, 'Cartella non trovata.');
+  try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
+  if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder, skills, fetchSkills, syncSkills, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow } = {}) {
+function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder, skills, fetchSkills, syncSkills, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, fetchPlans = fetchPlanUsage } = {}) {
   let queue = Promise.resolve();
+  const settingsFile = `${planFile}.settings.json`;
+  async function readSettings() {
+    try {
+      const value = JSON.parse(await fs.readFile(settingsFile, 'utf8'));
+      if (typeof value.projectsRoot !== 'string') throw new Error('Invalid projects folder settings.');
+      return { projectsRoot: value.projectsRoot };
+    } catch (error) {
+      if (error.code === 'ENOENT') return { projectsRoot: '' };
+      throw error;
+    }
+  }
+  async function setProjectsRoot(value) {
+    if (typeof value !== 'string' || value.length > 500) throw new RequestError(400, 'Invalid projects folder.');
+    const folder = value.trim();
+    if (folder && !path.isAbsolute(folder)) throw new RequestError(400, 'Use an absolute projects folder path.');
+    await assertFolder(folder);
+    const settings = { projectsRoot: folder ? path.resolve(folder) : '' };
+    await writePlan(settingsFile, settings);
+    return settings;
+  }
+  async function createProjectFolder(name) {
+    const { projectsRoot } = await readSettings();
+    if (!projectsRoot) throw new RequestError(400, 'Choose a projects folder first.');
+    await assertFolder(projectsRoot);
+    let leaf = name.normalize('NFKC').replace(/[<>:"/\\|?*\x00-\x1f]/g, '-').trim().slice(0, 100).replace(/[. ]+$/g, '');
+    if (!leaf || leaf === '.' || leaf === '..') throw new RequestError(400, 'Choose a valid project name.');
+    if (/^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(leaf)) leaf = 'Project-' + leaf;
+    for (let n = 1; n <= 1000; n++) {
+      const folder = path.join(projectsRoot, leaf + (n === 1 ? '' : `-${n}`));
+      if (path.dirname(folder) !== path.resolve(projectsRoot)) throw new RequestError(400, 'Invalid project folder.');
+      try { await fs.mkdir(folder); return folder; }
+      catch (error) { if (error.code !== 'EEXIST') throw error; }
+    }
+    throw new RequestError(409, 'Too many folders with this project name.');
+  }
   const enqueue = work => {
     const pending = queue.then(work);
     queue = pending.catch(() => {});
@@ -97,7 +132,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     killWorker,
     askModel,
     abortAsk,
-    fetchPlans: fetchPlanUsage,
+    fetchPlans,
     readSkill: relative => (typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
     applyStart: (projectId, options) => enqueue(async () => {
       const current = await readPlan(planFile);
@@ -123,7 +158,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
       };
       const updated = Plan.appendRevision(project, draft);
       next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
-      if (!Plan.validate(next)) return { ok: false, reason: 'Il quaderno aggiornato non è valido.' };
+      if (!Plan.validate(next)) return { ok: false, reason: 'The updated notebook is invalid.' };
       await save(planFile, next);
     }
     const result = await orchestra.skipGrill(projectId);
@@ -157,7 +192,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
       return { ok: true, plan: current, version: version(current), snapshot, phase: prepared.phase || 'grill' };
     }
     const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
-    if (!Plan.validate(next)) return { ok: false, reason: 'Il quaderno aggiornato non è valido.' };
+    if (!Plan.validate(next)) return { ok: false, reason: 'The updated notebook is invalid.' };
     await save(planFile, next);
     const snapshot = await orchestra.tick();
     return { ok: true, plan: next, version: version(next), snapshot, phase: prepared.phase || (prepared.job ? 'plan' : 'grill') };
@@ -166,14 +201,14 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     Promise.resolve().then(() => skillsCache.ensure()).catch(() => {});
   }
   const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
-  return http.createServer(async (request, response) => {
+  const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
       response.end(JSON.stringify(value));
     };
     try {
       const expectedHost = `127.0.0.1:${request.socket.localPort}`;
-      if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Apri la schermata dal suo indirizzo locale.');
+      if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Open the interface from its local address.');
       const loc = new URL(request.url, `http://${expectedHost}`);
       const pathname = loc.pathname;
       if (request.method === 'GET' && pathname === '/' && (loc.searchParams.get('watch') === '1' || loc.searchParams.get('view') === 'watch')) {
@@ -185,8 +220,20 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         const plan = await readPlan(planFile);
         return json(200, { plan, version: version(plan) });
       }
+      if (request.method === 'GET' && pathname === '/api/settings') return json(200, await readSettings());
+      if (request.method === 'POST' && pathname === '/api/settings') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON.');
+        const input = await body(request);
+        if (!input || Object.keys(input).some(key => key !== 'projectsRoot')) throw new RequestError(400, 'Invalid settings.');
+        return json(200, await enqueue(() => setProjectsRoot(input.projectsRoot)));
+      }
       if (request.method === 'GET' && pathname === '/api/attempts') {
         return json(200, { attempts: attempts.getAttempts() });
+      }
+      if (request.method === 'GET' && pathname === '/api/repository') {
+        const result = await orchestra.inspectRepository(loc.searchParams.get('projectId'), { force: loc.searchParams.get('refresh') === '1' });
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result);
       }
       if (request.method === 'GET' && pathname === '/api/orchestrator') {
         const snapshot = await orchestra.tick();
@@ -201,84 +248,85 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(200, snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/lead') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || Object.keys(input).some(key => key !== 'id') || (input.id != null && typeof input.id !== 'string')) throw new RequestError(400, 'Dati non validi.');
+        if (!input || Object.keys(input).some(key => key !== 'id') || (input.id != null && typeof input.id !== 'string')) throw new RequestError(400, 'Invalid data.');
         const result = await orchestra.setOrchestrator(input.id || '');
-        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask/cancel') {
         return json(200, await orchestra.abortAsk());
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.question !== 'string' || Object.keys(input).some(key => !['question', 'projectId'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.question !== 'string' || Object.keys(input).some(key => !['question', 'projectId'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined);
-        if (!asked.ok) throw new RequestError(400, asked.reason || 'Dati non validi.');
+        if (!asked.ok) throw new RequestError(400, asked.reason || 'Invalid data.');
         return json(200, asked);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/mode') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || (input.mode !== 'auto' && input.mode !== 'manual') || Object.keys(input).some(key => key !== 'mode')) throw new RequestError(400, 'Dati non validi.');
+        if (!input || (input.mode !== 'auto' && input.mode !== 'manual') || Object.keys(input).some(key => key !== 'mode')) throw new RequestError(400, 'Invalid data.');
         return json(200, await orchestra.setMode(input.mode));
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/grill') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (input && typeof input.propose === 'boolean' && Object.keys(input).every(key => key === 'propose')) {
-          return json(200, await orchestra.setGrillPropose(input.propose));
+        if (input && typeof input.propose === 'boolean' && Object.keys(input).every(key => ['propose', 'kind'].includes(key))) {
+          if (input.kind != null && input.kind !== 'me' && input.kind !== 'docs') throw new RequestError(400, 'Invalid data.');
+          return json(200, await orchestra.setGrillPropose(input.propose, input.kind));
         }
         if (input && typeof input.projectId === 'string' && input.skip === true && Object.keys(input).every(key => ['projectId', 'skip', 'version'].includes(key))) {
           const skipped = await enqueue(async () => {
             const current = await readPlan(planFile);
-            if (input.version && input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+            if (input.version && input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
             const result = await executeSkip(current, input.projectId);
-            if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+            if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
             return { plan: result.plan, version: result.version, snapshot: result.snapshot };
           });
           return json(200, skipped);
         }
-        throw new RequestError(400, 'Dati non validi.');
+        throw new RequestError(400, 'Invalid data.');
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/model') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.id !== 'string' || typeof input.enabled !== 'boolean' || Object.keys(input).some(key => !['id', 'enabled'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.id !== 'string' || typeof input.enabled !== 'boolean' || Object.keys(input).some(key => !['id', 'enabled'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const result = await orchestra.setModelEnabled(input.id, input.enabled);
-        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/approve') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Invalid data.');
         const result = await orchestra.approve(input.projectId);
-        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/resume') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Invalid data.');
         const result = await orchestra.resume(input.projectId);
-        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/stop') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Invalid data.');
         const result = await orchestra.stop(input.projectId);
-        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/window') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (input && typeof input === 'object' && Object.keys(input).length) throw new RequestError(400, 'Dati non validi.');
+        if (input && typeof input === 'object' && Object.keys(input).length) throw new RequestError(400, 'Invalid data.');
         const watchUrl = `http://127.0.0.1:${request.socket.localPort}/orchestrator.html`;
         let opened = false;
         if (typeof openWatchWindow === 'function') {
@@ -291,55 +339,68 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(200, { ok: true, url: watchUrl, opened });
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/start') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId', 'timing', 'deadlineAt'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId', 'timing', 'deadlineAt'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const created = await enqueue(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           const result = await executeStart(current, input.projectId, { timing: input.timing, deadlineAt: input.deadlineAt });
-          if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+          if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
           return result;
         });
         return json(created.phase === 'plan' ? 201 : 200, created);
       }
       if (request.method === 'POST' && pathname === '/api/attempts') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         const result = attempts.claim(input);
         return json(result.ok ? 201 : 409, { ...result, attempts: attempts.getAttempts() });
       }
       if (request.method === 'POST' && pathname === '/api/projects') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || input.project === undefined || Object.keys(input).some(key => !['version', 'project'].includes(key))) throw new RequestError(400, 'Dati non validi.');
-        if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['name', 'direction', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || input.project === undefined || (input.createFolder != null && typeof input.createFolder !== 'boolean') || Object.keys(input).some(key => !['version', 'project', 'createFolder'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['name', 'direction', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
           try {
             next = Plan.createProject(current, input.project);
-            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
+            if (!Plan.validate(next)) throw new Error('The updated notebook is invalid.');
           } catch (error) { throw new RequestError(400, error.message); }
-          await assertFolder(next.projects.at(-1).project.folder);
-          await save(planFile, next);
+          let createdFolder;
+          try {
+            if (input.createFolder) {
+              if (input.project.folder && input.project.folder.trim()) throw new RequestError(400, 'Choose either a new folder or an existing folder.');
+              const added = next.projects.at(-1);
+              createdFolder = await createProjectFolder(added.project.name);
+              added.project.folder = createdFolder;
+            }
+            await assertFolder(next.projects.at(-1).project.folder);
+            await save(planFile, next);
+          } catch (error) {
+            // Only remove our own new directory if it is still empty.
+            if (createdFolder) await fs.rmdir(createdFolder).catch(() => {});
+            throw error;
+          }
           return { plan: next, version: version(next) };
         });
         queue = pending.catch(() => {});
         return json(201, await pending);
       }
       if (request.method === 'POST' && pathname === '/api/remove-project') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
           try {
             next = Plan.removeProject(current, { id: input.projectId });
-            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
+            if (!Plan.validate(next)) throw new Error('The updated notebook is invalid.');
           } catch (error) { throw new RequestError(400, error.message); }
           for (const item of attempts.getAttempts()) {
             if (item.status === 'active' && item.projectId === input.projectId) attempts.closeAttempt({ attemptId: item.id, reason: 'removed' });
@@ -351,19 +412,19 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(201, await pending);
       }
       if (request.method === 'POST' && pathname === '/api/remove-task') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || !input.task || typeof input.task !== 'object' || Array.isArray(input.task) || Object.keys(input.task).some(key => key !== 'id') || Object.keys(input).some(key => !['version', 'projectId', 'task'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || !input.task || typeof input.task !== 'object' || Array.isArray(input.task) || Object.keys(input.task).some(key => key !== 'id') || Object.keys(input).some(key => !['version', 'projectId', 'task'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : current;
-          if (!project || (current.schema === 1 && input.projectId !== project.project.id)) throw new RequestError(400, 'Progetto non trovato.');
+          if (!project || (current.schema === 1 && input.projectId !== project.project.id)) throw new RequestError(400, 'Project not found.');
           let updated;
           try { updated = Plan.removeTask(project, input.task); }
           catch (error) { throw new RequestError(400, error.message); }
           const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
-          if (!Plan.validate(next)) throw new RequestError(400, 'Il quaderno aggiornato non è valido.');
+          if (!Plan.validate(next)) throw new RequestError(400, 'The updated notebook is invalid.');
           for (const item of attempts.getAttempts()) {
             if (item.status === 'active' && item.taskId === input.task.id) attempts.closeAttempt({ attemptId: item.id, reason: 'removed' });
           }
@@ -374,17 +435,17 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(201, await pending);
       }
       if (request.method === 'POST' && pathname === '/api/place') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || input.project === undefined || Object.keys(input).some(key => !['version', 'project'].includes(key))) throw new RequestError(400, 'Dati non validi.');
-        if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['id', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || input.project === undefined || Object.keys(input).some(key => !['version', 'project'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['id', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
           try {
             next = Plan.setPlace(current, input.project);
-            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
+            if (!Plan.validate(next)) throw new Error('The updated notebook is invalid.');
           } catch (error) { throw new RequestError(400, error.message); }
           const updated = next.schema === 2 ? next.projects.find(item => item.project.id === input.project.id) : next;
           await assertFolder(updated.project.folder);
@@ -395,32 +456,32 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(201, await pending);
       }
       if (request.method === 'POST' && pathname === '/api/open') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.projectId !== 'string' || !['folder', 'github'].includes(input.target) || Object.keys(input).some(key => !['projectId', 'target'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.projectId !== 'string' || !['folder', 'github'].includes(input.target) || Object.keys(input).some(key => !['projectId', 'target'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const current = await readPlan(planFile);
         const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : (current.project.id === input.projectId ? current : null);
-        if (!project) throw new RequestError(400, 'Progetto non trovato.');
+        if (!project) throw new RequestError(400, 'Project not found.');
         if (input.target === 'folder') {
-          if (!project.project.folder) throw new RequestError(400, 'Nessuna cartella per questo progetto.');
+          if (!project.project.folder) throw new RequestError(400, 'No folder for this project.');
           await assertFolder(project.project.folder);
           openFolder(project.project.folder);
         } else {
-          if (!project.project.github) throw new RequestError(400, 'Nessun GitHub per questo progetto.');
-          if (!Plan.isGithubUrl(project.project.github)) throw new RequestError(400, 'GitHub deve essere un URL https://github.com/proprietario/repo.');
+          if (!project.project.github) throw new RequestError(400, 'No GitHub for this project.');
+          if (!Plan.isGithubUrl(project.project.github)) throw new RequestError(400, 'GitHub must be an https://github.com/owner/repo URL.');
           openUrl(project.project.github);
         }
         return json(200, { ok: true });
       }
       if (request.method === 'POST' && pathname === '/api/grill-start') {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || (input.kind !== undefined && input.kind !== 'me' && input.kind !== 'docs') || Object.keys(input).some(key => !['version', 'projectId', 'kind'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || (input.kind !== undefined && input.kind !== 'me' && input.kind !== 'docs') || Object.keys(input).some(key => !['version', 'projectId', 'kind'].includes(key))) throw new RequestError(400, 'Invalid data.');
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : current;
-          if (!project || (current.schema === 1 && input.projectId !== project.project.id)) throw new RequestError(400, 'Progetto non trovato.');
+          if (!project || (current.schema === 1 && input.projectId !== project.project.id)) throw new RequestError(400, 'Project not found.');
           let updated;
           try {
             if (input.kind === 'docs') {
@@ -442,7 +503,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
           catch (error) { throw new RequestError(400, error.message); }
           if (updated === project) return { plan: current, version: version(current) };
           const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
-          if (!Plan.validate(next)) throw new RequestError(400, 'Il quaderno aggiornato non è valido.');
+          if (!Plan.validate(next)) throw new RequestError(400, 'The updated notebook is invalid.');
           await save(planFile, next);
           return { plan: next, version: version(next) };
         });
@@ -450,25 +511,25 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(201, await pending);
       }
       if (request.method === 'POST' && ['/api/revisions', '/api/grill', '/api/import', '/api/tasks'].includes(pathname)) {
-        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         const field = { '/api/revisions': 'draft', '/api/grill': 'round', '/api/import': 'json', '/api/tasks': 'task' }[pathname];
-        if (!input || typeof input.version !== 'string' || input[field] === undefined || Object.keys(input).some(key => !['version', 'projectId', field].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        if (!input || typeof input.version !== 'string' || input[field] === undefined || Object.keys(input).some(key => !['version', 'projectId', field].includes(key))) throw new RequestError(400, 'Invalid data.');
         const keys = { draft: ['title', 'direction', 'state', 'closed', 'open'], round: ['title', 'answers'], task: ['title', 'detail', 'revision_id', 'timing', 'deadlineAt'] };
-        if (field !== 'json' && (!input[field] || typeof input[field] !== 'object' || Array.isArray(input[field]) || Object.keys(input[field]).some(key => !keys[field].includes(key)))) throw new RequestError(400, 'Dati non validi.');
-        if (field === 'json' && typeof input.json !== 'string') throw new RequestError(400, 'JSON di importazione non valido.');
+        if (field !== 'json' && (!input[field] || typeof input[field] !== 'object' || Array.isArray(input[field]) || Object.keys(input[field]).some(key => !keys[field].includes(key)))) throw new RequestError(400, 'Invalid data.');
+        if (field === 'json' && typeof input.json !== 'string') throw new RequestError(400, 'Invalid import JSON.');
         // Serialize disk reads and writes: a second browser cannot replace history.
         const pending = queue.then(async () => {
           const current = await readPlan(planFile);
-          if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+          if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
           try {
             const project = current.schema === 2 ? current.projects.find(p => p.project.id === input.projectId) : current;
-            if (!project || (current.schema === 1 && input.projectId && input.projectId !== project.project.id)) throw new Error('Progetto non trovato.');
+            if (!project || (current.schema === 1 && input.projectId && input.projectId !== project.project.id)) throw new Error('Project not found.');
             const operations = { draft: Plan.appendRevision, round: Plan.grill, json: Plan.importRevision, task: Plan.createTask };
             const updated = operations[field](project, input[field]);
             next = current.schema === 2 ? { ...current, projects: current.projects.map(p => p.project.id === project.project.id ? updated : p) } : updated;
-            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
+            if (!Plan.validate(next)) throw new Error('The updated notebook is invalid.');
           }
           catch (error) { throw new RequestError(400, error.message); }
           await save(planFile, next);
@@ -483,11 +544,16 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         response.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store' });
         return response.end(content);
       }
-      throw new RequestError(404, 'Risorsa non disponibile.');
+      throw new RequestError(404, 'Resource unavailable.');
     } catch (error) {
-      json(error.status || 500, { error: error.status ? error.message : 'Lettura o salvataggio del file non riuscito. Nessuna revisione è stata aggiunta.' });
+      json(error.status || 500, { error: error.status ? error.message : 'Failed to read or save file. No revision was added.' });
     }
   });
+  let closing;
+  server.shutdown = () => closing || (closing = orchestra.shutdown());
+  const close = server.close.bind(server);
+  server.close = callback => { server.shutdown().then(() => close(callback), error => { console.error('Checkpoint shutdown failed:', error.message); close(callback); }); return server; };
+  return server;
 }
 if (require.main === module) {
   const port = Number(process.env.PORT || 4173);
@@ -497,9 +563,11 @@ if (require.main === module) {
   } else {
     readPlan(path.join(__dirname, 'plan.json')).then(() => {
       const server = createServer({ syncSkills: true });
-      server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `La porta ${port} è occupata. Scegli un altro PORT.` : `Server non avviato: ${error.message}`); process.exitCode = 1; });
+      server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `Port ${port} is occupied. Choose another PORT.` : `Server failed to start: ${error.message}`); process.exitCode = 1; });
+      const shutdown = async () => { await server.shutdown(); server.close(() => process.exit(0)); };
+      process.on('SIGINT', shutdown); process.on('SIGTERM', shutdown);
       server.listen(port, '127.0.0.1', () => console.log(`Planwharf zombie: http://127.0.0.1:${port}\nPiano: ${path.join(__dirname, 'plan.json')}\nCtrl+C per chiudere.`));
-    }).catch(error => { console.error(`Impossibile aprire plan.json: ${error.message}`); process.exitCode = 1; });
+    }).catch(error => { console.error(`Cannot open plan.json: ${error.message}`); process.exitCode = 1; });
   }
 }
 module.exports = { createServer, readPlan, writePlan };

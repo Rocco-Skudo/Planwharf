@@ -5,29 +5,37 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "local",
-    "cli": "grok-4.7-build-fast",
+    "cli": "gpt-5.6-luna",
     "cost": 1,
-    "limit": 200
+    "limit": 200,
+    "provider": "codex",
+    "available": true
   },
   {
     "id": "gpt-5-mini",
     "label": "GPT-5 mini",
-    "enabled": true,
+    "enabled": false,
     "plan": "ChatGPT",
     "kind": "local",
-    "cli": "grok-4.7-build-fast",
+    "cli": "gpt-5-mini",
     "cost": 1,
-    "limit": 150
+    "limit": 150,
+    "provider": "codex",
+    "available": false,
+    "unavailableReason": "The CLI rejected this exact model with the current ChatGPT account (HTTP 400); no provider substitution."
   },
   {
     "id": "gpt-5",
     "label": "GPT-5",
-    "enabled": true,
+    "enabled": false,
     "plan": "ChatGPT",
     "kind": "default",
-    "cli": "grok-4.6",
+    "cli": "gpt-5",
     "cost": 3,
-    "limit": 60
+    "limit": 60,
+    "provider": "codex",
+    "available": false,
+    "unavailableReason": "The CLI rejected this exact model with the current ChatGPT account (HTTP 400); no provider substitution."
   },
   {
     "id": "gpt-5.5",
@@ -35,9 +43,11 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "premium",
-    "cli": "grok-4.7",
+    "cli": "gpt-5.5",
     "cost": 6,
-    "limit": 30
+    "limit": 30,
+    "provider": "codex",
+    "available": true
   },
   {
     "id": "gpt-6-astra",
@@ -45,68 +55,134 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "premium",
-    "cli": "grok-4.7",
+    "cli": "gpt-6-astra",
     "cost": 8,
-    "limit": 20
+    "limit": 20,
+    "provider": "codex",
+    "available": true
   },
   {
     "id": "grok-fast",
     "label": "Grok 4.1 Fast",
-    "enabled": true,
+    "enabled": false,
     "plan": "Grok",
     "kind": "local",
-    "cli": "grok-4.7-build-fast",
+    "cli": "grok-4.1-fast",
     "cost": 1,
-    "limit": 120
+    "limit": 120,
+    "provider": "grok",
+    "available": false,
+    "unavailableReason": "Non restituito da grok models su questo account (2026-10-10)."
   },
   {
     "id": "grok-build",
     "label": "Grok Build",
-    "enabled": true,
+    "enabled": false,
     "plan": "Grok",
     "kind": "default",
     "cli": "grok-4.7-build-fast",
     "cost": 3,
-    "limit": 50
+    "limit": 50,
+    "provider": "grok",
+    "available": false,
+    "unavailableReason": "Non restituito da grok models su questo account (2026-10-10)."
   },
   {
     "id": "grok-4-20",
     "label": "Grok 4.20",
-    "enabled": true,
+    "enabled": false,
     "plan": "Grok",
     "kind": "default",
-    "cli": "grok-4.6",
+    "cli": "grok-4.20",
     "cost": 4,
-    "limit": 40
+    "limit": 40,
+    "provider": "grok",
+    "available": false,
+    "unavailableReason": "Non restituito da grok models su questo account (2026-10-10)."
   },
   {
     "id": "grok",
     "label": "Grok 4.7",
-    "enabled": true,
+    "enabled": false,
     "plan": "Grok",
     "kind": "premium",
     "cli": "grok-4.7",
     "cost": 8,
-    "limit": 20
+    "limit": 20,
+    "provider": "grok",
+    "available": false,
+    "unavailableReason": "Non restituito da grok models su questo account (2026-10-10)."
   },
   {
     "id": "gemini-flash",
-    "label": "Gemini Flash",
-    "enabled": false,
+    "label": "Gemini 3.8 Flash (High)",
+    "enabled": true,
     "plan": "Gemini",
     "kind": "local",
-    "cli": "grok-4.7-build-fast",
+    "cli": "gemini-3.8-flash-high",
     "cost": 1,
-    "limit": 80
+    "limit": 80,
+    "provider": "antigravity",
+    "available": true
   },
   {
     "id": "gemini",
-    "label": "Gemini Pro",
-    "enabled": false,
+    "label": "Gemini 3.1 Pro (High)",
+    "enabled": true,
     "plan": "Gemini",
     "kind": "default",
-    "cli": "grok-4.6",
+    "cli": "gemini-3.1-pro-high",
     "cost": 2,
-    "limit": 80
+    "limit": 80,
+    "provider": "antigravity",
+    "available": true
+  },
+  {
+    "id": "grok-4-6",
+    "label": "Grok 4.6",
+    "enabled": false,
+    "available": true,
+    "provider": "grok",
+    "plan": "Grok",
+    "kind": "default",
+    "cli": "grok-4.6",
+    "cost": 3,
+    "limit": 50
+  },
+  {
+    "cli": "gpt-6-luna",
+    "enabled": true,
+    "kind": "local",
+    "cost": 1,
+    "limit": 200,
+    "id": "gpt-6-luna",
+    "available": true,
+    "plan": "ChatGPT",
+    "label": "GPT-6 Luna",
+    "provider": "codex"
+  },
+  {
+    "cli": "gpt-6-sol",
+    "enabled": true,
+    "kind": "default",
+    "cost": 3,
+    "limit": 80,
+    "id": "gpt-6-sol",
+    "available": true,
+    "plan": "ChatGPT",
+    "label": "GPT-6 Sol",
+    "provider": "codex"
+  },
+  {
+    "cli": "gpt-6.1-sol",
+    "enabled": true,
+    "kind": "default",
+    "cost": 3,
+    "limit": 80,
+    "id": "gpt-6.1-sol",
+    "available": true,
+    "plan": "ChatGPT",
+    "label": "GPT-6.1 Sol",
+    "provider": "codex"
   }
 ]

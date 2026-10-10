@@ -24,12 +24,10 @@
     const meta = document.querySelector && document.querySelector('meta[name="color-scheme"]');
     if (meta) meta.setAttribute('content', next);
     const btn = $('theme-toggle');
-    if (btn) {
-      btn.textContent = next === 'light' ? 'Dark' : 'Light';
-      if (typeof btn.setAttribute === 'function') {
-        btn.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
-        btn.setAttribute('aria-label', next === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
-      }
+    if (btn && typeof btn.setAttribute === 'function') {
+      btn.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
+      btn.setAttribute('aria-label', next === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
+      btn.setAttribute('title', next === 'light' ? 'Dark' : 'Light');
     }
     try { localStorage.setItem(themeKey, next); } catch {}
   }
@@ -264,7 +262,9 @@
       }
       throw new Error(translateError(result.error) || 'Save failed.');
     }
-    if (!Planwharf.validate(result.plan) || typeof result.version !== 'string') throw new Error('The plan file is invalid.');
+    if (url === '/api/settings') {
+      if (!result || typeof result.projectsRoot !== 'string') throw new Error('The projects folder settings are invalid.');
+    } else if (!Planwharf.validate(result.plan) || typeof result.version !== 'string') throw new Error('The plan file is invalid.');
     return result;
   }
   const list = items => items.length ? `<ul>${items.map(x => `<li>${escape(x)}</li>`).join('')}</ul>` : '<p>No items.</p>';
@@ -299,6 +299,27 @@
     render();
   }
 
+  function renderPlace() {
+    if (!data) return;
+    const meta = project().project;
+    const checked = (orchestra.projects || []).find(row => row.id === projectId)?.repository;
+    const info = checked && checked.folder === (meta.folder || null) && checked.github === (meta.github || null) ? checked : null;
+    const folderLine = meta.folder ? escape(meta.folder) : 'No local folder.';
+    const githubLine = meta.github ? `<a href="${escape(meta.github)}" target="_blank" rel="noopener noreferrer">${escape(meta.github)}</a>` : 'No GitHub.';
+    let status = 'Repository access has not been checked.';
+    if (info) {
+      const local = info.local || {};
+      const remote = info.remote || {};
+      const comparison = info.comparison || {};
+      const access = `Local: ${local.readable ? local.writable ? 'read/write' : 'readable; OS denies writes' : 'not accessible'}. GitHub: ${remote.accessible ? `${remote.private ? 'private' : 'public'}, ${remote.permissions?.push ? 'read/write' : 'read access'}` : remote.error || 'not accessible'}.`;
+      const sync = comparison.ahead != null && comparison.behind != null
+        ? `${comparison.localBranch || 'HEAD'} vs GitHub ${comparison.remoteBranch}: ${comparison.ahead} ahead, ${comparison.behind} behind. ${local.uncommitted == null ? 'Working-tree status unavailable.' : `${local.uncommitted} uncommitted path(s).`}`
+        : `Comparison: ${comparison.status || 'unknown'}. ${comparison.error || info.error || ''}`;
+      status = `${access} ${sync}${comparison.localBranchPublished === false ? ' Local branch is not published; comparison uses the default branch.' : ''}${info.warning ? ' ' + info.warning : ''} Checked ${info.checkedAt || 'unknown'}.`;
+    }
+    $('project-place').innerHTML = `<span class="place-item"><small>Folder</small>${folderLine}</span><span class="place-item"><small>GitHub</small>${githubLine}</span><span class="place-actions"><button type="button" class="secondary" data-place="set">Set place</button><button type="button" class="secondary" data-place="folder" ${meta.folder ? '' : 'disabled'}>Open folder</button><button type="button" class="secondary" data-place="github" ${meta.github ? '' : 'disabled'}>Open GitHub</button><button type="button" class="secondary" data-place="check" ${meta.folder || meta.github ? '' : 'disabled'}>Check repository</button></span><p class="muted repository-status" role="status">${escape(status)}</p>`;
+  }
+
   function render() {
     const projects = notebookProjects();
     $('project-select').innerHTML = projects.map(p => `<option value="${escape(p.project.id)}" ${p.project.id === projectId ? 'selected' : ''}>${escape(p.project.name)}</option>`).join('');
@@ -307,10 +328,7 @@
     $('grill-open').disabled = false;
     if ($('grill-docs')) $('grill-docs').disabled = !project().project.folder;
     $('project-name').textContent = project().project.name;
-    const meta = project().project;
-    const folderLine = meta.folder ? escape(meta.folder) : 'No local folder.';
-    const githubLine = meta.github ? `<a href="${escape(meta.github)}" target="_blank" rel="noopener noreferrer">${escape(meta.github)}</a>` : 'No GitHub.';
-    $('project-place').innerHTML = `<span class="place-item"><small>Folder</small>${folderLine}</span><span class="place-item"><small>GitHub</small>${githubLine}</span><span class="place-actions"><button type="button" class="secondary" data-place="set">Set place</button><button type="button" class="secondary" data-place="folder" ${meta.folder ? '' : 'disabled'}>Open folder</button><button type="button" class="secondary" data-place="github" ${meta.github ? '' : 'disabled'}>Open GitHub</button></span>`;
+    renderPlace();
     const index = project().revisions.findIndex(r => r.id === selected);
     const revision = project().revisions[index];
     const previous = project().revisions[index - 1];
@@ -391,16 +409,18 @@
     if (kind === 'working') return { title: 'Working', text: (row && (row.workerActivity || row.doing)) || 'A worker is busy on this project.' };
     if (kind === 'done') return { title: 'Done', text: 'This job is finished.' };
     if (kind === 'stuck') {
-      if (row && row.status === 'blocked_no_folder') return { title: 'Needs a folder', text: 'Set the folder on this computer, then press Start.' };
-      if (row && row.status === 'blocked_no_worker') return { title: 'No worker', text: 'Turn a worker on in Functions, then press Start.' };
+      if (row && row.status === 'blocked_no_folder') return { title: 'Needs a folder', text: 'Set the folder on this computer, then Auto start.' };
+      if (row && row.status === 'blocked_no_worker') return { title: 'No worker', text: 'Turn a worker on in Functions, then Auto start.' };
       if (row && row.status === 'checkpointed') {
-        const stopped = row.checkpoint && row.checkpoint.reason === 'stop';
-        return { title: 'Paused', text: stopped ? 'You stopped this job. Press Resume to continue.' : 'Time ran out. Press Resume to continue.' };
+        const why = row.checkpoint && row.checkpoint.reason;
+        if (why === 'stop') return { title: 'Paused', text: 'You stopped this job. Checkpoint saved. Press Resume to continue.' };
+        if (why === 'deadline') return { title: 'Paused', text: 'Time ran out. Checkpoint saved. Press Resume to continue.' };
+        return { title: 'Paused', text: 'The job ended without completing. Checkpoint saved. Press Resume to continue.' };
       }
-      return { title: 'Stopped', text: 'It stopped. Press Start to try again.' };
+      return { title: 'Stopped', text: 'It stopped. Auto start to try again.' };
     }
     if (row && row.status === 'needs_approval') return { title: 'Ready', text: 'Press Go and the workers will start.' };
-    return { title: 'Ready', text: 'Press Start when you want work to happen.' };
+    return { title: 'Ready', text: 'Grill me or Grill with the docs starts the orchestrator. If both are off, Auto start skips grill.' };
   }
 
   function fillYard() {
@@ -412,7 +432,9 @@
       const selectedClass = item.project.id === projectId ? ' selected' : '';
       const orch = (orchestra.projects || []).find(row => row.id === item.project.id);
       const kind = simpleKind(orch, latest.open.length);
-      const word = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready';
+      const word = orch && orch.status === 'checkpointed'
+        ? 'Paused'
+        : ({ needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready');
       return `<button type="button" class="yard-row${selectedClass} kind-${kind}" data-open-project="${escape(item.project.id)}"><strong>${escape(item.project.name)}</strong><span>${word}</span></button>`;
     }).join('');
   }
@@ -428,6 +450,7 @@
     const mode = orchestra.mode === 'auto' ? 'auto' : 'manual';
     const list = orchestra.models || [];
     const propose = orchestra.grillPropose !== false;
+    const grillKind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
     const onCount = list.filter(item => item.enabled).length;
     if (modesEl) {
       modesEl.innerHTML = `<button type="button" class="${mode === 'manual' ? 'primary' : 'secondary'}" data-mode="manual">Manual</button><button type="button" class="${mode === 'auto' ? 'primary' : 'secondary'}" data-mode="auto">Automatic</button><button type="button" class="primary" data-auto-start>Auto start</button>`;
@@ -461,11 +484,11 @@
       const plan = plans.find(row => row.id === item.plan);
       const exhausted = Boolean(plan && plan.exhausted);
       const role = isLead ? 'Lead' : (exhausted ? 'Exhausted' : (item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Eligible' : 'Worker'));
-      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')}</td><td class="role">${escape(role)}</td><td><button type="button" class="secondary compact" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></td></tr>`;
+      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')}</td><td class="role">${escape(role)}</td><td><button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></td></tr>`;
     }).join('')}</tbody></table>` : '<p class="muted">No models match.</p>';
     const open = el.open;
     el.innerHTML = `<summary>Workers and plans <span class="badge">${onCount} on</span></summary>
-      <div class="fleet-head"><button type="button" class="${propose ? 'primary' : 'secondary'}" data-grill-propose="1">Grill on Auto start</button><button type="button" class="${propose ? 'secondary' : 'primary'}" data-grill-propose="0">Grill off</button></div>
+      <div class="fleet-head"><button type="button" class="${grillKind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me">Grill me</button><button type="button" class="${grillKind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs">Grill with the docs</button></div>
       <p class="muted fleet-hint">Provider usage is shared. If ChatGPT is exhausted, every ChatGPT model is exhausted. Inspect prefers a cheap model. Build prefers the default. Hard prefers the flagship.</p>
       ${planCards}
       <input class="fleet-search" type="search" placeholder="Search models" value="${escape(fleetQuery)}">
@@ -596,7 +619,9 @@
     const current = rows.find(row => row.id === projectId);
     const openCount = data && project() ? project().revisions.at(-1).open.length : 0;
     const kind = simpleKind(current, openCount);
-    el.textContent = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready';
+    el.textContent = current && current.status === 'checkpointed'
+      ? 'Paused'
+      : ({ needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready');
   }
 
   function monitorNow(rows, mode) {
@@ -609,12 +634,14 @@
     if (top.status === 'waiting_on_you') return `Paused on ${top.name}: answer Grill me in For you, or Skip grill. No worker yet.`;
     if (top.status === 'blocked_no_folder') return `Blocked on ${top.name}: needs a folder.`;
     if (top.status === 'blocked_no_worker') return `Blocked on ${top.name}: no eligible worker.`;
-    if (top.status === 'failed') return `Watch stopped on ${top.name}.`;
+    if (top.status === 'failed') return top.checkpoint
+      ? `Watch stopped on ${top.name}. Checkpoint saved. Resume from checkpoint.`
+      : `Watch stopped on ${top.name}.`;
     if (top.status === 'checkpointed') {
-      const stopped = top.checkpoint && top.checkpoint.reason === 'stop';
-      return stopped
-        ? `Stopped ${top.name}. Resume from checkpoint.`
-        : `Deadline reached on ${top.name}. Resume from checkpoint.`;
+      const why = top.checkpoint && top.checkpoint.reason;
+      if (why === 'stop') return `Stopped ${top.name}. Checkpoint saved. Resume from checkpoint.`;
+      if (why === 'deadline') return `Deadline reached on ${top.name}. Checkpoint saved. Resume from checkpoint.`;
+      return `${top.name} ended without completing. Checkpoint saved. Resume from checkpoint.`;
     }
     if (top.status === 'complete') return `Evidence complete on ${top.name}.`;
     return 'Idle. Auto start to check the project. Grill is proposed then if it is on.';
@@ -672,18 +699,31 @@
     }
   }
 
-  function projectActions(row) {
+  function checkpointBanner(row) {
+    if (!row || !row.checkpoint) return '';
+    const why = row.checkpoint.reason;
+    const line = why === 'stop'
+      ? 'You stopped this job.'
+      : (why === 'deadline' ? 'Time ran out.' : 'The job ended without completing.');
+    return `<p class="checkpoint-flag" role="status"><span class="badge">Checkpoint saved</span> ${escape(line)} Resume continues from the last plan.</p>`;
+  }
+
+  function projectActions(row, openCount) {
     if (!row) return '';
     const id = row.id;
-    const grillStuck = simpleKind(row, 0) === 'needs_you';
+    const grillStuck = simpleKind(row, openCount || 0) === 'needs_you';
     const grillMe = grillStuck ? `<button type="button" class="primary" data-grill-me="${escape(id)}">Answer</button>` : '';
     const grillSkip = grillStuck ? `<button type="button" class="secondary" data-grill-skip="${escape(id)}">Skip</button>` : '';
     const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">Go</button>` : '';
     const resume = row.canResume && row.status === 'checkpointed' ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
     const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
-    const startClass = grillStuck || approve || resume || stop ? 'secondary' : 'primary';
-    const start = `<button type="button" class="${startClass}" data-start="${escape(id)}">Start</button>`;
-    return `${grillMe}${grillSkip}${approve}${start}${resume}${stop}`;
+    const propose = orchestra.grillPropose !== false;
+    const kind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
+    const docsOk = row.canGrillDocs !== false;
+    const grillTriggers = grillStuck || approve || resume || stop
+      ? ''
+      : `<button type="button" class="${kind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me" data-grill-start="${escape(id)}">Grill me</button><button type="button" class="${kind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs" data-grill-start="${escape(id)}"${docsOk ? '' : ' disabled'}>Grill with the docs</button>`;
+    return `${grillMe}${grillSkip}${approve}${grillTriggers}${resume}${stop}`;
   }
 
   function renderDashboard() {
@@ -714,7 +754,7 @@
       const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
       const leadBtn = item.eligible && !item.lead ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>` : '';
       const badge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></div></article>`;
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -723,7 +763,7 @@
         : `<li class="muted">${row.workerLabel ? escape(row.workerLabel) : 'No process yet.'}</li>`;
       const log = row.workerTail ? `<details class="monitor-log" open><summary>Live log</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '';
       const monitor = row.monitoring ? `<p class="muted">${row.monitoring.alive}/${row.monitoring.workers} alive · ${row.monitoring.folderFiles} files</p>` : '';
-      return `<article class="dash-proc ${escape(row.status)}" data-open-project="${escape(row.id)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header><p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row)}</div></article>`;
+      return `<article class="dash-proc ${escape(row.status)}" data-open-project="${escape(row.id)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header>${checkpointBanner(row)}<p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row, 0)}</div></article>`;
     }).join('') || '<p class="muted">No projects in the notebook.</p>'}</div></section>`;
     const iv = `<section class="dash-section dash-zone-iv"><h3>Interventions</h3>${interventions.length
       ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
@@ -732,6 +772,7 @@
   }
 
   function renderOrchestra() {
+    renderPlace();
     renderFleet();
     fillRunningCount();
     fillSkills(orchestra.skills);
@@ -746,8 +787,8 @@
     const rows = orchestra.projects || [];
     const order = ['failed', 'checkpointed', 'blocked_no_worker', 'blocked_no_folder', 'needs_approval', 'propose_grill', 'watching', 'waiting_on_you', 'complete', 'idle'];
     const top = [...rows].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0];
-    const focused = rows.find(row => row.id === projectId) || top;
     const openList = data && project() ? project().revisions.at(-1).open : [];
+    const focused = rows.find(row => row.id === projectId) || top || (projectId ? { id: projectId, status: openList.length ? 'waiting_on_you' : 'idle', canGrillDocs: false } : null);
     const kind = simpleKind(focused, openList.length);
     const copy = heroCopy(kind, focused, openList.length);
     const questions = kind === 'needs_you' && openList.length
@@ -759,11 +800,11 @@
     const rest = rows.filter(row => row.id !== projectId);
     const others = rest.length
       ? `<details class="orch-others"><summary>Other projects</summary><div class="orch-minis">${rest.map(row => {
-        const word = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[simpleKind(row, 0)] || row.label;
+        const word = row.status === 'checkpointed' ? 'Paused' : ({ needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[simpleKind(row, 0)] || row.label);
         return `<button type="button" class="orch-mini ${escape(row.status)}" data-open-project="${escape(row.id)}"><strong>${escape(row.name)}</strong><span class="orch-status">${escape(word)}</span></button>`;
       }).join('')}</div></details>`
       : '';
-    const hero = `<div class="now-hero kind-${kind}"><p class="now-kicker">${escape(copy.title)}</p><p class="now-text">${escape(copy.text)}</p>${questions}${workerLine}<div class="now-actions">${projectActions(focused)}</div></div>`;
+    const hero = `<div class="now-hero kind-${kind}"><p class="now-kicker">${escape(copy.title)}</p><p class="now-text">${escape(copy.text)}</p>${checkpointBanner(focused)}${questions}${workerLine}<div class="now-actions">${projectActions(focused, openList.length)}</div></div>`;
     el.innerHTML = `${hero}${others}`;
   }
 
@@ -916,8 +957,8 @@
         `<span>${escape(m.label || m.id)}</span>` +
         statusBadge +
         `</div>` +
-        `<button type="button" class="secondary compact" data-toggle-model="${escape(m.id)}">` +
-        `${isEnabled ? 'Disable' : 'Enable'}` +
+        `<button type="button" class="secondary compact" title="${escape(m.unavailableReason || '')}" ${m.available === false ? 'disabled' : ''} data-toggle-model="${escape(m.id)}">` +
+        `${m.available === false ? 'Unavailable' : (isEnabled ? 'Disable' : 'Enable')}` +
         `</button>` +
         `</div>`;
     }).join('');
@@ -1030,7 +1071,7 @@
       return;
     }
     const mode = event.target && event.target.getAttribute && event.target.getAttribute('data-mode');
-    const proposeFlag = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-propose');
+    const grillKindFlag = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
     const modelId = event.target && event.target.getAttribute && event.target.getAttribute('data-model');
     const leadPick = event.target && event.target.getAttribute && event.target.getAttribute('data-lead');
     try {
@@ -1045,13 +1086,19 @@
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
         return;
       }
-      if (proposeFlag === '0' || proposeFlag === '1') {
-        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propose: proposeFlag === '1' }) });
+      if (grillKindFlag === 'me' || grillKindFlag === 'docs') {
+        const on = orchestra.grillPropose !== false;
+        const current = orchestra.grillKind === 'docs' ? 'docs' : (on ? 'me' : 'off');
+        const turningOff = current === grillKindFlag;
+        const payload = turningOff ? { propose: false } : { propose: true, kind: grillKindFlag };
+        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
         orchestra = body;
         render();
-        $('toast').textContent = proposeFlag === '1' ? 'Grill me / Grill with the docs will be proposed on Auto start.' : 'Auto start skips grill.';
+        $('toast').textContent = turningOff
+          ? 'Grill is off. Auto start skips grill.'
+          : (grillKindFlag === 'docs' ? 'Grill with the docs is on. Auto start will grill from the docs.' : 'Grill me is on. Auto start will grill first.');
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
         return;
       }
@@ -1140,10 +1187,22 @@
       await beginGrillRound('me');
       return;
     }
-    const startId = event.target && event.target.getAttribute && event.target.getAttribute('data-start');
-    if (startId) {
+    const grillStartId = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-start');
+    const grillStartKind = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
+    if (grillStartId && (grillStartKind === 'me' || grillStartKind === 'docs')) {
       event.stopPropagation();
-      openAutoStart(startId);
+      openProject(grillStartId);
+      try {
+        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propose: true, kind: grillStartKind }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra = body;
+        renderOrchestra();
+        fillYard();
+        openAutoStart(grillStartId);
+      } catch (error) {
+        notice(translateError(error.message));
+      }
       return;
     }
     const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
@@ -1156,7 +1215,7 @@
         orchestra = body;
         renderOrchestra();
         fillYard();
-        $('toast').textContent = 'Stopped. Checkpoint saved. Press Resume when you want the workers back.';
+        $('toast').textContent = 'Stopped. Checkpoint saved. Press Resume to continue from the last plan.';
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
         revealMonitor();
       } catch (error) {
@@ -1350,17 +1409,57 @@
   for (const kind of ['grill', 'import', 'task', 'project', 'place', 'auto-start']) {
     $(`${kind}-cancel`).addEventListener('click', () => $(`${kind}-dialog`).close());
   }
-  $('new-project').addEventListener('click', () => {
+  $('new-project').addEventListener('click', async () => {
     $('project-form').elements.name.value = '';
     $('project-form').elements.direction.value = '';
     $('project-form').elements.folder.value = '';
     $('project-form').elements.github.value = '';
+    $('project-create-folder').checked = false;
+    $('project-create-folder').disabled = true;
+    $('project-form').elements.folder.disabled = false;
     $('project-error').hidden = true;
     $('project-dialog').showModal();
+    try {
+      const settings = await request('/api/settings');
+      $('projects-root').value = settings.projectsRoot || '';
+      $('project-create-folder').checked = Boolean(settings.projectsRoot);
+      $('project-form').elements.folder.disabled = $('project-create-folder').checked;
+    } catch (error) { $('project-error').textContent = error.message; $('project-error').hidden = false; }
+    finally { $('project-create-folder').disabled = false; }
+  });
+  $('project-create-folder').addEventListener('change', () => {
+    $('project-form').elements.folder.disabled = $('project-create-folder').checked;
+  });
+  async function saveProjectsRoot() {
+    const settings = await request('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectsRoot: $('projects-root').value }) });
+    $('projects-root').value = settings.projectsRoot;
+    return settings;
+  }
+  $('save-projects-root').addEventListener('click', async () => {
+    try {
+      await saveProjectsRoot();
+      $('project-error').hidden = true;
+      $('toast').textContent = 'Projects folder saved.';
+    } catch (error) { $('project-error').textContent = error.message; $('project-error').hidden = false; }
   });
   $('project-place').addEventListener('click', async event => {
     const action = event.target && event.target.getAttribute && event.target.getAttribute('data-place');
     if (!action || saving) return;
+    if (action === 'check') {
+      const requestedId = projectId;
+      const button = event.target;
+      button.disabled = true;
+      button.textContent = 'Checking…';
+      try {
+        const response = await fetch(`/api/repository?projectId=${encodeURIComponent(requestedId)}&refresh=1`);
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Repository check failed.');
+        orchestra = result.snapshot;
+        renderPlace();
+      } catch (error) { notice(error.message); }
+      finally { if (projectId === requestedId) renderPlace(); }
+      return;
+    }
     if (action === 'set') {
       $('place-form').elements.folder.value = project().project.folder || '';
       $('place-form').elements.github.value = project().project.github || '';
@@ -1407,7 +1506,9 @@
     $('project-error').hidden = true;
     try {
       const form = $('project-form');
-      const saved = await request('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, project: { name: form.elements.name.value, direction: form.elements.direction.value, folder: form.elements.folder.value, github: form.elements.github.value } }) });
+      const createFolder = Boolean($('project-create-folder').checked);
+      if (createFolder) await saveProjectsRoot();
+      const saved = await request('/api/projects', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, createFolder, project: { name: form.elements.name.value, direction: form.elements.direction.value, folder: createFolder ? '' : form.elements.folder.value, github: form.elements.github.value } }) });
       const added = saved.plan.projects.at(-1);
       data = saved.plan;
       version = saved.version;

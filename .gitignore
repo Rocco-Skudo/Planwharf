@@ -5,3 +5,8 @@ validation/**/*.dmp
 .planwharf-window/
 .planwharf-watch/
 plan.local.json
+*.settings.json
+validation/repository-access.json
+validation/repository-lead-access.json
+validation/provider-check/
+validation/folder-ui-*/

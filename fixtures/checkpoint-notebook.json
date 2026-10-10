@@ -1,0 +1,32 @@
+{
+  "schema": 1,
+  "project": {
+    "id": "calculator-validation",
+    "name": "Calculator fixture",
+    "folder": "/fixture/calculator"
+  },
+  "revisions": [
+    {
+      "id": 1,
+      "mode": "manual",
+      "title": "Specification",
+      "createdAt": "2026-10-10T14:12:51.643Z",
+      "direction": "Build a Windows graphical calculator",
+      "state": "Isolated real orchestrator test",
+      "closed": [
+        "C# WinForms, standalone exe, keyboard, decimal arithmetic"
+      ],
+      "open": []
+    }
+  ],
+  "tasks": [
+    {
+      "id": "task-1",
+      "projectId": "calculator-validation",
+      "revision_id": 1,
+      "title": "Build Windows graphical calculator and executable",
+      "detail": "Create a complete Windows desktop calculator using C# WinForms and .NET Framework 4, compiled with C:/Windows/Microsoft.NET/Framework64/v4.0.30319/csc.exe. Deliver Calculator.exe runnable by double click, source, build.ps1, README in English and automated tests. No npm, no browser dependency. Implement + - * /, decimals, unary negative numbers, division by zero with a clear English error, clear/backspace and keyboard (digits, operators, decimal dot and comma, Enter, Escape). Make the display accessible with AutomationId or a stable name. Provide Calculator.exe --self-test that runs the real calculation engine and exits nonzero on failures; write self-test-results.json with individual cases. Include exact decimal 0.1+0.2=0.3, -5*-2=10, 10/0 error, precedence or clearly documented immediate evaluation. Verify build and tests yourself. All files and logs stay in this project folder. Do not touch any parent or sibling files. You are the sole implementation worker for the whole job.",
+      "status": "running"
+    }
+  ]
+}

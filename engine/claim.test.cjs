@@ -37,7 +37,7 @@ function test(name, fn) {
   }
 }
 
-test('primo claim successo', () => {
+test('first claim succeeds', () => {
   const engine = createClaimEngine();
   const result = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   assert.strictEqual(result.ok, true);
@@ -53,7 +53,7 @@ test('primo claim successo', () => {
   assert.deepStrictEqual(active, result.attempt);
 });
 
-test('doppio claim stesso task', () => {
+test('duplicate claim for the same task', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const before = snapshot(engine);
@@ -72,7 +72,7 @@ test('doppio claim stesso task', () => {
   assert.deepStrictEqual(engine.getActiveAttempt({ taskId: 'task-1', projectId: 'proj-1' }), first.attempt);
 });
 
-test('task diverso nello stesso progetto', () => {
+test('different task in the same project', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const before = snapshot(engine);
@@ -88,7 +88,7 @@ test('task diverso nello stesso progetto', () => {
   assert.strictEqual(after.attempts[0].id, first.attempt.id);
 });
 
-test('stesso task con altro progetto', () => {
+test('same task in another project', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const before = snapshot(engine);
@@ -105,7 +105,7 @@ test('stesso task con altro progetto', () => {
   assert.deepStrictEqual(engine.getActiveAttempt({ taskId: 'task-1', projectId: 'proj-1' }), first.attempt);
 });
 
-test('progetti e task distinti consentiti', () => {
+test('distinct projects and tasks are allowed', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const second = engine.claim({ taskId: 'task-2', projectId: 'proj-2', modelId: 'mod-c', candidates: on });
@@ -117,7 +117,7 @@ test('progetti e task distinti consentiti', () => {
   assert.deepStrictEqual(engine.getActiveAttempt({ taskId: 'task-2', projectId: 'proj-2' }), second.attempt);
 });
 
-test('invarianti e contatore immutati dopo rifiuto', () => {
+test('invariants and counter unchanged after rejection', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const before = JSON.stringify(engine.getAttempts());
@@ -145,18 +145,18 @@ test('invarianti e contatore immutati dopo rifiuto', () => {
   assert.notStrictEqual(third.attempt.id, first.attempt.id);
 });
 
-test('modello spento non candidabile', () => {
+test('disabled model is not eligible', () => {
   const engine = createClaimEngine();
   const beforeCount = engine.getAttempts().length;
   const result = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-b', candidates: on });
   assert.strictEqual(result.ok, false);
   assert.strictEqual(typeof result.reason, 'string');
   assert.ok(result.reason);
-  assert.notStrictEqual(result.reason, 'nessun modello acceso');
+  assert.notStrictEqual(result.reason, 'no model enabled');
   assert.strictEqual(engine.getAttempts().length, beforeCount);
 });
 
-test('lista vuota e tutti spenti con nessun modello acceso', () => {
+test('empty list and all disabled models', () => {
   const engine = createClaimEngine();
   const empty = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: [] });
   const off = engine.claim({
@@ -166,23 +166,23 @@ test('lista vuota e tutti spenti con nessun modello acceso', () => {
     candidates: list([['mod-a', false], ['mod-b', false]])
   });
   assert.strictEqual(empty.ok, false);
-  assert.strictEqual(empty.reason, 'nessun modello acceso');
+  assert.strictEqual(empty.reason, 'no model enabled');
   assert.strictEqual(off.ok, false);
-  assert.strictEqual(off.reason, 'nessun modello acceso');
+  assert.strictEqual(off.reason, 'no model enabled');
   assert.strictEqual(engine.getAttempts().length, 0);
 });
 
-test('modello non presente rifiutato', () => {
+test('missing model rejected', () => {
   const engine = createClaimEngine();
   const result = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-missing', candidates: on });
   assert.strictEqual(result.ok, false);
   assert.strictEqual(typeof result.reason, 'string');
   assert.ok(result.reason);
-  assert.notStrictEqual(result.reason, 'nessun modello acceso');
+  assert.notStrictEqual(result.reason, 'no model enabled');
   assert.strictEqual(engine.getAttempts().length, 0);
 });
 
-test('copie snapshot non alterano stato interno', () => {
+test('snapshot copies do not alter internal state', () => {
   const engine = createClaimEngine();
   const created = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const copies = engine.getAttempts();
@@ -203,7 +203,7 @@ test('copie snapshot non alterano stato interno', () => {
   assert.strictEqual(engine.getActiveAttempt({ taskId: 'task-x', projectId: 'proj-x' }), null);
 });
 
-test('input invalidi senza corrompere stato', () => {
+test('invalid input does not corrupt state', () => {
   const engine = createClaimEngine();
   const first = engine.claim({ taskId: 'task-1', projectId: 'proj-1', modelId: 'mod-a', candidates: on });
   const frozen = JSON.stringify(engine.getAttempts());
@@ -244,7 +244,7 @@ test('input invalidi senza corrompere stato', () => {
   assert.strictEqual(engine.getAttempts()[1].modelId, 'mod-a');
 });
 
-test('UMD createClaimEngine esposto dal modulo', () => {
+test('module exposes UMD createClaimEngine', () => {
   const api = require('./claims.js');
   assert.strictEqual(typeof api.createClaimEngine, 'function');
   const a = api.createClaimEngine();

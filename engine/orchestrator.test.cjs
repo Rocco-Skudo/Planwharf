@@ -124,8 +124,8 @@ function make(plan, inspectFolder, extra) {
   assert.equal(parseOrder('Implement the parser on Demo', { models: [], projects: [{ id: 'demo', name: 'Demo', status: 'checkpointed' }] }).action, 'resume');
   assert.equal(pickWorker(models, { job: { title: 'Check the repo', detail: 'Inspect.' } }).id, 'gemini');
   const full = require('../models.json');
-  assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).plan, 'Grok');
-  assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).id, 'grok-fast');
+  assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).plan, 'Gemini');
+  assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).id, 'gemini-flash');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' } }).id, 'luna');
   const planLive = make(notebook({ folder: 'D:\\demo' }), null, {
     models: full,
@@ -142,15 +142,15 @@ function make(plan, inspectFolder, extra) {
   assert.equal(pickWorker(full, { job: { title: 'Implement the parser', detail: 'Write code.' } }).kind, 'default');
   assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' } }).kind, 'premium');
   assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' } }).id, 'gpt-6-astra');
-  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex' }, usage: { grok: { used: 20 } } }).id, 'gpt-6-astra');
-  assert.ok(full.some(item => item.id === 'gpt-6-astra' && item.kind === 'premium' && item.enabled));
+  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex' }, usage: { 'gpt-6-astra': { used: 20 } } }).id, 'gpt-5.5');
+  assert.ok(full.some(item => item.id === 'gpt-6-astra' && item.kind === 'premium' && item.available === true));
   assert.equal(canOrchestrate(full.find(item => item.id === 'gpt-6-astra')), true);
   const crew = pickWorkers(full, { job: { title: 'Implement the parser', detail: 'Write code.' }, facts: { dirty: ['a', 'b', 'c', 'd'] } });
   assert.equal(crew.length, 3);
-  assert.notEqual(crew[0].id, crew[1].id);
+  assert.equal(crew[0].id, 'gemini');
   assert.ok(full.filter(item => item.plan === 'ChatGPT').length > 1);
   assert.ok(full.filter(item => item.plan === 'Grok').length > 1);
-  assert.ok(full.filter(item => item.plan === 'Gemini').every(item => item.enabled === false));
+  assert.ok(full.filter(item => item.plan === 'Gemini').every(item => item.enabled === true));
 
   const questions = make(notebook({ folder: 'D:\\demo', open: ['What is in scope?'] }));
   let snap = await questions.orchestra.tick();
@@ -341,6 +341,12 @@ function make(plan, inspectFolder, extra) {
   const grillChat = await idle.orchestra.ask('Grill off');
   assert.equal(grillChat.order, 'grillPropose');
   assert.equal(grillChat.snapshot.grillPropose, false);
+  assert.equal(grillChat.snapshot.grillKind, 'off');
+  const grillMeOrder = parseOrder('Grill me', { models: [], projects: [] });
+  assert.equal(grillMeOrder.action, 'grillPropose');
+  assert.equal(grillMeOrder.kind, 'me');
+  const grillDocsOrder = parseOrder('Grill with the docs', { models: [], projects: [] });
+  assert.equal(grillDocsOrder.kind, 'docs');
   assert.equal(switched.snapshot.models.find(item => item.id === 'gemini').enabled, false);
   assert.equal(snap.projects[0].status, 'idle');
   assert.equal(snap.projects[0].waitingFor, 'Auto start');
@@ -350,6 +356,7 @@ function make(plan, inspectFolder, extra) {
   const fresh = make(notebook({ folder: 'D:\\demo', open: [], tasks: [], fresh: true }));
   snap = await fresh.orchestra.tick();
   assert.equal(snap.grillPropose, true);
+  assert.equal(snap.grillKind, 'me');
   assert.equal(snap.projects[0].status, 'idle');
   assert.equal(snap.projects[0].canStart, true);
   const proposed = await fresh.orchestra.startAutoTask('demo');
@@ -368,6 +375,12 @@ function make(plan, inspectFolder, extra) {
   assert.equal(snap.projects[0].pipeline.find(item => item.id === 'check').state, 'done');
   assert.ok(snap.projects[0].crew.some(person => person.role === 'Orchestrator' && person.name === 'Orchestrator'));
   assert.ok(snap.projects[0].crew.some(person => person.role === 'Worker' && person.name === 'None yet'));
+  const forcedMe = make(notebook({ folder: 'D:\\demo', open: [], tasks: [], fresh: true }));
+  await forcedMe.orchestra.setGrillPropose(true, 'me');
+  const meStart = await forcedMe.orchestra.startAutoTask('demo');
+  assert.equal(meStart.ok, true);
+  assert.equal(meStart.phase, 'grill');
+  assert.equal(meStart.kind, 'me');
   const skipped = await fresh.orchestra.skipGrill('demo');
   assert.equal(skipped.ok, true);
   assert.equal(skipped.snapshot.projects[0].status, 'idle');
@@ -602,8 +615,39 @@ function make(plan, inspectFolder, extra) {
     killWorker: () => {}
   });
   const noneApproved = await noneOrch.approve('demo');
-  assert.equal(noneApproved.snapshot.projects[0].status, 'blocked_no_worker');
-  assert.match(noneApproved.snapshot.projects[0].doing, /No remaining worker/);
+  assert.equal(noneApproved.snapshot.projects[0].status, 'checkpointed');
+  assert.equal(noneApproved.snapshot.projects[0].canResume, true);
+  assert.ok(noneApproved.snapshot.projects[0].checkpoint);
+  assert.equal(noneApproved.snapshot.projects[0].checkpoint.reason, 'no verdict');
+  assert.equal(fs.existsSync(noneApproved.snapshot.projects[0].checkpoint.path), true);
+  assert.match(noneApproved.snapshot.projects[0].doing, /Checkpoint saved/);
+  assert.match(noneApproved.snapshot.projects[0].waitingFor, /Resume from checkpoint/);
+
+  const badDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-bad-'));
+  const badAttempts = createAttemptEngine({ dir: badDir });
+  const badPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const badOrch = createOrchestrator({
+    readPlan: async () => badPlan,
+    attempts: badAttempts,
+    sentinel: createSentinel(badAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
+    models: [{ id: 'gemini', label: 'Gemini', enabled: true }],
+    dir: badDir,
+    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    spawnWorker: () => ({ pid: 1100, logPath: path.join(badDir, 'logs', 'w.log') }),
+    isProcessAlive: () => true,
+    killWorker: () => {}
+  });
+  const badApproved = await badOrch.approve('demo');
+  assert.equal(badApproved.snapshot.projects[0].status, 'watching');
+  const badResult = badApproved.snapshot.projects[0].resultPath;
+  assert.ok(badResult);
+  fs.writeFileSync(badResult, 'STATUS: FAILED\nREASON: tests exploded\n');
+  snap = await badOrch.tick();
+  assert.equal(snap.projects[0].status, 'checkpointed');
+  assert.equal(snap.projects[0].canResume, true);
+  assert.equal(snap.projects[0].checkpoint.reason, 'worker failed');
+  assert.equal(fs.existsSync(snap.projects[0].checkpoint.path), true);
+  assert.match(snap.projects[0].doing, /Checkpoint saved/);
 
   const stalePlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
   const staleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-stale-'));
@@ -639,7 +683,9 @@ function make(plan, inspectFolder, extra) {
   snap = await completeOrch.tick();
   assert.equal(snap.projects[0].status, 'complete');
 
-  const { createServer } = require('../server.cjs');
+  const { createServer: realCreateServer } = require('../server.cjs');
+  // HTTP lifecycle scenarios use one stable worker; production roster is tested above.
+  const createServer = options => realCreateServer({ models: full.map(item => ({ ...item, enabled: item.id === 'grok-4-6' })), fetchPlans: async () => [], ...options });
   const httpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-http-'));
   const httpPlan = path.join(httpDir, 'plan.json');
   const httpFolder = path.join(httpDir, 'repo');
@@ -653,7 +699,8 @@ function make(plan, inspectFolder, extra) {
     const listed = await (await fetch(base + '/api/orchestrator')).json();
     assert.equal(listed.mode, 'manual');
     assert.equal(listed.projects[0].status, 'needs_approval');
-    assert.ok(listed.models.some(item => item.id === 'luna' && item.enabled && item.plan === 'ChatGPT'));
+    assert.ok(listed.models.some(item => item.id === 'luna' && !item.enabled && item.available === true && item.plan === 'ChatGPT'));
+    assert.ok(listed.models.some(item => item.id === 'gpt-5-mini' && !item.enabled && item.available === false));
     assert.ok(listed.models.filter(item => item.plan === 'ChatGPT').length > 1);
     assert.ok(listed.models.filter(item => item.plan === 'Grok').length > 1);
     assert.ok(listed.models.some(item => item.id === 'grok' && item.plan === 'Grok'));
@@ -662,8 +709,8 @@ function make(plan, inspectFolder, extra) {
     assert.equal(run.status, 200);
     const after = await run.json();
     assert.equal(after.projects[0].status, 'watching');
-    assert.equal(after.projects[0].modelId, 'luna');
-    assert.ok(after.models.some(item => item.id === 'luna' && item.used >= 1 && item.remaining < item.limit));
+    assert.equal(after.projects[0].modelId, 'grok-4-6');
+    assert.ok(after.models.some(item => item.id === 'grok-4-6' && item.used >= 1 && item.remaining < item.limit));
     const autoHttp = createServer({ planFile: httpPlan, attemptsDir: path.join(httpDir, 'attempts-auto') });
     await new Promise(resolve => autoHttp.listen(0, '127.0.0.1', resolve));
     const autoBase = `http://127.0.0.1:${autoHttp.address().port}`;
@@ -673,7 +720,7 @@ function make(plan, inspectFolder, extra) {
       const autoBody = await switched.json();
       assert.equal(autoBody.mode, 'auto');
       assert.equal(autoBody.projects[0].status, 'watching');
-      assert.equal(autoBody.projects[0].modelId, 'luna');
+      assert.equal(autoBody.projects[0].modelId, 'grok-4-6');
       const toggled = await fetch(autoBase + '/api/orchestrator/model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'luna', enabled: false }) });
       assert.equal(toggled.status, 200);
       const offBody = await toggled.json();
@@ -734,7 +781,7 @@ function make(plan, inspectFolder, extra) {
     assert.equal(approvedStart.status, 200);
     const approvedBody = await approvedStart.json();
     assert.equal(approvedBody.projects[0].status, 'watching');
-    assert.equal(approvedBody.projects[0].modelId, 'luna');
+    assert.equal(approvedBody.projects[0].modelId, 'grok-4-6');
   } finally {
     await new Promise(resolve => startServer.close(resolve));
   }
@@ -789,7 +836,7 @@ function make(plan, inspectFolder, extra) {
   await new Promise(resolve => abortServer.listen(0, '127.0.0.1', resolve));
   const abortBase = `http://127.0.0.1:${abortServer.address().port}`;
   try {
-    const leadSet = await fetch(abortBase + '/api/orchestrator/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'gpt-6-astra' }) });
+    const leadSet = await fetch(abortBase + '/api/orchestrator/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: 'grok-4-6' }) });
     assert.equal(leadSet.status, 200);
     const hanging = fetch(abortBase + '/api/orchestrator/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: 'How far did we go with Demo?' }) });
     let asking = false;
@@ -825,6 +872,10 @@ function make(plan, inspectFolder, extra) {
   try {
     const proposed = await (await fetch(grillBase + '/api/orchestrator')).json();
     assert.equal(proposed.grillPropose, true);
+    assert.equal(proposed.grillKind, 'me');
+    const kindDocs = await fetch(grillBase + '/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propose: true, kind: 'docs' }) });
+    assert.equal(kindDocs.status, 200);
+    assert.equal((await kindDocs.json()).grillKind, 'docs');
     assert.equal(proposed.projects[0].status, 'idle');
     assert.equal(proposed.projects[0].canStart, true);
     const planBody = await (await fetch(grillBase + '/api/plan')).json();
@@ -941,6 +992,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(snap.projects[0].canResume, true);
   assert.ok(snap.projects[0].checkpoint && snap.projects[0].checkpoint.path);
   assert.equal(fs.existsSync(snap.projects[0].checkpoint.path), true);
+  assert.match(snap.projects[0].doing, /Checkpoint saved/);
   assert.equal(dueAttempts.getAttempts().every(item => item.status !== 'active'), true);
   const resumed = await dueOrch.resume('demo');
   assert.equal(resumed.ok, true);
@@ -972,6 +1024,8 @@ function make(plan, inspectFolder, extra) {
   assert.equal(stopResult.snapshot.projects[0].status, 'checkpointed');
   assert.equal(stopResult.snapshot.projects[0].checkpoint.reason, 'stop');
   assert.equal(stopResult.snapshot.projects[0].canResume, true);
+  assert.match(stopResult.snapshot.projects[0].doing, /Checkpoint saved/);
+  assert.match(stopResult.snapshot.projects[0].waitingFor, /Resume from checkpoint/);
   assert.equal(stopResult.snapshot.projects[0].canStop, false);
   assert.equal(stopKilled.includes(777), true);
   assert.equal(stopAttempts.getAttempts().every(item => item.status !== 'active'), true);
@@ -1034,6 +1088,105 @@ function make(plan, inspectFolder, extra) {
     assert.equal(openedWindows[0], windowBody.url);
   } finally {
     await new Promise(resolve => stopHttpServer.close(resolve));
+  }
+
+  const keepDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-keep-'));
+  const keepAttempts = createAttemptEngine({ dir: keepDir });
+  const keepPlan = notebook({ folder: 'D:\\demo', open: [] });
+  let keepPid = 4400;
+  const keepOrch = createOrchestrator({
+    readPlan: async () => keepPlan,
+    attempts: keepAttempts,
+    sentinel: createSentinel(keepAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
+    models,
+    dir: keepDir,
+    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    spawnWorker: () => ({ pid: keepPid++, logPath: path.join(keepDir, 'logs', 'attempt.log') }),
+    isProcessAlive: () => false,
+    killWorker: () => {}
+  });
+  const keepApproved = await keepOrch.approve('demo');
+  assert.equal(keepApproved.snapshot.projects[0].status, 'watching');
+  const keepStopped = await keepOrch.stop('demo');
+  assert.equal(keepStopped.snapshot.projects[0].status, 'checkpointed');
+  const keepFile = keepStopped.snapshot.projects[0].checkpoint.path;
+  assert.equal(fs.existsSync(keepFile), true);
+  let keepClock = '2027-10-10T12:00:00.000Z';
+  const keepRevived = createOrchestrator({
+    readPlan: async () => keepPlan,
+    attempts: createAttemptEngine({ dir: keepDir }),
+    models,
+    dir: keepDir,
+    now: () => keepClock,
+    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    spawnWorker: () => ({ pid: keepPid++, logPath: path.join(keepDir, 'logs', 'attempt.log') }),
+    isProcessAlive: () => true,
+    killWorker: () => {}
+  });
+  const keepSnap = await keepRevived.tick();
+  assert.equal(keepSnap.projects[0].status, 'checkpointed');
+  assert.equal(keepSnap.projects[0].canResume, true);
+  assert.equal(keepSnap.projects[0].checkpoint.reason, 'stop');
+  assert.equal(keepSnap.projects[0].checkpoint.path, keepFile);
+  assert.match(keepSnap.projects[0].waitingFor, /Resume from checkpoint/);
+  const keepState = JSON.parse(fs.readFileSync(path.join(keepDir, 'orchestrator.json'), 'utf8'));
+  keepState.projects.demo.checkpoint = null;
+  keepState.projects.demo.status = 'idle';
+  fs.writeFileSync(path.join(keepDir, 'orchestrator.json'), JSON.stringify(keepState) + '\n');
+  keepClock = '2028-06-01T00:00:00.000Z';
+  const keepFromFile = createOrchestrator({
+    readPlan: async () => keepPlan,
+    attempts: createAttemptEngine({ dir: keepDir }),
+    models: [{ id: 'gemini', label: 'Gemini', enabled: false }, { id: 'grok', label: 'Grok', enabled: false }],
+    dir: keepDir,
+    now: () => keepClock,
+    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+  });
+  const keepFileSnap = await keepFromFile.tick();
+  assert.equal(keepFileSnap.projects[0].status, 'checkpointed');
+  assert.equal(keepFileSnap.projects[0].canResume, true);
+  assert.equal(keepFileSnap.projects[0].checkpoint.reason, 'stop');
+  const keepResumed = await keepRevived.resume('demo');
+  assert.equal(keepResumed.ok, true);
+  assert.equal(keepResumed.snapshot.projects[0].status, 'watching');
+
+  const keepHttpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-keep-http-'));
+  const keepHttpRepo = path.join(keepHttpDir, 'repo');
+  fs.mkdirSync(keepHttpRepo);
+  fs.writeFileSync(path.join(keepHttpRepo, 'README.md'), '# Demo\n');
+  const keepHttpPlan = path.join(keepHttpDir, 'plan.json');
+  fs.writeFileSync(keepHttpPlan, JSON.stringify(notebook({ folder: keepHttpRepo, open: [] })) + '\n');
+  const keepAttemptsDir = path.join(keepHttpDir, 'attempts');
+  let keepHttpPid = 9100;
+  const keepHttpOpts = {
+    planFile: keepHttpPlan,
+    models,
+    attemptsDir: keepAttemptsDir,
+    inspectFolder: () => ({ folder: keepHttpRepo, fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    spawnWorker: () => ({ pid: keepHttpPid++, logPath: path.join(keepHttpDir, 'logs', 'attempt.log') }),
+    isProcessAlive: () => false,
+    killWorker: () => {}
+  };
+  const keepHttpServer = createServer(keepHttpOpts);
+  await new Promise(resolve => keepHttpServer.listen(0, '127.0.0.1', resolve));
+  const keepHttpBase = `http://127.0.0.1:${keepHttpServer.address().port}`;
+  try {
+    await fetch(keepHttpBase + '/api/orchestrator/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) });
+    const stoppedKeep = await (await fetch(keepHttpBase + '/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) })).json();
+    assert.equal(stoppedKeep.projects[0].status, 'checkpointed');
+  } finally {
+    await new Promise(resolve => keepHttpServer.close(resolve));
+  }
+  const keepHttpServer2 = createServer(keepHttpOpts);
+  await new Promise(resolve => keepHttpServer2.listen(0, '127.0.0.1', resolve));
+  const keepHttpBase2 = `http://127.0.0.1:${keepHttpServer2.address().port}`;
+  try {
+    const afterRelaunch = await (await fetch(keepHttpBase2 + '/api/orchestrator')).json();
+    assert.equal(afterRelaunch.projects[0].status, 'checkpointed');
+    assert.equal(afterRelaunch.projects[0].canResume, true);
+    assert.equal(afterRelaunch.projects[0].checkpoint.reason, 'stop');
+  } finally {
+    await new Promise(resolve => keepHttpServer2.close(resolve));
   }
 
   console.log('OK: orchestrator gates, grill proposal, Auto start holds Approve, Automatic picks a plan worker, usage counts, COMPLETE watched, deadline checkpoint resumes, Stop checkpoint, monitor window.');

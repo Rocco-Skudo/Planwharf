@@ -5,40 +5,40 @@
       "schema": 1,
       "project": {
         "id": "biblioteca",
-        "name": "Biblioteca di quartiere"
+        "name": "Neighborhood library"
       },
       "revisions": [
         {
           "id": 1,
           "mode": "manual",
-          "title": "Il punto di partenza",
+          "title": "Starting point",
           "createdAt": "2026-10-06T09:00:00+02:00",
-          "direction": "Aprire una piccola biblioteca di quartiere, accessibile a tutti.",
-          "state": "Individuati due locali possibili. Raccolta iniziale: 120 libri donati.",
+          "direction": "Open a small neighborhood library accessible to everyone.",
+          "state": "Two possible locations identified. Initial collection: 120 donated books.",
           "closed": [
-            "Prestito gratuito per i residenti.",
-            "Partire con una sola sede."
+            "Free borrowing for residents.",
+            "Start with a single location."
           ],
           "open": [
-            "Quale locale scegliamo?",
-            "Chi segue il primo turno di apertura?"
+            "Which location should we choose?",
+            "Who covers the first opening shift?"
           ]
         },
         {
           "id": 2,
           "mode": "manual",
-          "title": "Una sede, un primo passo",
+          "title": "One location, a first step",
           "createdAt": "2026-10-07T10:30:00+02:00",
-          "direction": "Aprire la biblioteca in via del Porto, con un primo mese di prova.",
-          "state": "Scelta la sede di via del Porto. Catalogati 120 libri. Il calendario di prova è in preparazione.",
+          "direction": "Open the library on Harbor Street for a one-month trial.",
+          "state": "Harbor Street selected. 120 books cataloged. The trial schedule is being prepared.",
           "closed": [
-            "Prestito gratuito per i residenti.",
-            "Partire con una sola sede.",
-            "Usare il locale di via del Porto."
+            "Free borrowing for residents.",
+            "Start with a single location.",
+            "Use the Harbor Street location."
           ],
           "open": [
-            "Chi segue il primo turno di apertura?",
-            "Confermiamo l’apertura il sabato mattina?"
+            "Who covers the first opening shift?",
+            "Should we confirm Saturday morning opening?"
           ]
         }
       ],
@@ -47,8 +47,8 @@
           "id": "calendario",
           "projectId": "biblioteca",
           "revision_id": 2,
-          "title": "Preparare il calendario del mese di prova",
-          "detail": "Definire quattro turni e raccogliere la disponibilità dei volontari.",
+          "title": "Prepare the trial-month schedule",
+          "detail": "Define four shifts and collect volunteer availability.",
           "status": "running"
         }
       ]
@@ -57,21 +57,21 @@
       "schema": 1,
       "project": {
         "id": "orto",
-        "name": "Orto condiviso"
+        "name": "Community garden"
       },
       "revisions": [
         {
           "id": 1,
           "mode": "import",
-          "title": "Il terreno disponibile",
+          "title": "Available land",
           "createdAt": "2026-10-07T08:00:00Z",
-          "direction": "Avviare un orto condiviso nel cortile del quartiere.",
-          "state": "Il terreno è disponibile; manca il calendario di irrigazione.",
+          "direction": "Start a community garden in the neighborhood courtyard.",
+          "state": "The land is available; the watering schedule is missing.",
           "closed": [
-            "Usare il cortile comune."
+            "Use the shared courtyard."
           ],
           "open": [
-            "Chi irriga nel fine settimana?"
+            "Who waters the garden on weekends?"
           ]
         }
       ],

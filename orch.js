@@ -51,8 +51,9 @@
     if (meta) meta.setAttribute('content', next);
     const btn = $('theme-toggle');
     if (btn) {
-      btn.textContent = next === 'light' ? 'Dark' : 'Light';
       btn.setAttribute('aria-pressed', next === 'light' ? 'true' : 'false');
+      btn.setAttribute('aria-label', next === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
+      btn.setAttribute('title', next === 'light' ? 'Dark' : 'Light');
     }
     try { localStorage.setItem(themeKey, next); } catch {}
   }
@@ -165,14 +166,29 @@
     if (nearBottom || sending || !items.length) el.scrollTop = el.scrollHeight;
   }
 
+  function checkpointBanner(row) {
+    if (!row || !row.checkpoint) return '';
+    const why = row.checkpoint.reason;
+    const line = why === 'stop'
+      ? 'You stopped this job.'
+      : (why === 'deadline' ? 'Time ran out.' : 'The job ended without completing.');
+    return `<p class="checkpoint-flag" role="status"><span class="badge">Checkpoint saved</span> ${escape(line)} Resume continues from the last plan.</p>`;
+  }
+
   function projectActions(row) {
     if (!row) return '';
     const id = row.id;
     const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">Go</button>` : '';
     const resume = row.canResume && row.status === 'checkpointed' ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
     const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
-    const start = `<button type="button" class="secondary" data-start="${escape(id)}">Start</button>`;
-    return `${approve}${start}${resume}${stop}`;
+    const propose = orchestra.grillPropose !== false;
+    const kind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
+    const docsOk = row.canGrillDocs !== false;
+    const busy = row.status === 'watching' || row.status === 'waiting_on_you' || row.status === 'propose_grill';
+    const grillTriggers = approve || resume || stop || busy
+      ? ''
+      : `<button type="button" class="${kind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me" data-grill-start="${escape(id)}">Grill me</button><button type="button" class="${kind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs" data-grill-start="${escape(id)}"${docsOk ? '' : ' disabled'}>Grill with the docs</button>`;
+    return `${approve}${grillTriggers}${resume}${stop}`;
   }
 
   function renderBoard() {
@@ -198,7 +214,7 @@
         ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>`
         : '';
       const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></div></article>`;
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -207,7 +223,7 @@
         : `<li class="muted">${row.workerLabel ? escape(row.workerLabel) : 'No process yet.'}</li>`;
       const log = row.workerTail ? `<details class="monitor-log"><summary>Live log</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '';
       const monitor = row.monitoring ? `<p class="muted">${row.monitoring.alive}/${row.monitoring.workers} alive · ${row.monitoring.folderFiles} files</p>` : '';
-      return `<article class="dash-proc ${escape(row.status)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header><p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row)}</div></article>`;
+      return `<article class="dash-proc ${escape(row.status)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header>${checkpointBanner(row)}<p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row)}</div></article>`;
     }).join('') || '<p class="muted">No projects in the notebook.</p>'}</div></section>`;
     const iv = `<section class="dash-section dash-zone-iv"><h3>Interventions</h3>${interventions.length
       ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
@@ -403,7 +419,8 @@
       const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
       const resumeId = event.target && event.target.getAttribute && event.target.getAttribute('data-resume');
       const approveId = event.target && event.target.getAttribute && event.target.getAttribute('data-approve');
-      const startId = event.target && event.target.getAttribute && event.target.getAttribute('data-start');
+      const grillStartId = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-start');
+      const grillStartKind = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
       try {
         if (leadId) {
           orchestra = await post('/api/orchestrator/lead', { id: leadId });
@@ -420,7 +437,7 @@
         if (stopId) {
           orchestra = await post('/api/orchestrator/stop', { projectId: stopId });
           render();
-          notice('Stopped. Checkpoint saved.');
+          notice('Stopped. Checkpoint saved. Press Resume to continue from the last plan.');
           return;
         }
         if (resumeId) {
@@ -435,9 +452,10 @@
           notice('Run approved.');
           return;
         }
-        if (startId) {
+        if (grillStartId && (grillStartKind === 'me' || grillStartKind === 'docs')) {
+          orchestra = await post('/api/orchestrator/grill', { propose: true, kind: grillStartKind });
           if (!version) await loadPlan();
-          const body = await post('/api/orchestrator/start', { version, projectId: startId, timing: 'discretion' });
+          const body = await post('/api/orchestrator/start', { version, projectId: grillStartId, timing: 'discretion' });
           if (body.snapshot) orchestra = body.snapshot;
           if (body.version) version = body.version;
           render();

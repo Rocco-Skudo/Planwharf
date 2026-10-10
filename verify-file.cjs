@@ -48,7 +48,7 @@ async function post(base, payload, headers = {}) {
   const failing = await start({ save: async () => { throw new Error('Disk write unavailable'); } });
   const failed = await post(failing.base, { version: saved.version, draft });
   assert.equal(failed.status, 500);
-  assert.ok((await failed.json()).error.includes('Nessuna revisione'));
+  assert.ok((await failed.json()).error.includes('No revision'));
   assert.equal(await fs.readFile(file, 'utf8'), snapshot);
   const concurrent = await Promise.all([post(restarted.base, { version: saved.version, draft }), post(restarted.base, { version: saved.version, draft })]);
   assert.deepEqual(concurrent.map(result => result.status).sort(), [201, 409]);

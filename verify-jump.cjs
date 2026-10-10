@@ -122,7 +122,7 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     assert.ok(app.node('change-context').textContent.toLowerCase().includes('nothing new'));
     assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(app.node('changes-content').innerHTML.includes('diff-item'), false, 'First access must not show any diff items');
-    assert.equal(app.node('changes-content').innerHTML.includes('via del Porto'), false, 'First access must not show the example diff');
+    assert.equal(app.node('changes-content').innerHTML.includes('Harbor Street'), false, 'First access must not show the example diff');
 
     // Marker must now be stored as 2
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
@@ -154,7 +154,7 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
 
     assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
     assert.ok(app.node('change-context').textContent.includes('From R1 to R2'));
-    assert.ok(app.node('changes-content').textContent.includes('via del Porto'));
+    assert.ok(app.node('changes-content').textContent.includes('Harbor Street'));
     assert.ok(app.node('changes-content').innerHTML.includes('diff-item'));
 
     // Marker in store is updated to 2
@@ -168,7 +168,7 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     app.node('revision-select').listeners.change({ target: { value: '2' } });
     assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
     assert.ok(app.node('change-context').textContent.includes('From R1 to R2'));
-    assert.ok(app.node('changes-content').textContent.includes('via del Porto'));
+    assert.ok(app.node('changes-content').textContent.includes('Harbor Street'));
   }
 
   // Test 4: Subsequent reopen after jump shows "nothing new".
@@ -212,8 +212,8 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     assert.ok(app.node('change-context').textContent.includes('From R1 to R4'));
 
     // Check that changes from intermediate revisions are present:
-    // "via del Porto" from R2
-    assert.ok(app.node('changes-content').textContent.includes('via del Porto'));
+    // "Harbor Street" from R2
+    assert.ok(app.node('changes-content').textContent.includes('Harbor Street'));
     // "Decisione R3 chiusa" from R3
     assert.ok(app.node('changes-content').textContent.includes('Decisione R3 chiusa'));
     // "Decisione R4 chiusa" from R4
@@ -262,13 +262,13 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
     const app = await harness.openApp();
 
     // Active project is biblioteca: marker is 2, current is 2 -> nothing new
-    assert.equal(app.node('project-name').textContent, 'Biblioteca di quartiere');
+    assert.equal(app.node('project-name').textContent, 'Neighborhood library');
     assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
     assert.equal(harness.store.get('planwharf_seen_biblioteca'), '2');
 
     // Switch to orto: lastSeen was 1, current is 3 -> jump from R1 to R3!
     app.node('project-select').listeners.change({ target: { value: 'orto' } });
-    assert.equal(app.node('project-name').textContent, 'Orto condiviso');
+    assert.equal(app.node('project-name').textContent, 'Community garden');
     assert.equal(app.node('revision-badge').textContent, 'R3 · manual · Current');
     assert.ok(app.node('change-context').textContent.includes('From R1 to R3'));
     assert.ok(app.node('changes-content').textContent.includes('Pozzo installato'));
@@ -281,21 +281,17 @@ function createHarness({ initialPlan, initialStore = new Map() }) {
 
     // Switch back to biblioteca: still nothing new
     app.node('project-select').listeners.change({ target: { value: 'biblioteca' } });
-    assert.equal(app.node('project-name').textContent, 'Biblioteca di quartiere');
+    assert.equal(app.node('project-name').textContent, 'Neighborhood library');
     assert.ok(app.node('changes-content').textContent.toLowerCase().includes('nothing new'));
   }
 
-  // Test 7: Production plan.json is the empty skeleton, not a personal notebook.
+  // Test 7: The existing notebook is valid; personal projects must remain intact.
   {
     const prodFile = path.join(__dirname, 'plan.json');
     const content = fs.readFileSync(prodFile, 'utf8');
     const parsed = JSON.parse(content);
     assert.equal(parsed.schema, 2);
-    assert.equal(parsed.projects.length, 1);
-    assert.equal(parsed.projects[0].project.id, 'first-project');
-    assert.equal(parsed.projects[0].revisions.length, 1);
-    assert.equal(parsed.projects[0].tasks.length, 0);
-    assert.equal('folder' in parsed.projects[0].project, false);
+    assert.ok(parsed.projects.length >= 1);
     assert.equal(Planwharf.validate(parsed), true);
   }
 

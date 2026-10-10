@@ -1,112 +1,97 @@
-# Planwharf zombie — quaderno e Grillbench locali
+# Planwharf
 
-**plan.json**, accanto a index.html, è l'unico quaderno salvato e l'unica fonte autorevole. Nel repository è uno **scheletro** (`First project`, vuoto): ognuno aggiunge i propri progetti. Il selettore Progetto cambia il quaderno mostrato, conservando la stessa schermata. Nessun quaderno parallelo o salvataggio del piano in localStorage.
+A local project notebook and coordinator for real coding workers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution across Codex, Antigravity, and Grok.
 
-All'apertura e riapertura della schermata, l'applicazione ricorda l'ultima revisione vista per ciascun progetto separatamente. Se nel frattempo è nata una o più revisioni, l'area **Cosa è cambiato** mostra il salto cumulativo dall'ultima revisione vista alla corrente, aggiornando il marker per le riaperture successive senza perdere il confronto corrente. Se non ci sono novità (o al primo accesso, senza inventare revisioni viste o diff di esempio), mostra "nessuna novità".
+[Beginner guide](docs/HOW-TO.md) · [Verification report](docs/VERIFICATION-REPORT-2026-10-10.md)
 
-Serve Node.js, senza dipendenze da installare. È un’app locale: un processo Node tiene `plan.json` e gli attempt, e apre una finestra Chromium (`--app`: Edge, Chrome o Chromium).
+## Requirements and launch
 
-**Avvio**
+Install Node.js and a Chromium browser such as Edge or Chrome. Planwharf has no npm dependencies. Install and authenticate the coding CLIs you want to use separately.
 
-Windows — doppio clic su **Planwharf.exe** (nella cartella del progetto). Serve Node.js. Se Node manca, una finestra lo dice. In alternativa doppio clic su `planwharf.cmd`, oppure:
-
-```powershell
-node "D:\benit\Desktop\Projects\Planwharf-zombie\planwharf.cjs"
-```
-
-Per ricostruire l’exe: doppio clic su `launch\build-exe.cmd` (serve .NET Framework 4).
-
-Linux e macOS — dalla cartella del repo:
-
-```bash
-node planwharf.cjs
-```
-
-Oppure `sh planwharf.sh`. Serve Node.js e un browser Chromium (Edge, Chrome o Chromium). Se il browser non c’è, il processo stampa l’URL `http://127.0.0.1:4173` da aprire a mano.
-
-iPhone e iPad non possono ospitare Planwharf: serve un computer con Node.
-
-Ctrl+C (o chiudere la finestra) spegne tutto. Se la porta 4173 è occupata, ne prende una libera. Il doppio clic su index.html non scrive `plan.json`.
-
-Cartella locale: su Windows un percorso tipo `D:\benit\Desktop\Projects\RaceEngineer`; su Linux/macOS tipo `/home/tuo/Projects/RaceEngineer` o `/Users/tuo/Projects/RaceEngineer`.
-
-**Grill me** (Matt Pocock) sta in For you su ogni progetto, anche se lo hai appena aggiunto e non ha ancora domande. Se For you è vuoto, il tasto scrive il primo giro di domande e apre il round. **Grill with the docs** fa lo stesso e aggiunge domande sui README/AGENTS/docs della cartella. L’orchestratore **propone** Grill me o Grill with the docs solo al momento di **Auto start**, se **Grill on Auto start** è acceso (default) e il progetto non è ancora stato grigliato. **Grill off** spegne la proposta su Auto start; **Skip grill** sul progetto la salta solo lì. Non lancia modelli.
-
-Stessi file, senza aprire la finestra:
+On Windows, double-click `Planwharf.exe` or `planwharf.cmd`, or run:
 
 ```powershell
-node "D:\benit\Desktop\Projects\Planwharf-zombie\planwharf.cjs" projects
-node "D:\benit\Desktop\Projects\Planwharf-zombie\planwharf.cjs" status
+node .\planwharf.cjs
 ```
 
-`server.cjs` resta disponibile per le prove automatiche.
+To rebuild the Windows launcher, run `launch\build-exe.cmd`; it requires the .NET Framework compiler. On Linux/macOS, run `node planwharf.cjs` or `sh planwharf.sh`. Windows is the verified platform. If a browser cannot be launched, open the printed local address. Opening `index.html` directly does not start file persistence.
 
-## Le quattro aree
+The server binds to `127.0.0.1`, normally on port 4173, and chooses another port when necessary. Ctrl+C or closing the main app requests shutdown and checkpoint saving. The Orchestrator window shares the same server.
 
-- **All projects**: colonna a sinistra. Un clic apre quel piano. **Remove project** toglie il progetto dal quaderno (la cartella sul disco resta); deve restare almeno un progetto. **Remove job** toglie il job da Running.
-- **The plan**: foglio principale (Goal, stato, decisioni, domande aperte) della revisione letta, con importazione JSON.
-- **What changed**: differenze rispetto alla precedente o salto dall'ultima visita; storico conservato.
-- **For you**: domande aperte di tutti i progetti; Grill me gira sul progetto aperto.
-- **Now** (su Planwharf): stato del lavoro sul progetto aperto (Your turn / Working / Done / Ready / Stuck) e l’azione primaria (Answer, Skip, Start, Go, Stop, Resume). **Functions** accende o spegne Manual / Automatic, Grill on Auto start, e i modelli, e lascia scegliere il **modello orchestratore**. **Auto start** è sempre disponibile, anche con domande aperte o un job già in corso: ferma i worker, salva un checkpoint se stavano lavorando, e riparte la pipeline. **Orchestrator** apre una finestra a parte (`/orchestrator.html`, profilo `.planwharf-watch`) sullo stesso processo Node: chat a sinistra, dashboard a destra. All’avvio Planwharf confronta `mattpocock/skills` con GitHub **main** (sha); **Check skills** in Functions rifà il fetch. **Provider usage** (ChatGPT, Grok, Gemini) è l’utilizzo reale del piano, in percentuale, letto dai login locali (Codex/ChatGPT e grok CLI). L’elenco modelli è una sezione a parte: se ChatGPT è esaurito, tutti i modelli ChatGPT sono esauriti. Gemini resta unread se sul PC non c’è un login quota-leggibile.
+## Start a project
 
-## Orchestrator
+Choose **Add project**, enter a name and goal, and set **Projects folder** to an existing absolute base directory. Click **Save projects folder**. With **Create a new subfolder using the project name** selected, Planwharf creates and links a new folder. Existing names receive a numbered suffix. Uncheck the option to link an existing project folder instead.
 
-La finestra Orchestrator (`/orchestrator.html`) è una chat con dashboard: si cambia il lead quando si vuole, si vedono stato / utilizzo residuo / processi, e l’analisi di cosa stanno facendo. Interventi (stall / processo morto / FAILED → switch al prossimo modello). **Ask** parla con l’orchestratore e dà ordini (stop, resume, approve, turn a model on or off, use X as orchestrator). I dettagli sul lavoro arrivano in tempo reale (poll ~4s). **Manual** / **Automatic** scelgono se un job aggiunto a mano aspetta Approve. Dopo **Approve run** l’orchestratore smista il job a un worker, o lo spezza su più worker se è più efficiente. Un job da Auto start aspetta sempre Approve. In pianificazione si sceglie **Worker discretion** o **Finish by** (es. 18:00): a quell’ora l’orchestratore consegna l’output o salva un checkpoint da riprendere. **Stop** interrompe i worker e salva un checkpoint; **Resume** riparte. Non chiama API a pagamento.
+**Set place** updates a project's local folder and `https://github.com/owner/repo` URL. The base-directory setting persists in `<notebook>.settings.json`. Changing it affects future projects and does not move existing folders. **Remove project** removes the notebook entry while keeping its filesystem folder.
 
-## Manuale, Grillbench, importazione
+Use a separate notebook for experiments:
 
-**Nuova revisione** parte sempre dalla revisione corrente del progetto, anche quando stai leggendo lo storico. Puoi modificare dove si va, stato dell'arte, decisioni chiuse e domande aperte. Salva aggiunge una revisione **manual**, senza modificare quelle precedenti. Il diff mostra aggiunte, rimozioni e cambiamenti. Spostare una decisione chiusa nelle domande aperte è segnalato con **Decisione riaperta esplicitamente** (confronto normalizzato per maiuscole e spazi esterni).
+```powershell
+node .\planwharf.cjs --plan .\my-notebook.json --attempts-dir .\my-attempts --port 4180
+```
 
-**Grillbench · un giro** presenta soltanto le domande aperte correnti, mai le decisioni già chiuse. Per ogni domanda scegli:
+The selected notebook must already contain valid Planwharf data. The shipped `plan.json` is a starter notebook; your local copy may contain personal projects. Preserve that local data when updating the application.
 
-- **Lascia aperta**: mantiene la domanda; la risposta è conservata nei dati del giro.
-- **Chiudi con questa decisione**: rimuove la domanda da open e aggiunge a closed la domanda con la risposta.
-- **Chiudi e cambia direzione**: chiude la domanda e usa la risposta come nuova direzione, visibile nel diff. Una sola nuova direzione per giro.
+## Notebook, revisions, and Grill
 
-Il titolo e le risposte vengono salvati in una nuova revisione **grill**. Tutte le decisioni già chiuse restano. Il giro raccoglie decisioni dell'utente: non invoca processi, provider o modelli.
+- **The plan** shows the selected revision's goal, current state, decisions, and open questions.
+- **What changed** shows revision differences or the cumulative change since your last visit. Previous revisions remain immutable.
+- **For you** contains questions awaiting answers. **Grill me** refines the goal; **Grill with the docs** includes project documentation.
+- **Now** shows progress and actions such as Approve, Stop, and Resume. **All projects** switches the active notebook project.
 
-**Importa revisione JSON** accetta un oggetto completo incollato nel modulo, senza copiare a mano i singoli campi:
+An edit starts from the current revision and appends a new one. A Grill answer can leave a question open, close it with a decision, or close it and change direction. Existing decisions are preserved. Import accepts a complete revision object:
 
 ```json
 {
-  "title": "Primo mese pronto",
-  "direction": "Aprire la biblioteca due mattine a settimana.",
-  "state": "Due volontari confermati.",
-  "closed": ["Prestito gratuito."],
-  "open": ["Quale giorno aggiungiamo?"]
+  "title": "First month ready",
+  "direction": "Open the library two mornings each week.",
+  "state": "Two volunteers confirmed.",
+  "closed": ["Loans are free."],
+  "open": ["Which extra day should we add?"]
 }
 ```
 
-Puoi anche incollare una revisione completa con id, mode e createdAt validi: vengono assegnati un nuovo id, la data corrente e il modo **import**. Il formato richiede i cinque campi di piano sopra; campi sconosciuti, JSON malformato e tipi errati vengono rifiutati senza scrivere nulla. L'importazione aggiunge una fotografia completa, preservando storico e task.
+Malformed JSON, unknown fields, and invalid types are rejected without changing the notebook. Supported revision modes are `manual`, `grill`, and `import`. A task keeps its originating `revision_id` even after later edits. Each project can have at most one running task.
 
-## Task e persistenza
+## Local files and private GitHub repositories
 
-**Crea task dalla revisione letta** richiede titolo e conserva la sua revision_id anche quando aggiungi altre revisioni. Al massimo un task running per progetto: un secondo tentativo mostra un rifiuto, senza creare una coda. Il task è soltanto una riga di dati; nessuna esecuzione.
+**Check repository** verifies local read/write access and authenticated GitHub access. It shows the compared branches, commits ahead/behind, uncommitted paths, and the time of the check. GitHub authentication uses the existing `gh` login, including private repositories accessible to that account.
 
-Il server rilegge plan.json, serializza le modifiche e scrive un file temporaneo che sostituisce l'originale solo dopo una scrittura riuscita. Se un'altra pagina ha già salvato, ricarica prima di riprovare. Errori di lettura/scrittura non generano salvataggi in memoria dichiarati riusciti. Chiudere il browser e riavviare il server lascia intatto il quaderno.
+The comparison fetches the linked repository's current branch history into dedicated inspection refs. It does not merge, push, switch branches, or overwrite working files. When the local branch is unpublished, the comparison explicitly uses GitHub's default branch as its baseline. Diverged histories and failures remain visible; old tracking refs are not reported as a current GitHub check.
 
-Il file ora usa schema 2 con `projects`, un elenco di quaderni progetto (schema 1, project/revisions/tasks). La biblioteca originale e il task R2 sono conservati. Ogni task deve riferirsi a una revisione esistente del suo progetto. Il server accetta anche i vecchi quaderni singoli schema 1; l'esempio consegnato è già il file a due progetti.
+The lead receives local paths and GitHub URLs for registered projects, plus an updated check for the focused project before answering. Its CLI has full filesystem/network permissions and runs without interactive approvals. Its prompt keeps it in a coordination role: workers implement jobs. A role instruction is not a filesystem sandbox.
 
-Ogni progetto può avere una **cartella locale** (percorso assoluto sul PC) e un URL **GitHub** (`https://github.com/owner/repo`). Li incolli tu in Add project o Set place: Planwharf non scansiona il disco e non chiama l’API GitHub. Open folder apre Esplora file sulla cartella salvata; Open GitHub apre l’URL salvato.
+The account must already have repository access. A URL alone cannot grant it. Check `gh auth status` or use `gh auth login` if authentication is missing. Credentials are not embedded in notebooks or model prompts.
 
-Planwharf è il quaderno (stato dell’arte, lavoro, funzioni). L’**orchestratore** è la dashboard e gira nello stesso processo Node. All’avvio confronta `mattpocock/skills` con GitHub **main** (sha) e in Functions mostra current/update; **Check skills** rifà il fetch. **Auto start** resta sempre cliccabile. Fa un inspect read-only (`git log` / `status` / `diff`) della cartella collegata; se c’è un job in corso lo ferma (checkpoint se i worker erano attivi) e riparte. Se Grill on Auto start è acceso, apre un round di grilling Matt sul progetto (domande con recommended, non il vecchio template generico); poi scrive un job e aspetta **Approve run**. Nella chat e in Functions scegli il **modello orchestratore** (`POST /api/orchestrator/lead`) tra flagship e default (GPT-6 Astra, GPT-5, GPT-5.5, Grok Build, Grok 4.20, Grok 4.7). Si può cambiare in qualsiasi momento. Luna, mini, Fast e Flash restano worker. Poi la **chat** (`POST /api/orchestrator/ask`, CLI `node planwharf.cjs ask "…"`): conversazione vera (Send, Invio, storico) per domande live e ordini. Mentre il lead lavora compare **Thinking** con il tempo in corso; a fine turno resta il tempo impiegato e, se c’è, il testo di thinking. **Stop** (o Escape) interrompe la risposta in corso, riapre la casella e permette un nuovo messaggio. Con un lead (Astra, Grok 4.7, …) la chat è **solo coordinamento**: ispezione in sola lettura (permission-mode plan, niente `--always-approve`). I comandi di lavoro (implement, fix, continua, smista) diventano job per i **worker**, non una sessione in cui il lead scrive il codice. L’ispezione resta in thinking; in chat si vede solo la valutazione. Senza lead chiede di sceglierne uno. Ordini: stop, resume, approve, start, skip grill, automatic/manual, turn a model on or off, change lead. L’orchestratore spacchetta il job sui worker abilitati con quota: inspect 1, build/hard fino a 3 slice in parallelo. Dopo Approve lancia un `engine/runner.cjs` per slice. La dashboard mostra ogni modello (stato, utilizzo, processi), cosa sta facendo ogni worker (interpretazione del log), e gli interventi. Se un processo muore senza COMPLETE, FAILED, o 90s senza progresso, switch al prossimo modello. **Stop** (o un termine **Finish by** a scadenza non completa) uccide i worker e scrive un checkpoint; **Resume from checkpoint** continua. Il tasto **Orchestrator** (`POST /api/orchestrator/window`) apre `/orchestrator.html` nello stesso server. `/?watch=1` reindirizza lì. Un job aggiunto a mano in Automatic può essere claimed senza Approve; un job da Auto start aspetta sempre Approve (`holdApproval`).
+## Providers and execution
 
-La cartella è locale. La finestra e il CLI parlano agli stessi file su 127.0.0.1.
+`models.json` declares the exact provider and CLI model ID for every entry. The runner launches that CLI and model; it rejects incompatible combinations and never silently routes GPT or Gemini labels to Grok.
 
-## Verifica
+On the verified account, GPT-6 Astra, GPT-6 Luna, GPT-6 Sol, GPT-6.1 Sol, GPT-5.6 Luna, and GPT-5.5 completed inference checks. Gemini Pro and Flash were used through Antigravity. GPT-5 and GPT-5 mini were explicitly rejected by Codex with this ChatGPT account and remain **Unavailable**. Grok 4.6 is switched off after a credit/spending-limit HTTP 403. These checks describe one account and date, rather than universal model availability.
+
+Choose a lead in **Functions** or the Orchestrator window. **Auto start** inspects the project, proposes Grill when configured, prepares a job, and waits for **Approve run**. Auto-start jobs require that approval even in Automatic mode. Manually added tasks can dispatch automatically when Automatic is selected. Worker tool permissions do not require repeated interactive confirmation.
+
+Enabled models are candidates, not a requirement to use every model for every task. Selection considers task type, provider quota, local counters, and failures. Implementation/difficult work may be split across up to three workers. Slice ownership and integration still require care.
+
+The dashboard reports process IDs, logs, interpreted activity, and provider usage. Chat supports coordination questions and keyword commands such as stop, resume, approve, start, skip grill, and changing the lead. Prefer explicit buttons for actions when possible.
+
+## Stop, Resume, and quotas
+
+Stop terminates worker process trees and saves a checkpoint. Failure without usable alternatives, inactivity, a missed deadline, and normal shutdown also preserve state. Checkpoints have no expiry and remain **Paused / Checkpoint saved / Resume** across restarts. Resume verifies the job identity and creates a fresh assignment from the saved plan and existing files. It does not restore the interrupted model's internal memory.
+
+Keep the notebook, settings, attempts directory, and project files together in backups. Forced termination or power loss cannot guarantee saving the last unsaved operation. Monitoring and deadlines currently depend on client polling.
+
+Provider quota readings are separate from synthetic model assignment counters. ChatGPT uses local Codex usage windows; Grok uses local billing; Antigravity reads numeric Gemini buckets through `agy -p /usage --output-format json`. Missing or invalid readings show **Unread**, rather than an invented percentage.
+
+## Validation and historical evidence
 
 ```powershell
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-file.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-round.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-ui.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-jump.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-projects.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-app.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\engine\orchestrator.test.cjs"
-node "D:\benit\Desktop\Projects\Planwharf-zombie\engine\skills.test.cjs"
+node .\validation\verify-work.cjs
+node .\validation\project-folder-ui.cjs
 ```
 
-Le prove verificano schema, storico immutabile, modi, riferimenti task, secondo running rifiutato, grill chiusura/cambio direzione, diff della riapertura esplicita, import valido e invalidi senza scrittura, stato a due progetti dopo riavvio ed errori disco. Usano un file temporaneo isolato: non aggiungono revisioni a plan.json.
+Tests cover notebook persistence, revisions, Grill, task references, filesystem settings, provider routing, checkpoints, shutdown/restart, Git comparison graphs, and errors. Test notebooks and attempts are isolated from personal projects. `verify-ui.cjs` is a DOM simulation; the folder UI check uses a real headless browser.
 
-verify-ui.cjs simula gli eventi DOM: **non è un controllo visivo**. verify-browser.cjs tenta una verifica reale con Edge in modalità headless e un quaderno isolato; produce eventuali screenshot in validation. Un timeout di Edge significa controllo visivo **NON FATTO**, anche quando le altre prove passano.
+A previous real orchestrator run produced a Windows calculator through Gemini workers and passed 15 GUI checks plus five engine self-tests. Its project was subsequently removed at the owner's request. Preserved local execution evidence documents that historical run; it is not a currently installed calculator.
+
+Historical `handoff` payloads and execution logs preserve their original language as evidence. Current product documentation is in English. Personal notebook content and test fixture text are user/sample data, rather than translated product documentation.

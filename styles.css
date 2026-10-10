@@ -181,10 +181,14 @@ body.orch-app .mark {
 .mark span { display: none; }
 
 .topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "heading end"
+    "actions end";
+  column-gap: 16px;
+  row-gap: 8px;
+  align-items: start;
   padding: 18px 28px 12px;
   border-bottom: 1px solid color-mix(in srgb, var(--cyan) 28%, var(--rule));
   position: sticky;
@@ -193,13 +197,49 @@ body.orch-app .mark {
   backdrop-filter: blur(16px);
   z-index: 4;
 }
+.topbar .heading { grid-area: heading; min-width: 0; }
 .top-actions {
+  grid-area: actions;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
 }
+.top-end {
+  grid-area: end;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: end;
+  position: relative;
+  z-index: 5;
+}
+.orch-launch {
+  background: var(--violet);
+  color: #0b0818;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  box-shadow: 0 0 24px color-mix(in srgb, var(--violet) 55%, transparent);
+  border-color: color-mix(in srgb, var(--violet) 70%, white);
+}
+.orch-launch:hover { filter: brightness(1.08); }
+.theme-toggle {
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--paper) 80%, transparent);
+  border: 1px solid var(--border);
+  color: var(--ink);
+  flex-shrink: 0;
+}
+.theme-toggle:hover { background: var(--accent-dim); }
+.theme-toggle svg { display: block; }
+html[data-theme="dark"] .theme-moon,
+html[data-theme="light"] .theme-sun { display: none; }
 .skills-version { display: none; }
 .local {
   font-family: "JetBrains Mono", Consolas, monospace;
@@ -366,6 +406,24 @@ select {
   line-height: 1.45;
 }
 .now-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.checkpoint-flag {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, var(--border));
+  background: var(--amber-bg);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.checkpoint-flag .badge {
+  background: var(--amber);
+  color: #1a1404;
+}
 .now-hero.kind-needs_you .now-kicker { color: var(--amber); }
 .now-hero.kind-working .now-kicker { color: var(--blue); }
 .now-hero.kind-done .now-kicker { color: var(--green); }
@@ -627,6 +685,10 @@ h2 .number {
 .timing-fields legend { padding: 0 6px; color: var(--muted); font-size: 12px; }
 .timing-fields .choice { display: flex; align-items: center; gap: 8px; font-size: 14px; }
 .timing-fields .deadline-at[hidden] { display: none; }
+.project-folders .choice { margin-bottom: 0; }
+.project-folders .choice input { width: auto; margin: 0; padding: 0; flex: 0 0 auto; }
+.project-folders > button { justify-self: start; }
+.repository-status { flex-basis: 100%; margin: 8px 0 0; overflow-wrap: anywhere; }
 .fleet {
   margin: 0;
   padding: 10px 12px;
@@ -1244,7 +1306,7 @@ body.orch-app {
   .frame main, .topbar { padding-left: 16px; padding-right: 16px; }
   .local { display: none; }
   .skills-version { max-width: 18ch; }
-  .topbar { flex-direction: column; }
+  .topbar { flex-direction: unset; }
   h1 { font-size: 20px; }
   .project-place { flex-direction: column; align-items: stretch; }
   .place-actions { margin-left: 0; }

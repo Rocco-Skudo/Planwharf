@@ -5,6 +5,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const Plan = require('../plan.js');
 const { planExhausted, emptyPlans } = require('./planUsage.js');
+const { createRepositoryInspector } = require('./repository.cjs');
 
 const LABELS = {
   waiting_on_you: 'Waiting on you',
@@ -85,11 +86,7 @@ function orchestratorDoing(row) {
   if (row.status === 'propose_grill' || row.status === 'waiting_on_you') return 'Holding assign until grill is closed.';
   if (row.status === 'complete') return 'Verified STATUS: COMPLETE and folder output.';
   if (row.status === 'failed') return 'Stopped monitoring. No remaining worker, or every slice failed.';
-  if (row.status === 'checkpointed') {
-    return row.checkpoint && row.checkpoint.reason === 'stop'
-      ? 'Stopped. Checkpoint saved.'
-      : 'Paused at deadline. Checkpoint saved.';
-  }
+  if (row.status === 'checkpointed') return checkpointTalk(row.checkpoint && row.checkpoint.reason).orch;
   if (row.status === 'blocked_no_folder') return 'Cannot inspect: no local folder.';
   if (row.status === 'blocked_no_worker') return 'No eligible worker. Turn a model on, or wait until its provider usage resets.';
   if (row.status === 'idle') return 'Reading the notebook. No job to split.';
@@ -111,11 +108,7 @@ function crewOf(row, leadLabel) {
       if (row.status === 'watching') doing = part.activity || row.workerActivity
         || `${part.slice || 'Whole job'}. ${part.pid ? `Process ${part.pid}${part.alive ? ' running' : ' stopped'}.` : 'Claimed.'}`;
       if (row.status === 'complete') doing = 'Evidence complete.';
-      if (row.status === 'checkpointed') {
-        doing = row.checkpoint && row.checkpoint.reason === 'stop'
-          ? 'Stopped. Checkpoint saved.'
-          : 'Paused at deadline.';
-      }
+      if (row.status === 'checkpointed') doing = checkpointTalk(row.checkpoint && row.checkpoint.reason).orch;
       if (row.status === 'blocked_no_worker') doing = 'No remaining provider usage.';
       crew.push({ role: 'Worker', name: part.label || part.modelId, doing });
     });
@@ -157,7 +150,10 @@ function normalizeModels(models) {
   return (Array.isArray(models) ? models : []).filter(item => item && typeof item.id === 'string').map(item => ({
     id: item.id,
     label: typeof item.label === 'string' && item.label.trim() ? item.label : item.id,
-    enabled: item.enabled === true,
+    enabled: item.enabled === true && item.available !== false,
+    available: item.available !== false,
+    unavailableReason: item.unavailableReason || null,
+    provider: item.provider,
     plan: typeof item.plan === 'string' && item.plan.trim() ? item.plan : 'Unnamed plan',
     kind: item.kind === 'premium' || item.kind === 'local' ? item.kind : 'default',
     cost: Number.isFinite(item.cost) && item.cost >= 0 ? item.cost : 1,
@@ -420,18 +416,36 @@ function pickAskedProject(snap, projectId, question) {
 
 function packState(snap, row) {
   const facts = row && row.facts ? row.facts : null;
+  const checkpoint = row && row.checkpoint ? {
+    reason: row.checkpoint.reason || null,
+    at: row.checkpoint.at || null,
+    path: row.checkpoint.path || null,
+    jobTitle: row.checkpoint.jobTitle || null,
+    plan: Array.isArray(row.checkpoint.plan) ? row.checkpoint.plan.slice(0, 12) : []
+  } : null;
   return {
     orchestrator: (snap && snap.orchestratorLabel) || ORCH_NAME,
     orchestratorId: snap && snap.orchestratorId,
     mode: snap && snap.mode,
+    grill: {
+      propose: snap && snap.grillPropose !== false,
+      kind: snap && snap.grillKind ? snap.grillKind : (snap && snap.grillPropose === false ? 'off' : 'me')
+    },
     focus: row ? {
       id: row.id,
       name: row.name,
       folder: row.folder || (facts && facts.folder) || null,
+      github: row.github || null,
+      repository: row.repository || null,
       status: row.status,
       label: row.label,
+      goal: row.goal || '',
+      state: row.stateArt || '',
+      open: Array.isArray(row.open) ? row.open.slice(0, 12) : [],
       analysis: row.analysis || '',
       job: row.jobTitle || null,
+      plan: Array.isArray(row.plan) ? row.plan.slice(0, 16) : [],
+      checkpoint,
       orchestratorDoing: row.orchestratorDoing || '',
       waitingFor: row.waitingFor || '',
       next: row.next || '',
@@ -453,7 +467,7 @@ function packState(snap, row) {
     } : null,
     others: (snap && Array.isArray(snap.projects) ? snap.projects : [])
       .filter(item => !row || item.id !== row.id)
-      .map(item => ({ id: item.id, name: item.name, status: item.status, job: item.jobTitle || null })),
+      .map(item => ({ id: item.id, name: item.name, folder: item.folder || null, github: item.github || null, repository: item.repository || null, status: item.status, job: item.jobTitle || null })),
     fleet: (snap && Array.isArray(snap.fleet) ? snap.fleet : []).map(item => ({
       id: item.id,
       label: item.label,
@@ -584,11 +598,37 @@ function looksLikeWork(question) {
   return /\b(implement(?:a|are)?|smista|dispatch|assign(?:a)? |metti i worker|dai il lavoro|do the (?:job|task|work)|fai (?:il |la )(?:job|task|lavoro)|fallo(?: fare)?|lavora(?:ci)?(?: su)?|procedi|esegui|costruisci|continua(?:re)?|continue\b|go ahead|vai avanti|fix (?:the |this )|sistema )\b/i.test(t);
 }
 
+function checkpointTalk(reason) {
+  const why = reason || 'deadline';
+  if (why === 'stop' || why === 'shutdown') {
+    return {
+      activity: 'Stopped. Checkpoint saved.',
+      note: 'Stopped. Checkpoint saved. Press Resume to continue.',
+      orch: 'Stopped. Checkpoint saved.',
+      doing: (name, title) => `Stopped ${name} · ${title}. Checkpoint saved.`
+    };
+  }
+  if (why === 'deadline') {
+    return {
+      activity: 'Deadline reached. Checkpoint saved.',
+      note: 'Deadline reached. Checkpoint saved. Resume next session.',
+      orch: 'Paused at deadline. Checkpoint saved.',
+      doing: (name, title) => `Deadline reached on ${name} · ${title}. Checkpoint saved.`
+    };
+  }
+  return {
+    activity: 'Job ended without completing. Checkpoint saved.',
+    note: `Job ended (${why}). Checkpoint saved. Press Resume to continue.`,
+    orch: 'Job ended without completing. Checkpoint saved.',
+    doing: (name, title) => `${name} · ${title} ended without completing (${why}). Checkpoint saved.`
+  };
+}
+
 function workOrderFor(row) {
   const status = row && row.status;
   if (status === 'watching') return 'watching';
   if (status === 'needs_approval') return 'approve';
-  if (status === 'checkpointed') return 'resume';
+  if (status === 'checkpointed' || (row && row.checkpoint && (status === 'failed' || status === 'blocked_no_worker'))) return 'resume';
   return 'start';
 }
 
@@ -625,6 +665,12 @@ function parseOrder(question, snap, projectId) {
   if (/\bgrill\b/i.test(ql) && /\b(off|disable|spegni|disattiva)\b/i.test(ql)) {
     return { action: 'grillPropose', enabled: false };
   }
+  if (/\bgrill with the docs\b/i.test(ql)) {
+    return { action: 'grillPropose', enabled: true, kind: 'docs' };
+  }
+  if (/\bgrill me\b/i.test(ql) && !/\bskip\b/i.test(ql)) {
+    return { action: 'grillPropose', enabled: true, kind: 'me' };
+  }
   if (/\bgrill\b/i.test(ql) && /\b(on|enable|accendi|attiva)\b/i.test(ql) && !named) {
     return { action: 'grillPropose', enabled: true };
   }
@@ -638,7 +684,7 @@ function parseOrder(question, snap, projectId) {
   if (wantsMode && /\b(manual|manuale)\b/i.test(ql)) {
     return { action: 'mode', mode: 'manual' };
   }
-  if (looksLikeWork(q) && !looksLikeQuestion(q)) {
+  if (looksLikeWork(q) && !looksLikeQuestion(q) && !/\b(do not|don't|non)\s+(implement|edit|write|implementare|modificare|scrivere)\b/i.test(q)) {
     const action = workOrderFor(row);
     return { action, projectId: row && row.id, name: row && row.name, work: true };
   }
@@ -688,6 +734,10 @@ function fleetOf(models, projects, leadId, plans) {
       plan: item.plan || '',
       kind: item.kind,
       enabled: Boolean(item.enabled),
+      available: item.available !== false,
+      unavailableReason: item.unavailableReason || null,
+      provider: item.provider || null,
+      cli: item.cli || null,
       exhausted,
       role: lead ? 'Lead' : (eligible ? 'Eligible' : 'Worker'),
       eligible,
@@ -704,7 +754,7 @@ function collectInterventions(projects) {
   (projects || []).forEach(row => {
     (row.log || []).forEach(line => {
       const text = String((line && line.text) || '');
-      if (/Switched from|No remaining worker|worker failed|stalled|\bstall\b|no verdict/i.test(text)) {
+      if (/Switched from|No remaining worker|worker failed|stalled|\bstall\b|no verdict|Checkpoint saved/i.test(text)) {
         items.push({ at: line.at, projectId: row.id, project: row.name, text });
       }
     });
@@ -903,6 +953,18 @@ function emptyEntry() {
   };
 }
 
+function jobFingerprint(job) {
+  return crypto.createHash('sha256').update(JSON.stringify([job.id, job.title, job.detail, job.revision_id || null])).digest('hex');
+}
+function checkpointMatches(checkpoint, job) {
+  if (!checkpoint || !job) return false;
+  if (checkpoint.jobId && checkpoint.jobId !== job.id) return false;
+  if (checkpoint.jobFingerprint) return checkpoint.jobFingerprint === jobFingerprint(job);
+  if (checkpoint.jobTitle && checkpoint.jobTitle !== job.title) return false;
+  if (typeof checkpoint.detail === 'string' && checkpoint.detail !== job.detail) return false;
+  return true;
+}
+
 function createOrchestrator(options) {
   const opts = options && typeof options === 'object' ? options : {};
   if (typeof opts.readPlan !== 'function') throw new Error('orchestrator requires readPlan');
@@ -911,10 +973,11 @@ function createOrchestrator(options) {
   const sentinel = opts.sentinel || null;
   const models = Array.isArray(opts.models) ? opts.models : [];
   const inspect = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
+  const readRepository = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
   const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
   const dir = typeof opts.dir === 'string' && opts.dir.trim() ? opts.dir : null;
   const stateFile = dir ? path.join(dir, 'orchestrator.json') : null;
-  let store = { mode: 'manual', grillPropose: true, usage: {}, enabled: {}, projects: {}, asks: [], orchestratorId: null };
+  let store = { mode: 'manual', grillPropose: true, grillKind: 'me', usage: {}, enabled: {}, projects: {}, asks: [], orchestratorId: null };
   let thinkingLive = null;
   let askToken = 0;
   let plansLive = emptyPlans();
@@ -929,9 +992,15 @@ function createOrchestrator(options) {
         store = {
           mode: parsed.mode === 'auto' ? 'auto' : 'manual',
           grillPropose: parsed.grillPropose === false ? false : true,
+          grillKind: parsed.grillKind === 'docs' ? 'docs' : (parsed.grillPropose === false || parsed.grillKind === 'off' ? 'off' : 'me'),
           usage: parsed.usage && typeof parsed.usage === 'object' ? parsed.usage : {},
           enabled: parsed.enabled && typeof parsed.enabled === 'object' ? parsed.enabled : {},
-          projects: parsed.projects && typeof parsed.projects === 'object' ? parsed.projects : {},
+          projects: parsed.projects && typeof parsed.projects === 'object'
+            ? Object.fromEntries(Object.entries(parsed.projects).map(([id, row]) => [
+              id,
+              row && typeof row === 'object' ? { ...emptyEntry(), ...row } : emptyEntry()
+            ]))
+            : {},
           asks: Array.isArray(parsed.asks) ? parsed.asks : [],
           orchestratorId: typeof parsed.orchestratorId === 'string' && parsed.orchestratorId.trim() ? parsed.orchestratorId : null
         };
@@ -997,6 +1066,86 @@ function createOrchestrator(options) {
     row.workerAlive = false;
   }
 
+  function checkpointFile(id) {
+    return dir ? path.join(dir, 'checkpoints', `${id}.json`) : null;
+  }
+
+  function readCheckpointFile(id) {
+    const file = checkpointFile(id);
+    if (!file) return null;
+    try {
+      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!parsed || typeof parsed !== 'object') return null;
+      return { ...parsed, path: file, projectId: parsed.projectId || id };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function paintCheckpoint(row, name, title) {
+    const talk = checkpointTalk(row.checkpoint && row.checkpoint.reason);
+    const jobTitle = title || (row.checkpoint && row.checkpoint.jobTitle) || row.jobTitle || 'job';
+    row.status = 'checkpointed';
+    row.doing = talk.doing(name || 'project', jobTitle);
+    row.waitingFor = 'Resume from checkpoint';
+    row.next = 'Press Resume to continue from the checkpoint.';
+    row.orchestratorDoing = talk.orch;
+    row.workerAlive = false;
+    row.workerActivity = talk.activity;
+    row.workerLabel = null;
+    row.watchingSince = null;
+    return row.checkpoint;
+  }
+
+  function hydrateCheckpoints() {
+    if (!dir) return;
+    const folder = path.join(dir, 'checkpoints');
+    let names = [];
+    try { names = fs.readdirSync(folder); } catch (_) { names = []; }
+    const ids = new Set(Object.keys(store.projects || {}));
+    names.forEach(name => {
+      if (name.endsWith('.json')) ids.add(name.slice(0, -5));
+    });
+    let restored = false;
+    ids.forEach(id => {
+      const row = entry(id);
+      const disk = readCheckpointFile(id);
+      if (!row.checkpoint && disk) {
+        row.checkpoint = disk;
+        restored = true;
+      } else if (row.checkpoint && disk && !row.checkpoint.path) {
+        row.checkpoint.path = disk.path;
+        restored = true;
+      }
+      if (row.checkpoint && !row.resumeRequested && row.status !== 'watching' && row.status !== 'complete' && row.status !== 'needs_approval') {
+        paintCheckpoint(row, id, row.checkpoint.jobTitle);
+        restored = true;
+      }
+    });
+    if (restored) persist();
+  }
+
+  hydrateCheckpoints();
+
+  function liveAttempt(id, job) {
+    return attempts.getActiveAttempt({ projectId: id, taskId: job && job.id })
+      || attempts.getActiveAttempt({ projectId: id });
+  }
+
+  function holdSavedCheckpoint(item, job) {
+    const id = item.project.id;
+    const row = entry(id);
+    if (!row.checkpoint) {
+      const disk = readCheckpointFile(id);
+      if (disk && checkpointMatches(disk, job)) row.checkpoint = disk;
+    }
+    if (row.checkpoint && !checkpointMatches(row.checkpoint, job)) row.checkpoint = null;
+    if (!row.checkpoint || row.resumeRequested) return false;
+    if (liveAttempt(id, job)) return false;
+    paintCheckpoint(row, item.project.name, (job && job.title) || row.checkpoint.jobTitle);
+    return true;
+  }
+
   function writeCheckpoint(id, item, job, facts, reason) {
     const row = entry(id);
     const why = reason || 'deadline';
@@ -1005,6 +1154,7 @@ function createOrchestrator(options) {
       at: now(),
       projectId: id,
       jobId: job && job.id,
+      jobFingerprint: job ? jobFingerprint(job) : null,
       jobTitle: job && job.title,
       detail: job && job.detail,
       facts: facts || row.facts,
@@ -1013,11 +1163,13 @@ function createOrchestrator(options) {
       reason: why,
       deadlineAt: job && job.deadlineAt || null
     };
-    let file = null;
-    if (dir) {
-      file = path.join(dir, 'checkpoints', `${id}.json`);
+    const file = checkpointFile(id);
+    if (file) {
       fs.mkdirSync(path.dirname(file), { recursive: true });
-      fs.writeFileSync(file, JSON.stringify(payload, null, 2) + '\n', 'utf8');
+      const temporary = file + '.' + crypto.randomUUID() + '.tmp';
+      const fd = fs.openSync(temporary, 'wx');
+      try { fs.writeFileSync(fd, JSON.stringify(payload, null, 2) + '\n', 'utf8'); fs.fsyncSync(fd); } finally { fs.closeSync(fd); }
+      fs.renameSync(temporary, file);
     }
     row.checkpoint = { ...payload, path: file };
     const live = attempts.getActiveAttempt({ projectId: id, taskId: job && job.id })
@@ -1030,11 +1182,16 @@ function createOrchestrator(options) {
     row.approved = false;
     row.resumeRequested = false;
     row.watchingSince = null;
-    row.workerActivity = why === 'stop' ? 'Stopped. Checkpoint saved.' : 'Deadline reached. Checkpoint saved.';
-    note(id, why === 'stop'
-      ? 'Stopped. Checkpoint saved. Press Resume to continue.'
-      : 'Deadline reached. Checkpoint saved. Resume next session.');
+    const talk = checkpointTalk(why);
+    row.workerActivity = talk.activity;
+    note(id, talk.note);
     return row.checkpoint;
+  }
+
+  function applyCheckpoint(id, item, job, facts, reason) {
+    const row = entry(id);
+    writeCheckpoint(id, item, job, facts, reason);
+    return paintCheckpoint(row, item.project.name, (job && job.title) || 'job');
   }
 
   function markProgress(row, facts) {
@@ -1160,8 +1317,17 @@ function createOrchestrator(options) {
           const launched = opts.spawnWorker({
             folder: item.project.folder,
             resultPath: part.resultPath,
-            job: { title: job.title, detail: [job.detail, `Slice: ${part.slice}`].filter(Boolean).join('\n\n') },
-            worker: { id: part.modelId, label: part.label },
+            job: {
+              title: job.title,
+              detail: [
+                job.detail,
+                `Slice: ${part.slice}`,
+                row.checkpoint && row.checkpoint.path
+                  ? `Resume from checkpoint ${row.checkpoint.path} (${row.checkpoint.reason || 'saved'} at ${row.checkpoint.at || 'unknown'}).${Array.isArray(row.checkpoint.plan) && row.checkpoint.plan.length ? `\n${row.checkpoint.plan.join('\n')}` : ''}`
+                  : ''
+              ].filter(Boolean).join('\n\n')
+            },
+            worker: roster().find(model => model.id === part.modelId) || { id: part.modelId, label: part.label },
             attemptId: `${claimed.attempt.id}-s${index + 1}`,
             logPath: part.logPath,
             slice: part.slice
@@ -1207,14 +1373,8 @@ function createOrchestrator(options) {
     row.attemptId = null;
     const next = pickWorker(roster(), { job, usage: store.usage, facts, skip: row.tried, plans: plansLive });
     if (!next) {
-      row.status = 'blocked_no_worker';
-      row.doing = `No remaining worker after ${reason || 'stall'}. Tried ${(row.tried || []).join(', ') || 'none'}.`;
-      row.waitingFor = 'An enabled model whose provider still has usage';
-      row.next = 'Turn another model on, or Auto start again.';
-      row.workerLabel = null;
-      row.approved = false;
-      row.watchingSince = null;
       note(id, `Stopped. No remaining worker after ${reason || 'stall'}.`);
+      applyCheckpoint(id, item, job, facts, reason || 'failed');
       return false;
     }
     const replacements = pickWorkers(roster(), { job, usage: store.usage, facts, skip: row.tried, plans: plansLive });
@@ -1238,7 +1398,7 @@ function createOrchestrator(options) {
 
   function roster() {
     return normalizeModels(models).map(item => {
-      if (typeof store.enabled[item.id] === 'boolean') item.enabled = store.enabled[item.id];
+      if (typeof store.enabled[item.id] === 'boolean') item.enabled = store.enabled[item.id] && item.available !== false;
       const used = usedOf(store.usage, item.id);
       return { ...item, used, remaining: Math.max(0, item.limit - used) };
     });
@@ -1251,6 +1411,7 @@ function createOrchestrator(options) {
       updatedAt: now(),
       mode: store.mode === 'auto' ? 'auto' : 'manual',
       grillPropose: store.grillPropose !== false,
+      grillKind: store.grillPropose === false ? 'off' : (store.grillKind === 'docs' ? 'docs' : 'me'),
       models: roster(),
       asks: clone(store.asks || []),
       thinking: thinkingLive ? clone(thinkingLive) : null,
@@ -1266,6 +1427,11 @@ function createOrchestrator(options) {
           id: item.project.id,
           name: item.project.name,
           folder: item.project.folder || null,
+          github: item.project.github || null,
+          repository: row.repository && row.repository.folder === (item.project.folder || null) && row.repository.github === (item.project.github || null) ? clone(row.repository) : null,
+          goal: latest && latest.direction ? latest.direction : '',
+          stateArt: latest && latest.state ? latest.state : '',
+          open: clone((latest && latest.open) || []),
           status: row.status,
           label: LABELS[row.status] || row.status,
           doing: row.doing,
@@ -1285,7 +1451,7 @@ function createOrchestrator(options) {
           watchingSince: row.watchingSince || null,
           approved: Boolean(row.approved),
           canStart: true,
-          canResume: Boolean(row.checkpoint && (item.tasks || []).some(task => task.status === 'running')),
+          canResume: Boolean(row.checkpoint && (item.tasks || []).some(task => task.status === 'running' && checkpointMatches(row.checkpoint, task))),
           canStop: Boolean(
             row.status === 'watching'
             && (item.tasks || []).some(task => task.status === 'running')
@@ -1356,16 +1522,24 @@ function createOrchestrator(options) {
     const stallMs = Number.isFinite(opts.stallMs) && opts.stallMs >= 0 ? opts.stallMs : 90 * 1000;
     const worker = pickWorker(roster(), { job, usage: store.usage, facts: row.facts, skip: row.tried, plans: plansLive });
 
-    if (job && row.jobId && row.jobId !== job.id) {
+    if (job && row.jobId && (row.jobId !== job.id || (row.jobFingerprint && row.jobFingerprint !== jobFingerprint(job)))) {
       row.approved = false;
       row.holdApproval = false;
       row.attemptId = null;
       row.modelId = null;
       row.plan = [];
+      row.dispatch = [];
+      row.tried = [];
+      row.resumeRequested = false;
       note(id, 'Job changed. Approval reset.');
     }
     row.jobId = job ? job.id : null;
+    row.jobFingerprint = job ? jobFingerprint(job) : null;
     row.jobTitle = job ? job.title : null;
+    row.jobDetail = job ? job.detail : null;
+    row.jobRevisionId = job ? job.revision_id : null;
+
+    if (job && holdSavedCheckpoint(item, job)) return row;
 
     if (!job) {
       const leftover = attempts.getActiveAttempt({ projectId: id });
@@ -1430,11 +1604,11 @@ function createOrchestrator(options) {
       row.status = 'idle';
       row.doing = row.pendingAutoStart
         ? `Auto start is waiting to plan ${item.project.name} after grill.`
-        : `No job on ${item.project.name}. Auto start to check the project${store.grillPropose !== false ? ', propose grill if it was never done,' : ''} then approve the plan.`;
+        : `No job on ${item.project.name}. Auto start to check the project${store.grillPropose !== false ? ', grill if Grill me or Grill with the docs is on,' : ''} then approve the plan.`;
       row.waitingFor = 'Auto start';
       row.next = store.grillPropose !== false
-        ? 'Auto start. Grill me or Grill with the docs is proposed if it is still on.'
-        : 'Auto start to check the project, then plan.';
+        ? 'Grill me or Grill with the docs starts the orchestrator with that grill. Auto start skips grill when both are off.'
+        : 'Auto start skips grill. Turn Grill me or Grill with the docs on to grill first.';
       row.workerLabel = null;
       row.attemptId = null;
       row.watchingSince = null;
@@ -1484,15 +1658,6 @@ function createOrchestrator(options) {
     if (store.mode === 'auto' && !row.holdApproval) row.approved = true;
 
     const deadlineDue = job.timing === 'deadline' && job.deadlineAt && Date.parse(now()) >= Date.parse(job.deadlineAt) && !row.deadlineHonored;
-    if (row.checkpoint && !row.resumeRequested && !active) {
-      row.status = 'checkpointed';
-      row.doing = `Deadline checkpoint on ${item.project.name} · ${job.title}. Resume next session from the saved checkpoint.`;
-      row.waitingFor = 'Resume from checkpoint';
-      row.next = 'Resume from checkpoint to continue the job.';
-      row.workerLabel = null;
-      row.watchingSince = null;
-      return row;
-    }
     if (!row.approved) {
       row.status = 'needs_approval';
       const who = row.dispatch.length > 1
@@ -1506,11 +1671,7 @@ function createOrchestrator(options) {
       return row;
     }
     if (deadlineDue && !active) {
-      writeCheckpoint(id, item, job, facts, 'deadline');
-      row.status = 'checkpointed';
-      row.doing = `Deadline reached on ${item.project.name} before a worker claimed the job. Checkpoint saved.`;
-      row.waitingFor = 'Resume from checkpoint';
-      row.next = 'Resume from checkpoint to continue the job.';
+      applyCheckpoint(id, item, job, facts, 'deadline');
       row.workerLabel = null;
       return row;
     }
@@ -1544,11 +1705,7 @@ function createOrchestrator(options) {
     }
     const modelName = (roster().find(itemModel => itemModel.id === row.modelId) || {}).label || row.modelId || (worker && worker.label);
     if (deadlineDue) {
-      writeCheckpoint(id, item, job, facts, 'deadline');
-      row.status = 'checkpointed';
-      row.doing = `Deadline reached on ${item.project.name} · ${job.title}. Output was not complete. Checkpoint saved.`;
-      row.waitingFor = 'Resume from checkpoint';
-      row.next = 'Resume from checkpoint next session.';
+      applyCheckpoint(id, item, job, facts, 'deadline');
       row.workerLabel = modelName;
       return row;
     }
@@ -1579,15 +1736,7 @@ function createOrchestrator(options) {
         markProgress(row, facts);
         refreshActivity(row, facts);
       } else {
-        if (row.status !== 'blocked_no_worker') {
-          row.status = 'failed';
-          row.doing = `Watch stopped for ${job.title}: ${reason}.`;
-          row.waitingFor = 'A new run';
-          row.next = 'Read the worker log, then Auto start again.';
-          row.approved = false;
-          row.watchingSince = null;
-          row.workerAlive = false;
-        }
+        if (row.status !== 'checkpointed') applyCheckpoint(id, item, job, facts, reason);
         return row;
       }
     }
@@ -1610,10 +1759,11 @@ function createOrchestrator(options) {
     return row;
   }
 
+  let shuttingDown = false;
   async function tick() {
     await refreshPlans(false);
     const plan = await opts.readPlan();
-    for (const item of notebookProjects(plan)) decide(item);
+    if (!shuttingDown) for (const item of notebookProjects(plan)) decide(item);
     persist();
     return snapshot(plan);
   }
@@ -1624,8 +1774,11 @@ function createOrchestrator(options) {
     return tick();
   }
 
-  async function setGrillPropose(enabled) {
+  async function setGrillPropose(enabled, kind) {
     store.grillPropose = enabled !== false;
+    if (!store.grillPropose) store.grillKind = 'off';
+    else if (kind === 'docs' || kind === 'me') store.grillKind = kind;
+    else if (store.grillKind === 'off' || !store.grillKind) store.grillKind = 'me';
     persist();
     return tick();
   }
@@ -1656,7 +1809,7 @@ function createOrchestrator(options) {
       return { ok: true, snapshot };
     }
     if (order.action === 'grillPropose') {
-      const snapshot = await setGrillPropose(order.enabled);
+      const snapshot = await setGrillPropose(order.enabled, order.kind);
       return { ok: true, snapshot };
     }
     if (!order.projectId) return { ok: false, reason: 'project not found' };
@@ -1737,7 +1890,8 @@ function createOrchestrator(options) {
       } else if (acted.ok && order.action === 'mode') {
         answer = `${who}: mode is now ${order.mode === 'auto' ? 'Automatic' : 'Manual'}.`;
       } else if (acted.ok && order.action === 'grillPropose') {
-        answer = `${who}: Grill on Auto start is now ${order.enabled ? 'on' : 'off'}.`;
+        const kind = order.kind === 'docs' ? 'Grill with the docs' : (order.kind === 'me' ? 'Grill me' : 'Grill');
+        answer = `${who}: ${kind} is now ${order.enabled ? 'on' : 'off'}. The orchestrator skips grill when both are off.`;
       } else if (acted.ok && order.action === 'start') {
         const phase = acted.phase === 'grill'
           ? 'Grill first, then workers can start'
@@ -1764,9 +1918,17 @@ function createOrchestrator(options) {
       }
     } else {
       const row = pickAskedProject(snap, projectId, q);
+      if (row) {
+        const inspected = await inspectRepository(row.id);
+        if (token !== askToken) return finishCancelled();
+        if (inspected.ok) {
+          snap = inspected.snapshot;
+          Object.assign(row, snap.projects.find(item => item.id === row.id));
+        }
+      }
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
-      const history = (store.asks || []).slice(0, 8).slice().reverse().map(turn => ({
+      const history = (store.asks || []).slice(0, 16).slice().reverse().map(turn => ({
         user: turn.question,
         orchestrator: turn.answer
       }));
@@ -1789,6 +1951,7 @@ function createOrchestrator(options) {
             model: lead,
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
+            github: row && row.github || null,
             state: Object.assign({}, packState(snap, row), { history }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
@@ -1816,7 +1979,7 @@ function createOrchestrator(options) {
           thinking = unpacked.thinking;
           ms = unpacked.ms;
           if (unpacked.answer) answer = unpacked.answer;
-          else answer = `${lead.label} returned no answer. The grok CLI in the project folder produced nothing.`;
+          else answer = `${lead.label} returned no answer. The provider CLI in the project folder produced nothing.`;
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
@@ -1876,6 +2039,9 @@ function createOrchestrator(options) {
 
   async function setModelEnabled(id, enabled) {
     if (typeof id !== 'string' || !id.trim()) return { ok: false, reason: 'invalid data' };
+    const model = roster().find(item => item.id === id);
+    if (!model) return { ok: false, reason: 'model not present' };
+    if (enabled && !model.available) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
     store.enabled[id] = Boolean(enabled);
     persist();
     return { ok: true, snapshot: await tick() };
@@ -1988,7 +2154,7 @@ function createOrchestrator(options) {
     const open = latest && Array.isArray(latest.open) ? latest.open : [];
     const genericOpen = Plan.isGenericFrontier(open);
     const liveOpen = open.length && !genericOpen;
-    const sessionGrill = store.grillPropose !== false && !row.grillSkipped;
+    const sessionGrill = store.grillPropose !== false && store.grillKind !== 'off' && !row.grillSkipped;
     if (liveOpen) {
       note(projectId, 'Auto start: waiting on Matt grilling answers.');
       persist();
@@ -1997,7 +2163,9 @@ function createOrchestrator(options) {
     }
     if (sessionGrill && !row.grillAsked) {
       const docs = collectDocs(facts);
-      const kind = docs.length ? 'docs' : 'me';
+      const wanted = store.grillKind === 'docs' || store.grillKind === 'me' ? store.grillKind : null;
+      if (wanted === 'docs' && !docs.length) return { ok: false, reason: 'No docs in the folder to grill with' };
+      const kind = wanted === 'me' ? 'me' : (wanted === 'docs' || docs.length ? 'docs' : 'me');
       const questions = await composeGrillRound(item, facts, kind);
       row.grillAsked = true;
       note(projectId, `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
@@ -2034,7 +2202,18 @@ function createOrchestrator(options) {
     if (!item) return { ok: false, reason: 'project not found' };
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
     const row = entry(projectId);
+    if (!row.checkpoint) {
+      const disk = readCheckpointFile(projectId);
+      if (disk) row.checkpoint = disk;
+    }
     if (!row.checkpoint) return { ok: false, reason: 'no checkpoint' };
+    if (!item.tasks.some(task => task.status === 'running' && checkpointMatches(row.checkpoint, task))) return { ok: false, reason: 'checkpoint belongs to a different job' };
+    killDispatch(row);
+    row.dispatch = [];
+    row.tried = [];
+    row.attemptId = null;
+    row.modelId = null;
+    row.workerLog = null;
     row.resumeRequested = true;
     if (row.checkpoint.reason === 'deadline') row.deadlineHonored = true;
     row.approved = true;
@@ -2054,13 +2233,33 @@ function createOrchestrator(options) {
     const row = entry(projectId);
     if (row.status !== 'watching') return { ok: false, reason: 'nothing to stop' };
     const facts = item.project.folder ? inspect(item.project.folder) : (row.facts || {});
-    writeCheckpoint(projectId, item, job, facts && !facts.error ? facts : row.facts, 'stop');
-    row.status = 'checkpointed';
-    row.doing = `Stopped ${item.project.name} · ${job.title}. Checkpoint saved.`;
-    row.waitingFor = 'Resume from checkpoint';
-    row.next = 'Press Resume to continue the job.';
+    applyCheckpoint(projectId, item, job, facts && !facts.error ? facts : row.facts, 'stop');
     persist();
     return { ok: true, snapshot: await tick() };
+  }
+
+  async function shutdown() {
+    shuttingDown = true;
+    askToken += 1;
+    thinkingLive = null;
+    if (typeof opts.abortAsk === 'function') opts.abortAsk();
+    const watching = Object.entries(store.projects).filter(([, row]) => row.status === 'watching');
+    if (!watching.length) { persist(); return; }
+    let plan;
+    try { plan = await opts.readPlan(); }
+    catch (_) {
+      // Preserve the last known job even when the notebook becomes unreadable during shutdown.
+      plan = { schema: 2, projects: watching.map(([id, row]) => ({
+        project: { id, name: id },
+        tasks: [{ id: row.jobId, title: row.jobTitle, detail: row.jobDetail, revision_id: row.jobRevisionId, status: 'running' }]
+      })) };
+    }
+    for (const item of notebookProjects(plan)) {
+      const row = entry(item.project.id);
+      const job = (item.tasks || []).find(task => task.status === 'running');
+      if (job && row.status === 'watching') applyCheckpoint(item.project.id, item, job, row.facts, 'shutdown');
+    }
+    persist();
   }
 
   function pidFor(attempt) {
@@ -2074,7 +2273,19 @@ function createOrchestrator(options) {
     return null;
   }
 
-  return { tick, approve, startAutoTask, resume, stop, setMode, setGrillPropose, skipGrill, docsFor, setModelEnabled, setOrchestrator, ask, abortAsk, pidFor, snapshot: async () => snapshot(await opts.readPlan()) };
+  async function inspectRepository(projectId, options) {
+    const plan = await opts.readPlan();
+    const item = notebookProjects(plan).find(item => item.project.id === projectId);
+    if (!item) return { ok: false, reason: 'project not found' };
+    const repository = await readRepository(item.project, options);
+    const row = entry(projectId);
+    row.repository = repository;
+    if (item.project.folder) row.facts = inspect(item.project.folder);
+    persist();
+    return { ok: true, repository, snapshot: snapshot(plan) };
+  }
+
+  return { tick, shutdown, approve, startAutoTask, resume, stop, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setOrchestrator, ask, abortAsk, pidFor, snapshot: async () => snapshot(await opts.readPlan()) };
 }
 
 module.exports = { createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

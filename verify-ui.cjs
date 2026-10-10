@@ -30,10 +30,10 @@ async function openApp() {
       }
     },
     fetch: async (url, options) => {
-      if (url === '/api/plan') return { ok: !disk.failLoad, json: async () => disk.failLoad ? { error: 'File non leggibile.' } : { plan: copy(disk.plan), version: disk.version } };
+      if (url === '/api/plan') return { ok: !disk.failLoad, json: async () => disk.failLoad ? { error: 'File unreadable.' } : { plan: copy(disk.plan), version: disk.version } };
       const input = JSON.parse(options.body);
       assert.equal(input.version, disk.version);
-      if (disk.failSave) return { ok: false, json: async () => ({ error: 'Disco non disponibile.' }) };
+      if (disk.failSave) return { ok: false, json: async () => ({ error: 'Disk unavailable.' }) };
       try {
         const field = { '/api/revisions': 'draft', '/api/grill': 'round', '/api/import': 'json', '/api/tasks': 'task' }[url];
         const operation = { draft: Planwharf.appendRevision, round: Planwharf.grill, json: Planwharf.importRevision, task: Planwharf.createTask }[field];
@@ -55,12 +55,12 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   const app = await openApp();
   assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
   assert.ok(app.node('changes-content').innerHTML.toLowerCase().includes('nothing new'));
-  assert.equal(app.node('changes-content').innerHTML.includes('via del Porto'), false);
+  assert.equal(app.node('changes-content').innerHTML.includes('Harbor Street'), false);
   assert.ok(app.node('project-select').innerHTML.includes('orto'));
   assert.equal(app.node('task-content').innerHTML, '');
   selectRevision(app, 1);
   app.node('new-revision').listeners.click();
-  assert.ok(app.form.elements.state.value.includes('Scelta la sede'));
+  assert.ok(app.form.elements.state.value.includes('Harbor Street selected'));
   app.form.elements.title.value = 'Turni confermati';
   app.form.elements.state.value = 'Quattro volontari confermati.';
   disk.failSave = true;
@@ -81,7 +81,7 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   assert.ok(app.node('grill-context').textContent.includes('R3'));
   for (const question of current.open) assert.ok(app.node('grill-questions').innerHTML.includes(question));
   for (const decision of current.closed) assert.equal(app.node('grill-questions').innerHTML.includes(decision), false);
-  assert.equal(app.node('grill-questions').innerHTML.includes('Quale locale scegliamo?'), false);
+  assert.equal(app.node('grill-questions').innerHTML.includes('Which location should we choose?'), false);
   const grillForm = app.node('grill-form');
   grillForm.elements['action-0'] = { value: 'close' };
   grillForm.elements['answer-0'] = { value: 'Il primo turno sarà di Marta.' };

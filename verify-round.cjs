@@ -84,7 +84,7 @@ async function stop(server) { await new Promise(resolve => server.close(resolve)
   const beforeRejected = await fs.readFile(file, 'utf8');
   response = await send('/api/tasks', 'orto', 'task', { title: 'Secondo task', detail: '', revision_id: 2 });
   assert.equal(response.status, 400);
-  assert.ok((await response.json()).error.includes('già un task'));
+  assert.ok((await response.json()).error.includes('already has a running task'));
   assert.equal(await fs.readFile(file, 'utf8'), beforeRejected);
   for (const invalid of ['{', '{}', JSON.stringify({ ...ortoDraft, mode: 'chat' }), JSON.stringify({ ...ortoDraft, closed: 'non array' })]) {
     response = await send('/api/import', 'orto', 'json', invalid);

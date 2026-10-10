@@ -7,7 +7,7 @@ const originalSnapshot = JSON.stringify(original);
 assert.equal(Plan.validate(original), true);
 assert.equal(original.revisions.length, 2);
 assert.ok(Plan.diff(original.revisions[0], original.revisions[1]).length > 0);
-const draft = { ...original.revisions[1], title: 'Turni confermati', state: 'Calendario completato; quattro volontari confermati.', closed: [...original.revisions[1].closed, 'Apertura il sabato mattina.'], open: ['Chi segue il primo turno di apertura?'] };
+const draft = { ...original.revisions[1], title: 'Turni confermati', state: 'Calendario completato; quattro volontari confermati.', closed: [...original.revisions[1].closed, 'Apertura il sabato mattina.'], open: ['Who covers the first opening shift?'] };
 const updated = Plan.appendRevision(original, draft, '2026-10-08T08:00:00Z');
 assert.equal(updated.revisions.length, 3);
 assert.equal(updated.revisions[2].id, 3);

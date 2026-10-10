@@ -21,13 +21,13 @@ assert.equal(isProcessAlive(process.pid), true);
 assert.equal(isProcessAlive(99999999), false);
 assert.equal(killWorker(99999999), false);
 assert.equal(abortAsk(), false);
-assert.equal(cliModelOf({ id: 'gpt-6-astra', cli: 'grok-4.7' }), 'grok-4.7');
-assert.equal(cliModelOf({ id: 'gpt-6-astra' }), 'grok-4.7');
+assert.equal(cliModelOf({ id: 'gpt-6-astra', cli: 'grok-4.7' }), null);
+assert.equal(cliModelOf({ id: 'gpt-6-astra' }), null);
 const spoken = askPrompt({
   question: 'How far did we go with RaceEngineer?',
   folder: 'D:\\benit\\Desktop\\Projects\\RaceEngineer',
   model: { id: 'gpt-6-astra', label: 'GPT-6 Astra' },
-  state: { focus: { name: 'RaceEngineer', folder: 'D:\\benit\\Desktop\\Projects\\RaceEngineer' } }
+  state: { focus: { name: 'RaceEngineer', folder: 'D:\\benit\\Desktop\\Projects\\RaceEngineer', goal: 'Local race telemetry', open: ['Which car?'], checkpoint: { reason: 'stop', path: 'x.json' } } }
 });
 assert.match(spoken, /GPT-6 Astra/);
 assert.match(spoken, /RaceEngineer/);
@@ -35,6 +35,9 @@ assert.match(spoken, /Project folder/);
 assert.match(spoken, /Do not recite STATUS/);
 assert.doesNotMatch(spoken, /Answer ONLY the user question from LIVE STATE/);
 assert.match(spoken, /thinking/);
+assert.match(spoken, /Local race telemetry/);
+assert.match(spoken, /Which car/);
+assert.match(spoken, /checkpoint/);
 const stream = createAskStream();
 stream.push('{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"I will inspect git.\\n"}}}\n');
 stream.push('{"type":"stream_event","event":{"delta":{"type":"text_delta","text":"RaceEngineer is a local prototype."}}}\n');
@@ -54,10 +57,13 @@ assert.equal(dropThinkingPrefix('I will inspect git.\nDone.', 'I will inspect gi
 assert.match(askPrompt({ question: 'How far?', folder: 'D:\\x', model: { label: 'Astra' }, state: {} }), /Do not start the answer with I will inspect/);
 assert.match(spoken, /You coordinate/);
 assert.match(spoken, /never edit/);
+assert.match(spoken, /full local tool access, network access/);
+assert.match(spoken, /private GitHub repositories/);
+assert.doesNotMatch(spoken, /Stay inside it\. Read only/);
 assert.doesNotMatch(spoken, /unless they explicitly order a change/);
-const cliArgs = askCliArgs({ question: 'How far?', folder: 'D:\\x', model: { id: 'gpt-6-astra', cli: 'grok-4.7' } }).args;
-assert.equal(cliArgs.includes('--always-approve'), false);
-assert.ok(cliArgs.includes('plan'));
+const cliArgs = askCliArgs({ question: 'How far?', folder: 'D:\\x', model: { id: 'grok', provider: 'grok', cli: 'grok-4.6' } }).args;
+assert.equal(cliArgs.includes('--always-approve'), true);
+assert.ok(cliArgs.includes('auto'));
 assert.ok(cliArgs.includes('--no-subagents'));
 assert.equal(cliArgs[cliArgs.indexOf('--max-turns') + 1], '8');
 console.log('OK: runner args, prompt, result patch, pid check.');

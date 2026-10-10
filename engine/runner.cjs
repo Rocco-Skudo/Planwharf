@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
+const { launchSpec } = require('./providers.cjs');
 
 function which(cmd) {
   const pathEnv = process.env.PATH || '';
@@ -45,6 +46,7 @@ function parseArgs(argv) {
     else if (token === '--detail') opts.detail = args[++i] || '';
     else if (token === '--worker') opts.worker = args[++i] || '';
     else if (token === '--attempt') opts.attempt = args[++i] || '';
+    else if (token === '--model-json') opts.model = JSON.parse(args[++i]);
     else if (token === '--slice') opts.slice = args[++i] || '';
     else throw new Error('Unknown argument: ' + token);
   }
@@ -117,33 +119,28 @@ function killWorker(pid) {
 
 function cliModelOf(model) {
   if (!model || typeof model !== 'object') return null;
-  if (typeof model.cli === 'string' && model.cli.trim()) return model.cli.trim();
-  const id = String(model.id || '');
-  const map = {
-    grok: 'grok-4.7',
-    'gpt-6-astra': 'grok-4.7',
-    'gpt-5.5': 'grok-4.7',
-    'grok-4-20': 'grok-4.6',
-    'gpt-5': 'grok-4.6',
-    gemini: 'grok-4.6',
-    'grok-build': 'grok-4.7-build-fast',
-    'grok-fast': 'grok-4.7-build-fast',
-    luna: 'grok-4.7-build-fast',
-    'gpt-5-mini': 'grok-4.7-build-fast',
-    'gemini-flash': 'grok-4.7-build-fast'
-  };
-  return map[id] || null;
+  if (typeof model.cli === 'string' && model.cli.trim()) {
+    const provider = model.provider || (String(model.id || '').startsWith('grok') ? 'grok' : '');
+    const prefix = { grok: /^grok-/, codex: /^gpt-/, antigravity: /^(gemini-|claude-|gpt-oss-)/ }[provider];
+    return prefix && prefix.test(model.cli) ? model.cli.trim() : null;
+  }
+  return null;
 }
 
 function askPrompt(info) {
   const model = info && info.model && (info.model.label || info.model.id) ? (info.model.label || info.model.id) : 'orchestrator';
   const folder = info && typeof info.folder === 'string' && info.folder.trim() ? info.folder.trim() : '';
   const focus = info && info.state && info.state.focus ? info.state.focus.name : '';
+  const github = info && (info.github || info.state?.focus?.github) || '';
   return [
     `You are ${model}, the Planwharf orchestrator lead.`,
     'You coordinate. You do not implement. Workers write code, tests, and files. You never edit the project, never apply patches, never run the job yourself, never spawn subagents that change the repo.',
-    'The user is talking to you in the command chat. Read-only inspect is allowed: git log/status, README, tests, worker logs. That is so you can brief them and decide what to dispatch.',
-    folder ? `Project folder: ${folder}. Stay inside it. Read only.` : 'No project folder is linked. Say that, then use only the briefing.',
+    'You have full local tool access, network access and noninteractive CLI permissions. Use them to inspect the linked project files, git history, diffs, worker logs and GitHub repository. The coordinator role is a responsibility, not a filesystem or network restriction.',
+    'Use the existing gh login for private GitHub repositories (gh api / gh repo view / gh api contents). Git can use it with -c credential.helper= -c "credential.helper=!gh auth git-credential". Never print tokens or copy credentials into prompts, files or logs.',
+    'Fetching git objects and updating inspection refs is allowed. Do not implement the job yourself. Do not push, merge, reset, checkout or overwrite work unless that specific action is requested. Report authentication or access failures precisely; do not claim a linked repo is unreadable without checking.',
+    folder ? `Project folder: ${folder}. Inspect the complete project, including nested files and git worktrees.` : 'No accessible local folder is linked. GitHub inspection can still use the linked repository.',
+    github ? `GitHub repository: ${github}. Use authenticated access, including when it is private.` : 'No GitHub repository is linked.',
+    'The briefing includes every registered project folder and GitHub URL. You may inspect those linked locations for coordination. Local uncommitted changes are separate from commits ahead/behind GitHub. Compare the stated branch and refreshed remote SHA; never use old tracking refs as proof of current GitHub state.',
     focus ? `They are asking about ${focus}.` : '',
     'LIVE STATE is a briefing of what the notebook already thinks. Do not recite STATUS labels, file counts, or waiting-for lines as the answer.',
     'Put inspection, tool use, and "I will read…" narration in thinking. The visible answer is only the final assessment. Do not start the answer with I will inspect.',
@@ -169,7 +166,8 @@ function askCliArgs(info) {
     '--output-format', 'streaming-messages-json',
     '--include-partial-messages',
     '--max-turns', '8',
-    '--permission-mode', 'plan',
+    '--permission-mode', 'auto',
+    '--always-approve',
     '--no-subagents'
   ];
   const cli = cliModelOf(info && info.model);
@@ -199,6 +197,16 @@ function dropThinkingPrefix(answer, thinking) {
 function parseAskLine(acc, row) {
   if (!acc || typeof acc !== 'object') return acc;
   if (!row || typeof row !== 'object') return acc;
+  if (row.event === 'step_update' && row.step_update) {
+    const step = row.step_update;
+    if (step.step_type === 'agent_response' && typeof step.text_delta === 'string') acc.answer += step.text_delta;
+    if (step.step_type === 'tool' || step.step_type === 'tool_call') acc.thinking += '\ntool: ' + (step.tool_name || 'Antigravity tool');
+  }
+  if (row.event === 'result' && row.result && typeof row.result.response === 'string') {
+    acc.answer = row.result.response;
+    acc.ms = Math.round((row.result.duration_seconds || 0) * 1000);
+  }
+  if (row.type === 'item.completed' && row.item && row.item.type === 'agent_message') acc.answer = row.item.text || '';
   if (row.type === 'result') {
     if (Number.isFinite(row.duration_ms)) acc.ms = row.duration_ms;
     if (typeof row.result === 'string' && row.result.trim()) {
@@ -277,20 +285,20 @@ function askOrchestrator(info) {
   if (!info || typeof info.question !== 'string' || !info.question.trim()) {
     return Promise.resolve({ answer: '', thinking: '', ms: 0 });
   }
-  const grok = whichGrok();
-  if (!grok) return Promise.resolve({ answer: '', thinking: '', ms: 0 });
-  const packed = askCliArgs(info);
-  const cwd = packed.cwd;
+  const cwd = askCwd(info);
   const work = cwd || fs.mkdtempSync(path.join(os.tmpdir(), 'pw-ask-'));
-  const args = packed.args.map((item, index) => (index > 0 && packed.args[index - 1] === '--cwd' ? work : item));
+  let spec;
+  try { spec = launchSpec(info.model, work, askPrompt(info), true); }
+  catch (error) { return Promise.resolve({ answer: error.message, thinking: '', ms: 0 }); }
   const onProgress = typeof info.onProgress === 'function' ? info.onProgress : null;
   const started = Date.now();
   return new Promise(resolve => {
     abortAsk();
-    const child = spawn(grok, args, { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(spec.command, spec.args, { cwd: work, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     askChild = child;
     const stream = createAskStream();
     let settled = false;
+    let stderr = '';
     const tick = () => {
       if (!onProgress) return;
       try {
@@ -305,16 +313,17 @@ function askOrchestrator(info) {
       stream.push(chunk);
       tick();
     });
-    child.stderr.on('data', () => {});
+    child.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-4000); });
     const timer = setTimeout(() => {
       try { child.kill(); } catch (_) {}
     }, cwd ? 180000 : 90000);
-    const done = () => {
+    const done = errorOrCode => {
       if (settled) return;
       settled = true;
       if (askChild === child) askChild = null;
       clearTimeout(timer);
       const out = stream.finish();
+      if (!out.answer && (errorOrCode || stderr)) out.answer = `${spec.provider} CLI failed: ${stderr.trim() || String(errorOrCode)}`;
       if (!Number.isFinite(out.ms)) out.ms = Date.now() - started;
       resolve(out);
     };
@@ -337,7 +346,8 @@ function spawnWorker(info) {
     '--detail', (info.job && info.job.detail) || '',
     '--worker', (info.worker && (info.worker.label || info.worker.id)) || 'worker',
     '--attempt', info.attemptId || '',
-    '--slice', info.slice || (info.job && info.job.slice) || ''
+    '--slice', info.slice || (info.job && info.job.slice) || '',
+    '--model-json', JSON.stringify(info.worker)
   ];
   const child = spawn(process.execPath, args, {
     detached: true,
@@ -357,36 +367,45 @@ function run(argv = process.argv) {
     process.exitCode = 1;
     return;
   }
-  const grok = whichGrok();
-  if (!grok) {
-    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: 'grok executable not found' });
+  let spec;
+  try { spec = launchSpec(opts.model, opts.folder, promptFor(opts)); }
+  catch (error) {
+    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message });
     process.exitCode = 1;
     return;
   }
-  const prompt = promptFor(opts);
-  const child = spawn(grok, [
-    '--cwd', opts.folder,
-    '--always-approve',
-    '--permission-mode', 'auto',
-    '--output-format', 'plain',
-    '--max-turns', '50',
-    '-p', prompt
-  ], {
-    windowsHide: true,
-    stdio: 'inherit'
+  console.log(JSON.stringify({ event: 'provider-launch', at: new Date().toISOString(), provider: spec.provider, model: spec.model, executable: spec.command, cwd: spec.cwd, attempt: opts.attempt }));
+  let finalStatus = null;
+  let settled = false;
+  let pending = '';
+  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
+  child.stdout.on('data', chunk => {
+    process.stdout.write(chunk);
+    if (spec.provider !== 'antigravity') return;
+    pending += String(chunk);
+    const lines = pending.split(/\r?\n/); pending = lines.pop() || '';
+    for (const line of lines) {
+      try { const row = JSON.parse(line); if (row.event === 'result' && row.result) finalStatus = row.result.status; } catch (_) {}
+    }
   });
   child.on('error', error => {
+    if (settled) return;
+    settled = true;
     patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message || 'spawn failed' });
     process.exitCode = 1;
   });
-  child.on('exit', (code, signal) => {
-    const exitCode = code == null ? 1 : code;
+  child.on('close', (code, signal) => {
+    if (settled) return;
+    settled = true;
+    if (pending.trim()) { try { const row = JSON.parse(pending); if (row.event === 'result' && row.result) finalStatus = row.result.status; } catch (_) {} }
+    const reportedFailure = spec.provider === 'antigravity' && finalStatus !== 'SUCCESS';
+    const exitCode = code == null || (code === 0 && reportedFailure) ? 1 : code;
     if (exitCode === 0) {
       patchStatus(opts.result, 'COMPLETE', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : 'worker exit 0' });
       process.exitCode = 0;
       return;
     }
-    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : `worker exit ${exitCode}` });
+    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : (reportedFailure ? `Antigravity result ${finalStatus || 'missing'}` : `worker exit ${exitCode}`) });
     process.exitCode = exitCode;
   });
 }

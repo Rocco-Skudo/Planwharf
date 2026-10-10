@@ -33,7 +33,9 @@ function unreadPlan(id, reason) {
 
 function windowOf(raw, name) {
   if (!raw || typeof raw !== 'object') return null;
-  const pct = clipPct(raw.used_percent != null ? raw.used_percent : raw.usagePercent);
+  const value = raw.used_percent != null ? raw.used_percent : raw.usagePercent;
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 100) return null;
+  const pct = clipPct(value);
   const resetAt = Number.isFinite(raw.reset_at)
     ? new Date(raw.reset_at * 1000).toISOString()
     : (typeof raw.end === 'string' ? raw.end : (typeof raw.resetAt === 'string' ? raw.resetAt : null));
@@ -48,6 +50,7 @@ function windowOf(raw, name) {
 
 function parseGrokCredits(body) {
   const config = body && body.config && typeof body.config === 'object' ? body.config : (body || {});
+  if (typeof config.creditUsagePercent !== 'number' || !Number.isFinite(config.creditUsagePercent) || config.creditUsagePercent < 0 || config.creditUsagePercent > 100) return unreadPlan('Grok', 'No numeric usage in Grok billing response.');
   const pct = clipPct(config.creditUsagePercent);
   const period = config.currentPeriod && typeof config.currentPeriod === 'object' ? config.currentPeriod : {};
   const end = typeof period.end === 'string' ? period.end : (typeof config.billingPeriodEnd === 'string' ? config.billingPeriodEnd : null);
@@ -79,7 +82,8 @@ function parseChatGptUsage(body) {
   const week = windowOf(rl.secondary_window, 'weekly');
   const windows = [five, week].filter(Boolean);
   const tight = windows.reduce((best, item) => (!best || item.pct > best.pct ? item : best), null);
-  const pct = tight ? tight.pct : 0;
+  if (!tight) return unreadPlan('ChatGPT', 'No numeric usage windows in ChatGPT response.');
+  const pct = tight.pct;
   const exhausted = rl.limit_reached === true || rl.allowed === false || windows.some(item => item.pct >= 100);
   return {
     id: 'ChatGPT',
@@ -132,22 +136,6 @@ function codexAuth(home) {
     refresh: typeof tokens.refresh_token === 'string' ? tokens.refresh_token : '',
     accountId: typeof tokens.account_id === 'string' ? tokens.account_id : ''
   };
-}
-
-function geminiSignedIn(home) {
-  const files = [
-    path.join(home, '.gemini', 'antigravity-cli', 'antigravity-oauth-token'),
-    path.join(home, '.gemini', 'oauth_creds.json'),
-    path.join(home, '.gemini', 'google_accounts.json'),
-    path.join(home, '.config', 'gcloud', 'application_default_credentials.json')
-  ];
-  return files.some(file => {
-    try {
-      return fs.existsSync(file) && fs.statSync(file).size > 0;
-    } catch (_) {
-      return false;
-    }
-  });
 }
 
 async function httpGet(fetchImpl, url, headers, timeoutMs) {
@@ -268,23 +256,18 @@ async function readChatGpt(home, fetchImpl) {
   }
 }
 
-function readGemini(home) {
-  if (geminiSignedIn(home)) {
-    return unreadPlan('Gemini', 'Gemini is signed in locally, but this machine has no quota endpoint Planwharf can call yet.');
-  }
-  return unreadPlan('Gemini', 'No Gemini login on this PC.');
-}
 
 async function fetchPlanUsage(options) {
   const opts = options && typeof options === 'object' ? options : {};
   const home = typeof opts.home === 'string' && opts.home.trim() ? opts.home : os.homedir();
   const fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : fetch;
   const now = Number.isFinite(opts.now) ? opts.now : Date.now();
-  const [chatgpt, grok] = await Promise.all([
+  const [chatgpt, grok, gemini] = await Promise.all([
     readChatGpt(home, fetchImpl),
-    readGrok(home, fetchImpl, now)
+    readGrok(home, fetchImpl, now),
+    require('./antigravity.cjs').readAntigravity(opts.antigravity || {})
   ]);
-  return [chatgpt, grok, readGemini(home)];
+  return [chatgpt, grok, gemini];
 }
 
 function emptyPlans() {

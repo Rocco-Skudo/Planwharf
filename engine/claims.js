@@ -30,14 +30,14 @@
 
     function claim(input) {
       if (!input || typeof input !== 'object' || Array.isArray(input)) {
-        return { ok: false, reason: 'dati non validi' };
+        return { ok: false, reason: 'invalid data' };
       }
       const taskId = input.taskId;
       const projectId = input.projectId;
       const modelId = input.modelId;
       const candidates = input.candidates;
       if (!isId(taskId) || !isId(projectId) || !isId(modelId) || !Array.isArray(candidates)) {
-        return { ok: false, reason: 'dati non validi' };
+        return { ok: false, reason: 'invalid data' };
       }
 
       let matched = null;
@@ -49,27 +49,27 @@
         if (candidate.id === modelId && matched === null) matched = candidate;
       }
       if (enabledCount === 0) {
-        return { ok: false, reason: 'nessun modello acceso' };
+        return { ok: false, reason: 'no model enabled' };
       }
       if (!matched) {
-        return { ok: false, reason: 'modello non presente' };
+        return { ok: false, reason: 'model not present' };
       }
       if (matched.enabled !== true) {
-        return { ok: false, reason: 'modello non candidabile' };
+        return { ok: false, reason: 'model not eligible' };
       }
 
       for (let i = 0; i < attempts.length; i++) {
         const item = attempts[i];
         if (item.status !== 'active') continue;
         if (item.taskId === taskId) {
-          return { ok: false, reason: 'task già assegnato' };
+          return { ok: false, reason: 'task already assigned' };
         }
       }
       for (let i = 0; i < attempts.length; i++) {
         const item = attempts[i];
         if (item.status !== 'active') continue;
         if (item.projectId === projectId) {
-          return { ok: false, reason: 'progetto già assegnato' };
+          return { ok: false, reason: 'project already assigned' };
         }
       }
 

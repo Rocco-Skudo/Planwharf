@@ -19,8 +19,8 @@
   'use strict';
 
   /**
-   * Restituisce un nuovo array contenente solo i modelli con enabled === true.
-   * Non muta l'array o gli oggetti in input.
+   * Returns a new array containing only models with enabled === true.
+   * Does not mutate the input array or objects.
    *
    * @param {Array<{id: string, label: string, enabled: boolean}>} models
    * @returns {Array<{id: string, label: string, enabled: boolean}>}
@@ -31,7 +31,7 @@
     }
     return models
       .filter(function (m) {
-        return Boolean(m && m.enabled === true);
+        return Boolean(m && m.enabled === true && m.available !== false);
       })
       .map(function (m) {
         return Object.assign({}, m);
@@ -39,8 +39,8 @@
   }
 
   /**
-   * Restituisce un nuovo array con il modello specificato aggiornato al valore enabled indicato.
-   * Non muta l'array o gli oggetti in input (toggle immutabile).
+   * Returns a new array with the specified model updated to the requested enabled value.
+   * Does not mutate the input array or objects.
    *
    * @param {Array<{id: string, label: string, enabled: boolean}>} models
    * @param {string} id
@@ -57,18 +57,18 @@
         return m;
       }
       if (m.id === id) {
-        return Object.assign({}, m, { enabled: boolVal });
+        return Object.assign({}, m, { enabled: boolVal && m.available !== false });
       }
       return Object.assign({}, m);
     });
   }
 
   /**
-   * Valida se un modello può essere selezionato per un claim da un worker.
-   * Se nessun modello è abilitato (o lista vuota), restituisce reason 'nessun modello acceso'.
-   * Se il modello non è presente nella lista, restituisce reason 'modello non presente'.
-   * Se il modello è disabilitato (spento), restituisce reason 'modello spento'.
-   * Se il modello è abilitato, restituisce { ok: true, reason: null }.
+   * Checks whether a worker can claim the selected model.
+   * If no model is enabled (or the list is empty), returns reason 'no model enabled'.
+   * Se il modello non è presente nella lista, restituisce reason 'model not present'.
+   * Se il modello è disabilitato (spento), restituisce reason 'model disabled'.
+   * If the model is enabled, returns { ok: true, reason: null }.
    *
    * @param {Array<{id: string, label: string, enabled: boolean}>} models
    * @param {string} modelId
@@ -77,11 +77,11 @@
   function validateWorkerClaim(models, modelId) {
     var list = Array.isArray(models) ? models : [];
     var hasAnyEnabled = list.some(function (m) {
-      return Boolean(m && m.enabled === true);
+      return Boolean(m && m.enabled === true && m.available !== false);
     });
 
     if (!hasAnyEnabled) {
-      return { ok: false, reason: 'nessun modello acceso' };
+      return { ok: false, reason: 'no model enabled' };
     }
 
     var found = list.find(function (m) {
@@ -89,11 +89,11 @@
     });
 
     if (!found) {
-      return { ok: false, reason: 'modello non presente' };
+      return { ok: false, reason: 'model not present' };
     }
 
-    if (found.enabled !== true) {
-      return { ok: false, reason: 'modello spento' };
+    if (found.enabled !== true || found.available === false) {
+      return { ok: false, reason: 'model disabled' };
     }
 
     return { ok: true, reason: null };

@@ -194,7 +194,11 @@ async function runApp(opts) {
   const { server, url } = await listen(opts);
   const profileDir = path.join(root, '.planwharf-window');
   let child = null;
-  const shutdown = () => {
+  let closing = false;
+  const shutdown = async () => {
+    if (closing) return;
+    closing = true;
+    try { await server.shutdown(); } catch (error) { console.error("Checkpoint shutdown failed:", error.message); }
     if (child && !child.killed) child.kill();
     server.close(() => process.exit(0));
     setTimeout(() => process.exit(0), 1500).unref();
