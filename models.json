@@ -5,6 +5,7 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "local",
+    "cli": "grok-4.7-build-fast",
     "cost": 1,
     "limit": 200
   },
@@ -14,6 +15,7 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "local",
+    "cli": "grok-4.7-build-fast",
     "cost": 1,
     "limit": 150
   },
@@ -23,6 +25,7 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "default",
+    "cli": "grok-4.6",
     "cost": 3,
     "limit": 60
   },
@@ -32,8 +35,19 @@
     "enabled": true,
     "plan": "ChatGPT",
     "kind": "premium",
+    "cli": "grok-4.7",
     "cost": 6,
     "limit": 30
+  },
+  {
+    "id": "gpt-6-astra",
+    "label": "GPT-6 Astra",
+    "enabled": true,
+    "plan": "ChatGPT",
+    "kind": "premium",
+    "cli": "grok-4.7",
+    "cost": 8,
+    "limit": 20
   },
   {
     "id": "grok-fast",
@@ -41,6 +55,7 @@
     "enabled": true,
     "plan": "Grok",
     "kind": "local",
+    "cli": "grok-4.7-build-fast",
     "cost": 1,
     "limit": 120
   },
@@ -50,6 +65,7 @@
     "enabled": true,
     "plan": "Grok",
     "kind": "default",
+    "cli": "grok-4.7-build-fast",
     "cost": 3,
     "limit": 50
   },
@@ -59,6 +75,7 @@
     "enabled": true,
     "plan": "Grok",
     "kind": "default",
+    "cli": "grok-4.6",
     "cost": 4,
     "limit": 40
   },
@@ -68,6 +85,7 @@
     "enabled": true,
     "plan": "Grok",
     "kind": "premium",
+    "cli": "grok-4.7",
     "cost": 8,
     "limit": 20
   },
@@ -77,6 +95,7 @@
     "enabled": false,
     "plan": "Gemini",
     "kind": "local",
+    "cli": "grok-4.7-build-fast",
     "cost": 1,
     "limit": 80
   },
@@ -86,6 +105,7 @@
     "enabled": false,
     "plan": "Gemini",
     "kind": "default",
+    "cli": "grok-4.6",
     "cost": 2,
     "limit": 80
   }

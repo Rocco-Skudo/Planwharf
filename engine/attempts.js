@@ -139,7 +139,7 @@
         for (let i = 0; i < store.attempts.length; i++) {
           const item = store.attempts[i];
           if (item.status !== 'active') continue;
-          if (item.taskId === taskId) {
+          if (item.taskId === taskId && item.projectId === projectId) {
             return { write: false, value: { ok: false, reason: 'task already assigned' } };
           }
         }

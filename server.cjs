@@ -8,6 +8,8 @@ const Plan = require('./plan.js');
 const { createAttemptEngine } = require('./engine/attempts.js');
 const { createSentinel } = require('./engine/sentinel.js');
 const { createOrchestrator } = require('./engine/orchestrator.js');
+const { createSkillsCache } = require('./engine/skills.js');
+const { fetchPlanUsage } = require('./engine/planUsage.js');
 const defaultModels = require('./models.json');
 
 const version = plan => crypto.createHash('sha256').update(JSON.stringify(plan)).digest('hex');
@@ -62,20 +64,108 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Cartella non trovata.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Cartella non trovata.');
 }
-function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder } = {}) {
+function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder, skills, fetchSkills, syncSkills, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow } = {}) {
   let queue = Promise.resolve();
+  const enqueue = work => {
+    const pending = queue.then(work);
+    queue = pending.catch(() => {});
+    return pending;
+  };
   const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
   const attempts = createAttemptEngine({ dir: storeDir });
-  const sentinel = createSentinel(attempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') });
-  const orchestra = createOrchestrator({
+  let orchestra;
+  const sentinel = createSentinel(attempts, {
+    isAlive: attempt => {
+      if (typeof spawnWorker === 'function' && typeof isProcessAlive === 'function') {
+        const pid = orchestra && typeof orchestra.pidFor === 'function' ? orchestra.pidFor(attempt) : null;
+        if (Number.isInteger(pid) && pid > 0) return Boolean(isProcessAlive(pid));
+        return false;
+      }
+      return Boolean(attempt && attempt.status === 'active');
+    }
+  });
+  const skillsCache = skills || createSkillsCache({ dir: path.join(storeDir, 'matt-skills'), fetchImpl: fetchSkills });
+  orchestra = createOrchestrator({
     readPlan: () => readPlan(planFile),
     attempts,
     sentinel,
     models,
     dir: storeDir,
-    inspectFolder
+    inspectFolder,
+    spawnWorker,
+    isProcessAlive,
+    killWorker,
+    askModel,
+    abortAsk,
+    fetchPlans: fetchPlanUsage,
+    readSkill: relative => (typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
+    applyStart: (projectId, options) => enqueue(async () => {
+      const current = await readPlan(planFile);
+      return executeStart(current, projectId, options);
+    }),
+    applySkip: projectId => enqueue(async () => {
+      const current = await readPlan(planFile);
+      return executeSkip(current, projectId);
+    })
   });
-  const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  async function executeSkip(current, projectId) {
+    const project = current.schema === 2 ? current.projects.find(item => item.project.id === projectId) : current;
+    if (!project || (current.schema === 1 && projectId !== project.project.id)) return { ok: false, reason: 'project not found' };
+    const latest = project.revisions.at(-1);
+    let next = current;
+    if (latest && Array.isArray(latest.open) && latest.open.length) {
+      const draft = {
+        title: 'Skip grill',
+        direction: latest.direction,
+        state: (latest.state && latest.state.trim()) ? latest.state : 'Skipped grill so Auto start can plan.',
+        closed: Array.isArray(latest.closed) ? latest.closed : [],
+        open: []
+      };
+      const updated = Plan.appendRevision(project, draft);
+      next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
+      if (!Plan.validate(next)) return { ok: false, reason: 'Il quaderno aggiornato non è valido.' };
+      await save(planFile, next);
+    }
+    const result = await orchestra.skipGrill(projectId);
+    if (!result.ok) return { ok: false, reason: result.reason || 'failed' };
+    return { ok: true, plan: next, version: version(next), snapshot: result.snapshot };
+  }
+  async function executeStart(current, projectId, options) {
+    const prepared = await orchestra.startAutoTask(projectId, options || { timing: 'discretion' });
+    if (!prepared.ok) return prepared;
+    let project = current.schema === 2 ? current.projects.find(item => item.project.id === projectId) : current;
+    if (!project || (current.schema === 1 && projectId !== project.project.id)) return { ok: false, reason: 'project not found' };
+    let updated = project;
+    try {
+      if (prepared.clearJob) {
+        const running = (updated.tasks || []).find(task => task.status === 'running');
+        if (running) updated = Plan.removeTask(updated, { id: running.id });
+      }
+      if (Array.isArray(prepared.questions) && prepared.questions.length) {
+        const ctx = { questions: prepared.questions, replace: Boolean(prepared.replace) };
+        const grilled = prepared.kind === 'docs'
+          ? Plan.startGrillDocs(updated, orchestra.docsFor(updated.project.folder), undefined, ctx)
+          : Plan.startGrill(updated, undefined, ctx);
+        if (grilled !== updated) updated = grilled;
+      }
+      if (prepared.job) updated = Plan.createTask(updated, prepared.job);
+    } catch (error) {
+      return { ok: false, reason: error.message };
+    }
+    if (updated === project) {
+      const snapshot = await orchestra.tick();
+      return { ok: true, plan: current, version: version(current), snapshot, phase: prepared.phase || 'grill' };
+    }
+    const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
+    if (!Plan.validate(next)) return { ok: false, reason: 'Il quaderno aggiornato non è valido.' };
+    await save(planFile, next);
+    const snapshot = await orchestra.tick();
+    return { ok: true, plan: next, version: version(next), snapshot, phase: prepared.phase || (prepared.job ? 'plan' : 'grill') };
+  }
+  if (syncSkills) {
+    Promise.resolve().then(() => skillsCache.ensure()).catch(() => {});
+  }
+  const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   return http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -84,7 +174,13 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     try {
       const expectedHost = `127.0.0.1:${request.socket.localPort}`;
       if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Apri la schermata dal suo indirizzo locale.');
-      const pathname = new URL(request.url, `http://${expectedHost}`).pathname;
+      const loc = new URL(request.url, `http://${expectedHost}`);
+      const pathname = loc.pathname;
+      if (request.method === 'GET' && pathname === '/' && (loc.searchParams.get('watch') === '1' || loc.searchParams.get('view') === 'watch')) {
+        response.writeHead(302, { Location: '/orchestrator.html' });
+        response.end();
+        return;
+      }
       if (request.method === 'GET' && pathname === '/api/plan') {
         const plan = await readPlan(planFile);
         return json(200, { plan, version: version(plan) });
@@ -93,7 +189,35 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(200, { attempts: attempts.getAttempts() });
       }
       if (request.method === 'GET' && pathname === '/api/orchestrator') {
-        return json(200, await orchestra.tick());
+        const snapshot = await orchestra.tick();
+        snapshot.skills = skillsCache.snapshot();
+        return json(200, snapshot);
+      }
+      if (request.method === 'GET' && pathname === '/api/skills') {
+        return json(200, skillsCache.snapshot());
+      }
+      if (request.method === 'POST' && pathname === '/api/skills') {
+        const snapshot = await skillsCache.ensure();
+        return json(200, snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/lead') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (!input || Object.keys(input).some(key => key !== 'id') || (input.id != null && typeof input.id !== 'string')) throw new RequestError(400, 'Dati non validi.');
+        const result = await orchestra.setOrchestrator(input.id || '');
+        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/ask/cancel') {
+        return json(200, await orchestra.abortAsk());
+      }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/ask') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (!input || typeof input.question !== 'string' || Object.keys(input).some(key => !['question', 'projectId'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined);
+        if (!asked.ok) throw new RequestError(400, asked.reason || 'Dati non validi.');
+        return json(200, asked);
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/mode') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
@@ -107,10 +231,15 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (input && typeof input.propose === 'boolean' && Object.keys(input).every(key => key === 'propose')) {
           return json(200, await orchestra.setGrillPropose(input.propose));
         }
-        if (input && typeof input.projectId === 'string' && input.skip === true && Object.keys(input).every(key => ['projectId', 'skip'].includes(key))) {
-          const result = await orchestra.skipGrill(input.projectId);
-          if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
-          return json(200, result.snapshot);
+        if (input && typeof input.projectId === 'string' && input.skip === true && Object.keys(input).every(key => ['projectId', 'skip', 'version'].includes(key))) {
+          const skipped = await enqueue(async () => {
+            const current = await readPlan(planFile);
+            if (input.version && input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
+            const result = await executeSkip(current, input.projectId);
+            if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+            return { plan: result.plan, version: result.version, snapshot: result.snapshot };
+          });
+          return json(200, skipped);
         }
         throw new RequestError(400, 'Dati non validi.');
       }
@@ -130,29 +259,49 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
         return json(200, result.snapshot);
       }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/resume') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Dati non validi.');
+        const result = await orchestra.resume(input.projectId);
+        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/stop') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => key !== 'projectId')) throw new RequestError(400, 'Dati non validi.');
+        const result = await orchestra.stop(input.projectId);
+        if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/window') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
+        const input = await body(request);
+        if (input && typeof input === 'object' && Object.keys(input).length) throw new RequestError(400, 'Dati non validi.');
+        const watchUrl = `http://127.0.0.1:${request.socket.localPort}/orchestrator.html`;
+        let opened = false;
+        if (typeof openWatchWindow === 'function') {
+          try {
+            opened = Boolean(openWatchWindow(watchUrl));
+          } catch (_) {
+            opened = false;
+          }
+        }
+        return json(200, { ok: true, url: watchUrl, opened });
+      }
       if (request.method === 'POST' && pathname === '/api/orchestrator/start') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
         const input = await body(request);
-        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId'].includes(key))) throw new RequestError(400, 'Dati non validi.');
-        const pending = queue.then(async () => {
+        if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId', 'timing', 'deadlineAt'].includes(key))) throw new RequestError(400, 'Dati non validi.');
+        const created = await enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'Il piano è cambiato. Ricarica la pagina prima di salvare.');
-          const prepared = await orchestra.startAutoTask(input.projectId);
-          if (!prepared.ok) throw new RequestError(400, prepared.reason || 'Dati non validi.');
-          const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : current;
-          if (!project || (current.schema === 1 && input.projectId !== project.project.id)) throw new RequestError(400, 'Progetto non trovato.');
-          let next;
-          try {
-            const updated = Plan.createTask(project, prepared.job);
-            next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === project.project.id ? updated : item) } : updated;
-            if (!Plan.validate(next)) throw new Error('Il quaderno aggiornato non è valido.');
-          } catch (error) { throw new RequestError(400, error.message); }
-          await save(planFile, next);
-          const snapshot = await orchestra.tick();
-          return { plan: next, version: version(next), snapshot };
+          const result = await executeStart(current, input.projectId, { timing: input.timing, deadlineAt: input.deadlineAt });
+          if (!result.ok) throw new RequestError(400, result.reason || 'Dati non validi.');
+          return result;
         });
-        queue = pending.catch(() => {});
-        return json(201, await pending);
+        return json(created.phase === 'plan' ? 201 : 200, created);
       }
       if (request.method === 'POST' && pathname === '/api/attempts') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Usa JSON per la revisione.');
@@ -277,9 +426,17 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
             if (input.kind === 'docs') {
               if (!project.project.folder) throw new Error('no folder');
               const docs = orchestra.docsFor(project.project.folder);
-              updated = Plan.startGrillDocs(project, docs);
+              updated = Plan.startGrillDocs(project, docs, undefined, {
+                name: project.project.name,
+                goal: project.revisions.at(-1).direction,
+                folder: project.project.folder
+              });
             } else {
-              updated = Plan.startGrill(project);
+              updated = Plan.startGrill(project, undefined, {
+                name: project.project.name,
+                goal: project.revisions.at(-1).direction,
+                folder: project.project.folder
+              });
             }
           }
           catch (error) { throw new RequestError(400, error.message); }
@@ -297,7 +454,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         const input = await body(request);
         const field = { '/api/revisions': 'draft', '/api/grill': 'round', '/api/import': 'json', '/api/tasks': 'task' }[pathname];
         if (!input || typeof input.version !== 'string' || input[field] === undefined || Object.keys(input).some(key => !['version', 'projectId', field].includes(key))) throw new RequestError(400, 'Dati non validi.');
-        const keys = { draft: ['title', 'direction', 'state', 'closed', 'open'], round: ['title', 'answers'], task: ['title', 'detail', 'revision_id'] };
+        const keys = { draft: ['title', 'direction', 'state', 'closed', 'open'], round: ['title', 'answers'], task: ['title', 'detail', 'revision_id', 'timing', 'deadlineAt'] };
         if (field !== 'json' && (!input[field] || typeof input[field] !== 'object' || Array.isArray(input[field]) || Object.keys(input[field]).some(key => !keys[field].includes(key)))) throw new RequestError(400, 'Dati non validi.');
         if (field === 'json' && typeof input.json !== 'string') throw new RequestError(400, 'JSON di importazione non valido.');
         // Serialize disk reads and writes: a second browser cannot replace history.
@@ -339,7 +496,7 @@ if (require.main === module) {
     process.exitCode = 1;
   } else {
     readPlan(path.join(__dirname, 'plan.json')).then(() => {
-      const server = createServer();
+      const server = createServer({ syncSkills: true });
       server.on('error', error => { console.error(error.code === 'EADDRINUSE' ? `La porta ${port} è occupata. Scegli un altro PORT.` : `Server non avviato: ${error.message}`); process.exitCode = 1; });
       server.listen(port, '127.0.0.1', () => console.log(`Planwharf zombie: http://127.0.0.1:${port}\nPiano: ${path.join(__dirname, 'plan.json')}\nCtrl+C per chiudere.`));
     }).catch(error => { console.error(`Impossibile aprire plan.json: ${error.message}`); process.exitCode = 1; });

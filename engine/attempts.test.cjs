@@ -107,6 +107,16 @@ test('distinct project and task may claim', () => {
   assert.strictEqual(engine.getAttempts().length, 2);
 });
 
+test('same task id on two projects may claim', () => {
+  const dir = tempDir();
+  const engine = createAttemptEngine({ dir });
+  const first = engine.claim({ taskId: 'task-1', projectId: 'biblioteca', modelId: 'mod-a', candidates: on });
+  const second = engine.claim({ taskId: 'task-1', projectId: 'orto', modelId: 'mod-c', candidates: on });
+  assert.strictEqual(first.ok, true);
+  assert.strictEqual(second.ok, true);
+  assert.strictEqual(engine.getAttempts().length, 2);
+});
+
 test('disabled and missing models are refused without a row', () => {
   const dir = tempDir();
   const engine = createAttemptEngine({ dir });

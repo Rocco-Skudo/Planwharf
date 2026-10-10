@@ -62,6 +62,8 @@
     const taskIds = new Set();
     for (const t of data.tasks) {
       if (!t || typeof t.id !== 'string' || !t.id.trim() || taskIds.has(t.id) || t.projectId !== data.project.id || !Number.isSafeInteger(t.revision_id) || !ids.has(t.revision_id) || typeof t.title !== 'string' || typeof t.detail !== 'string' || typeof t.status !== 'string') return false;
+      if (t.timing !== undefined && t.timing !== 'deadline' && t.timing !== 'discretion') return false;
+      if (t.timing === 'deadline' && (typeof t.deadlineAt !== 'string' || !Number.isFinite(Date.parse(t.deadlineAt)))) return false;
       taskIds.add(t.id);
       if (t.status === 'running') { if (activeProjects.has(t.projectId)) return false; activeProjects.add(t.projectId); }
     }
@@ -87,35 +89,57 @@
     return next;
   }
   function appendRevision(data, draft, timestamp) { return append(data, draft, 'manual', timestamp); }
+  const GENERIC_FRONTIER = [
+    'What is the smallest next slice that still serves the current goal?',
+    'What is explicitly out of scope for this slice?',
+    'How will we know this slice is done?',
+    'Which assumption, if wrong, would waste the most work?',
+    'What must stay true (local, existing files, no paid APIs)?'
+  ];
+  function isGenericFrontier(open) {
+    if (!Array.isArray(open) || open.length !== GENERIC_FRONTIER.length) return false;
+    return open.every((question, index) => question === GENERIC_FRONTIER[index]);
+  }
+  function grillFrontier(context) {
+    const ctx = context && typeof context === 'object' ? context : {};
+    if (Array.isArray(ctx.questions) && ctx.questions.length) {
+      return ctx.questions.map(item => String(item).trim()).filter(Boolean).slice(0, 8);
+    }
+    const name = String(ctx.name || 'this project').trim() || 'this project';
+    const goal = String(ctx.goal || '').trim();
+    const folder = String(ctx.folder || '').trim();
+    const docs = (Array.isArray(ctx.docs) ? ctx.docs : []).map(item => String(item).trim()).filter(Boolean).slice(0, 12);
+    const questions = [];
+    questions.push(goal
+      ? `Is this run the next slice of ${name}: ${goal}? Recommended: yes.`
+      : `Is this run the next slice of ${name}? Recommended: yes, stay on the notebook goal.`);
+    questions.push(folder
+      ? `Stay inside ${folder} and the files already there. No paid APIs. Recommended: yes.`
+      : 'Keep this local: existing files, no paid APIs. Recommended: yes.');
+    questions.push('Is the slice done when the work is on disk with tests, and nothing extra ships? Recommended: yes.');
+    questions.push('Is everything else out of scope until this slice is done? Recommended: yes.');
+    if (docs.length) {
+      questions.push(`Should ${docs.join(', ')} bound this slice? Recommended: yes, those docs are the authority.`);
+    }
+    return questions;
+  }
   function starterFrontier() {
-    return [
-      'What is the smallest next slice that still serves the current goal?',
-      'What is explicitly out of scope for this slice?',
-      'How will we know this slice is done?',
-      'Which assumption, if wrong, would waste the most work?',
-      'What must stay true (local, existing files, no paid APIs)?'
-    ];
+    return grillFrontier({});
   }
-  function docsFrontier(docs) {
+  function docsFrontier(docs, context) {
     const names = (Array.isArray(docs) ? docs : []).map(name => String(name).trim()).filter(Boolean).slice(0, 12);
-    const listed = names.length ? names.join(', ') : 'the project docs';
-    return [
-      ...starterFrontier(),
-      `What in ${listed} should bound the next slice?`,
-      'What in those docs is explicitly out of scope for this slice?',
-      'Which documented file, command, or constraint must stay true?'
-    ];
+    return grillFrontier({ ...(context && typeof context === 'object' ? context : {}), docs: names });
   }
-  function beginGrill(data, title, open, timestamp = new Date().toISOString()) {
+  function beginGrill(data, title, open, timestamp = new Date().toISOString(), replace = false) {
     if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
     const latest = data.revisions.at(-1);
-    if (latest.open.length) return data;
+    if (latest.open.length && !replace && !isGenericFrontier(latest.open)) return data;
     if (!latest.direction.trim()) throw new Error('Compila titolo, direzione e stato dell’arte.');
     const previous = clone(data.revisions);
     const next = clone(data);
     next.revisions.push({
       id: Math.max(...data.revisions.map(r => r.id)) + 1,
-      mode: 'manual',
+      mode: 'grill',
       title,
       createdAt: timestamp,
       direction: latest.direction,
@@ -126,13 +150,27 @@
     if (!validate(next) || JSON.stringify(next.revisions.slice(0, -1)) !== JSON.stringify(previous) || JSON.stringify(next.tasks) !== JSON.stringify(data.tasks)) throw new Error('Il quaderno aggiornato non è valido.');
     return next;
   }
-  function startGrill(data, timestamp = new Date().toISOString()) {
-    return beginGrill(data, 'Grill me', starterFrontier(), timestamp);
+  function startGrill(data, timestamp = new Date().toISOString(), context) {
+    const latest = data.revisions.at(-1);
+    const questions = grillFrontier({
+      name: data.project.name,
+      goal: latest && latest.direction,
+      folder: data.project.folder,
+      ...(context && typeof context === 'object' ? context : {})
+    });
+    return beginGrill(data, 'Grill me', questions, timestamp, Boolean(context && context.replace) || isGenericFrontier(latest.open));
   }
-  function startGrillDocs(data, docs, timestamp = new Date().toISOString()) {
+  function startGrillDocs(data, docs, timestamp = new Date().toISOString(), context) {
     const names = (Array.isArray(docs) ? docs : []).map(name => String(name).trim()).filter(Boolean).slice(0, 12);
     if (!names.length) throw new Error('Nessun documento nella cartella.');
-    return beginGrill(data, 'Grill with the docs', docsFrontier(names), timestamp);
+    const latest = data.revisions.at(-1);
+    const questions = docsFrontier(names, {
+      name: data.project.name,
+      goal: latest && latest.direction,
+      folder: data.project.folder,
+      ...(context && typeof context === 'object' ? context : {})
+    });
+    return beginGrill(data, 'Grill with the docs', questions, timestamp, Boolean(context && context.replace) || isGenericFrontier(latest.open));
   }
   function grill(data, round, timestamp) {
     if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
@@ -234,14 +272,22 @@
     });
     return notebook;
   }
+  function taskTiming(input) {
+    if (!input || input.timing === undefined || input.timing === null || input.timing === '') return {};
+    if (input.timing !== 'deadline' && input.timing !== 'discretion') throw new Error('Scegli un termine o il tempo a discrezione del worker.');
+    if (input.timing === 'discretion') return { timing: 'discretion' };
+    if (typeof input.deadlineAt !== 'string' || !Number.isFinite(Date.parse(input.deadlineAt))) throw new Error('Imposta l’orario di termine del task.');
+    return { timing: 'deadline', deadlineAt: new Date(input.deadlineAt).toISOString() };
+  }
   function createTask(data, input) {
     if (!validateProject(data)) throw new Error('Il quaderno salvato non è valido.');
     if (data.tasks.some(task => task.status === 'running')) throw new Error('Questo progetto ha già un task in corso. Nessun secondo task è stato creato.');
     if (!input || !Number.isSafeInteger(input.revision_id) || !data.revisions.some(r => r.id === input.revision_id) || typeof input.title !== 'string' || !input.title.trim() || typeof input.detail !== 'string') throw new Error('Il task richiede titolo e una revisione esistente.');
+    const extra = taskTiming(input);
     const next = clone(data);
     let counter = 1;
     while (next.tasks.some(task => task.id === `task-${counter}`)) counter++;
-    next.tasks.push({ id: `task-${counter}`, projectId: data.project.id, revision_id: input.revision_id, title: input.title.trim(), detail: input.detail.trim(), status: 'running' });
+    next.tasks.push({ id: `task-${counter}`, projectId: data.project.id, revision_id: input.revision_id, title: input.title.trim(), detail: input.detail.trim(), status: 'running', ...extra });
     return next;
   }
   function removeTask(data, input) {
@@ -261,5 +307,5 @@
     if (reopened.length) changes.push({ key: 'reopened', before: [], after: reopened });
     return changes;
   }
-  return { example, validate, validateProject, appendRevision, startGrill, startGrillDocs, grill, importRevision, createProject, removeProject, setPlace, createTask, removeTask, diff, isFolderPath, isGithubUrl, starterFrontier, docsFrontier };
+  return { example, validate, validateProject, appendRevision, startGrill, startGrillDocs, grill, importRevision, createProject, removeProject, setPlace, createTask, removeTask, taskTiming, diff, isFolderPath, isGithubUrl, starterFrontier, docsFrontier, grillFrontier, isGenericFrontier, GENERIC_FRONTIER };
 });

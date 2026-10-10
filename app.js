@@ -34,9 +34,62 @@
     try { localStorage.setItem(themeKey, next); } catch {}
   }
   applyTheme(currentTheme());
+  const watchMode = (() => {
+    try {
+      const query = new URLSearchParams(location.search);
+      return query.get('watch') === '1' || query.get('view') === 'watch';
+    } catch (_) {
+      return false;
+    }
+  })();
+  if (watchMode && document.documentElement) {
+    document.documentElement.setAttribute('data-watch', '1');
+    document.title = 'Orchestrator';
+    const brand = document.querySelector && document.querySelector('.brand');
+    if (brand) brand.innerHTML = '<span class="mark">O</span><span>Orchestrator</span>';
+    const eyebrow = document.querySelector && document.querySelector('.eyebrow');
+    if (eyebrow) eyebrow.textContent = 'Live operations';
+    const hint = document.querySelector && document.querySelector('.rail-hint');
+    if (hint) hint.textContent = 'Every project. Status, usage, processes, and what each model is doing.';
+    const lede = $('project-lede');
+    if (lede) lede.textContent = 'The orchestrator watches the workers and explains the work in real time.';
+    const running = $('running-title');
+    if (running) running.innerHTML = 'Orchestrator <span class="sr-only">Running</span>';
+  }
   if ($('theme-toggle') && typeof $('theme-toggle').addEventListener === 'function') {
     $('theme-toggle').addEventListener('click', () => {
       applyTheme(currentTheme() === 'dark' ? 'light' : 'dark');
+    });
+  }
+  if ($('skills-refresh') && typeof $('skills-refresh').addEventListener === 'function') {
+    $('skills-refresh').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/skills', { method: 'POST' });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra.skills = body;
+        fillSkills(body);
+        $('toast').textContent = body.status === 'current' && !body.behind
+          ? `Skills match GitHub main (${String(body.sha || '').slice(0, 7)}).`
+          : (body.behind ? 'GitHub main has a newer skills commit. Cached copy stays until the next successful fetch.' : 'Could not reach GitHub for mattpocock/skills.');
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+      } catch (error) {
+        notice(translateError(error.message));
+      }
+    });
+  }
+  if ($('watch-window') && typeof $('watch-window').addEventListener === 'function') {
+    $('watch-window').addEventListener('click', async () => {
+      try {
+        const response = await fetch('/api/orchestrator/window', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        if (!body.opened && body.url && typeof window.open === 'function') window.open(body.url, 'planwharf-orchestrator');
+        $('toast').textContent = 'Orchestrator dashboard uses the same notebook and the same process.';
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+      } catch (error) {
+        notice(translateError(error.message));
+      }
     });
   }
 
@@ -160,7 +213,11 @@
     'JSON di importazione non valido.': 'Invalid import JSON.',
     'Importa un oggetto con titolo, direzione, stato, decisioni chiuse e domande aperte.': 'Import an object with title, goal, where it stands, decided decisions, and open questions.',
     'Questo progetto ha già un task in corso. Nessun secondo task è stato creato.': 'This project already has a running task. No second task was created.',
-    'open questions remain': 'Grill me first. Open questions block Start auto task.',
+    'open questions remain': 'Grill me first. Open questions block the plan until the round is saved.',
+    'deadline required': 'Set the finish-by time.',
+    'no checkpoint': 'There is no checkpoint to resume.',
+    'no running job': 'There is no running job to stop.',
+    'nothing to stop': 'Nothing is running to stop.',
     'Nessun documento nella cartella.': 'No docs in the folder to grill with.',
     'job already running': 'This project already has a job.',
     'no folder': 'Set place with a folder first.',
@@ -263,10 +320,14 @@
     $('revision-select').innerHTML = [...project().revisions].reverse().map(r => `<option value="${r.id}" ${r.id === selected ? 'selected' : ''}>R${r.id} · ${escape(r.title)}</option>`).join('');
     $('revision-badge').textContent = `R${revision.id} · ${revision.mode} · ${newest ? 'Current' : 'Historical'}`;
     $('plan-content').innerHTML = Object.keys(labels).map(key => {
+      if (key === 'open' && newest && Array.isArray(revision.open) && revision.open.length) return '';
       let body;
-      if (Array.isArray(revision[key])) body = list(revision[key]);
-      else {
+      if (Array.isArray(revision[key])) {
+        if (!revision[key].length) return '';
+        body = list(revision[key]);
+      } else {
         const text = typeof revision[key] === 'string' ? revision[key].trim() : '';
+        if (!text && key !== 'direction') return '';
         body = text ? `<p>${escape(text)}</p>` : '<p class="empty">Not written.</p>';
       }
       return `<div class="plan-block ${key}"><h3>${labels[key]}</h3>${body}</div>`;
@@ -295,35 +356,70 @@
     $('history-list').innerHTML = [...project().revisions].reverse().map(r => `<button type="button" class="history-row ${r.id === selected ? 'active' : ''}" data-revision="${r.id}" ${r.id === selected ? 'aria-current="true"' : ''}><span>R${r.id}</span><span>${escape(r.title)}</span><time datetime="${escape(r.createdAt)}">${date(r.createdAt)}</time></button>`).join('');
     fillRunningCount();
     $('task-content').innerHTML = '';
-    const waiting = projects.flatMap(item => item.revisions.at(-1).open.map(question => ({ item, question })));
-    $('waiting-count').textContent = `${waiting.length} ${waiting.length === 1 ? 'decision' : 'decisions'}`;
-    $('waiting-content').innerHTML = waiting.length ? waiting.map(({ item, question }) => `<div class="waiting-item" data-open-project="${escape(item.project.id)}"><span>↳</span><p><b>${escape(item.project.name)}</b> · ${escape(question)}</p></div>`).join('') : '<p class="muted">Nothing waiting.</p>';
-    const orchRow = (orchestra.projects || []).find(row => row.id === projectId);
-    const grillOnMonitor = orchRow && orchRow.status === 'propose_grill';
-    if ($('waiting-actions')) $('waiting-actions').hidden = Boolean(grillOnMonitor);
+    const allOpen = projects.flatMap(item => item.revisions.at(-1).open.map(question => ({ item, question })));
+    $('waiting-count').textContent = `${allOpen.length} ${allOpen.length === 1 ? 'decision' : 'decisions'}`;
+    const othersNeedYou = projects.filter(item => item.project.id !== projectId && item.revisions.at(-1).open.length);
+    $('waiting-content').innerHTML = othersNeedYou.length
+      ? othersNeedYou.map(item => `<button type="button" class="waiting-item" data-open-project="${escape(item.project.id)}"><span>↳</span><p><b>${escape(item.project.name)}</b> · ${item.revisions.at(-1).open.length === 1 ? '1 question' : `${item.revisions.at(-1).open.length} questions`}</p></button>`).join('')
+      : '<p class="muted">Nothing waiting on other projects.</p>';
+    if ($('waiting-actions')) $('waiting-actions').hidden = true;
+    const waitingCard = document.querySelector && document.querySelector('.card.waiting');
+    if (waitingCard) waitingCard.hidden = othersNeedYou.length === 0;
     fillYard();
     renderOrchestra();
     renderClaims();
   }
 
+  function simpleKind(row, openCount) {
+    const status = row && row.status;
+    if (status === 'watching') return 'working';
+    if (status === 'waiting_on_you' || status === 'propose_grill' || openCount > 0) return 'needs_you';
+    if (status === 'needs_approval') return 'ready';
+    if (status === 'failed' || status === 'blocked_no_folder' || status === 'blocked_no_worker' || status === 'checkpointed') return 'stuck';
+    if (status === 'complete') return 'done';
+    return 'ready';
+  }
+
+  function heroCopy(kind, row, openCount) {
+    if (kind === 'needs_you') {
+      const n = openCount || (row && Array.isArray(row.open) ? row.open.length : 0);
+      return {
+        title: 'Your turn',
+        text: n === 1 ? 'Answer this question, then we can start.' : 'Answer these questions, then we can start.'
+      };
+    }
+    if (kind === 'working') return { title: 'Working', text: (row && (row.workerActivity || row.doing)) || 'A worker is busy on this project.' };
+    if (kind === 'done') return { title: 'Done', text: 'This job is finished.' };
+    if (kind === 'stuck') {
+      if (row && row.status === 'blocked_no_folder') return { title: 'Needs a folder', text: 'Set the folder on this computer, then press Start.' };
+      if (row && row.status === 'blocked_no_worker') return { title: 'No worker', text: 'Turn a worker on in Functions, then press Start.' };
+      if (row && row.status === 'checkpointed') {
+        const stopped = row.checkpoint && row.checkpoint.reason === 'stop';
+        return { title: 'Paused', text: stopped ? 'You stopped this job. Press Resume to continue.' : 'Time ran out. Press Resume to continue.' };
+      }
+      return { title: 'Stopped', text: 'It stopped. Press Start to try again.' };
+    }
+    if (row && row.status === 'needs_approval') return { title: 'Ready', text: 'Press Go and the workers will start.' };
+    return { title: 'Ready', text: 'Press Start when you want work to happen.' };
+  }
+
   function fillYard() {
     if (!data || !$('yard-list')) return;
     const projects = notebookProjects();
-    const engine = getEngine();
-    const attempts = engine ? engine.getAttempts() : [];
     $('yard-count').textContent = `${projects.length} ${projects.length === 1 ? 'project' : 'projects'}`;
     $('yard-list').innerHTML = projects.map(item => {
       const latest = item.revisions.at(-1);
-      const job = item.tasks.find(t => t.status === 'running');
-      const attempt = attempts.find(a => a.status === 'active' && a.projectId === item.project.id);
       const selectedClass = item.project.id === projectId ? ' selected' : '';
       const orch = (orchestra.projects || []).find(row => row.id === item.project.id);
-      const workerText = orch ? orch.label : (attempt ? 'claimed, not started' : 'worker idle');
-      return `<button type="button" class="yard-row${selectedClass}" data-open-project="${escape(item.project.id)}"><strong>${escape(item.project.name)}</strong><span>R${latest.id} · ${latest.open.length} waiting</span><span>${job ? escape(job.title) : 'no job'} · ${escape(workerText)}</span></button>`;
+      const kind = simpleKind(orch, latest.open.length);
+      const word = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready';
+      return `<button type="button" class="yard-row${selectedClass} kind-${kind}" data-open-project="${escape(item.project.id)}"><strong>${escape(item.project.name)}</strong><span>${word}</span></button>`;
     }).join('');
   }
 
   let orchestra = { mode: 'manual', models: [], projects: [] };
+  let toastTimer;
+  let fleetQuery = '';
 
   function renderFleet() {
     const el = $('fleet');
@@ -334,36 +430,156 @@
     const propose = orchestra.grillPropose !== false;
     const onCount = list.filter(item => item.enabled).length;
     if (modesEl) {
-      modesEl.innerHTML = `<button type="button" class="${mode === 'manual' ? 'primary' : 'secondary'}" data-mode="manual">Manual</button><button type="button" class="${mode === 'auto' ? 'primary' : 'secondary'}" data-mode="auto">Auto</button>`;
+      modesEl.innerHTML = `<button type="button" class="${mode === 'manual' ? 'primary' : 'secondary'}" data-mode="manual">Manual</button><button type="button" class="${mode === 'auto' ? 'primary' : 'secondary'}" data-mode="auto">Automatic</button><button type="button" class="primary" data-auto-start>Auto start</button>`;
     }
-    const groups = [];
-    const seen = new Map();
-    list.forEach(item => {
-      const plan = item.plan || 'Unnamed plan';
-      if (!seen.has(plan)) {
-        seen.set(plan, []);
-        groups.push(plan);
-      }
-      seen.get(plan).push(item);
+    const searchEl = el.querySelector && el.querySelector('.fleet-search');
+    const searchFocused = Boolean(searchEl && document.activeElement === searchEl);
+    const caret = searchFocused ? searchEl.selectionStart : null;
+    if (searchEl) fleetQuery = searchEl.value;
+    const query = fleetQuery.trim().toLowerCase();
+    const rows = list.filter(item => {
+      if (!query) return true;
+      const hay = `${item.label || ''} ${item.id || ''} ${item.plan || ''} ${item.kind || ''}`.toLowerCase();
+      return hay.includes(query);
     });
-    const cards = groups.length ? groups.map(plan => {
-      const rows = seen.get(plan);
-      const on = rows.some(item => item.enabled);
-      const modelsHtml = rows.map(item => {
-        const used = item.used || 0;
-        const limit = item.limit || 0;
-        const remaining = Number.isFinite(item.remaining) ? item.remaining : Math.max(0, limit - used);
-        const pct = limit ? Math.min(100, Math.round(used * 100 / limit)) : 0;
-        return `<div class="fleet-model${item.enabled ? '' : ' off'}"><div class="fleet-model-top"><strong>${escape(item.label)}</strong><button type="button" class="secondary" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></div><p>${used} of ${limit} used · ${remaining} left · cost ${item.cost}</p><div class="fleet-bar" role="progressbar" aria-valuemin="0" aria-valuenow="${used}" aria-valuemax="${limit}"><span style="width:${pct}%"></span></div></div>`;
-      }).join('');
-      return `<div class="fleet-plan-card${on ? '' : ' off'}"><h3>${escape(plan)}</h3>${modelsHtml}</div>`;
-    }).join('') : '<p class="muted">No models registered.</p>';
+    const plans = Array.isArray(orchestra.plans) ? orchestra.plans : [];
+    const planCards = plans.length ? `<div class="dash-models fleet-plans">${plans.map(item => {
+      const readable = item.readable;
+      const pct = Number.isFinite(item.pct) ? item.pct : 0;
+      const left = Number.isFinite(item.leftPct) ? item.leftPct : 100;
+      const badge = item.exhausted ? '<span class="badge off">Exhausted</span>' : (readable ? '<span class="badge green">Live</span>' : '<span class="badge">Unread</span>');
+      const windows = Array.isArray(item.windows) && item.windows.length
+        ? item.windows.map(win => `${win.name} ${win.pct}% used`).join(' · ')
+        : (readable ? `${pct}% used · ${left}% left` : (item.reason || 'Not readable'));
+      const bar = readable
+        ? `<div class="fleet-bar" role="progressbar" aria-valuemin="0" aria-valuenow="${pct}" aria-valuemax="100" aria-label="${pct}% used"><span style="width:${pct}%"></span></div>`
+        : '';
+      return `<article class="dash-model${item.exhausted ? ' state-off' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header>${bar}<p class="quota-remain">${escape(windows)}</p></article>`;
+    }).join('')}</div>` : '';
+    const table = rows.length ? `<table class="fleet-table"><thead><tr><th>Model</th><th>Provider</th><th>Role</th><th></th></tr></thead><tbody>${rows.map(item => {
+      const isLead = orchestra.orchestratorId && item.id === orchestra.orchestratorId;
+      const plan = plans.find(row => row.id === item.plan);
+      const exhausted = Boolean(plan && plan.exhausted);
+      const role = isLead ? 'Lead' : (exhausted ? 'Exhausted' : (item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Eligible' : 'Worker'));
+      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')}</td><td class="role">${escape(role)}</td><td><button type="button" class="secondary compact" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></td></tr>`;
+    }).join('')}</tbody></table>` : '<p class="muted">No models match.</p>';
     const open = el.open;
     el.innerHTML = `<summary>Workers and plans <span class="badge">${onCount} on</span></summary>
-      <div class="fleet-head"><button type="button" class="${propose ? 'primary' : 'secondary'}" data-grill-propose="1">Propose grill</button><button type="button" class="${propose ? 'secondary' : 'primary'}" data-grill-propose="0">Grill off</button></div>
-      <p class="muted fleet-hint">${mode === 'auto' ? 'Auto assigns an enabled model.' : 'Manual waits for Approve run.'} Usage is a local claim count.</p>
-      <div class="fleet-plans">${cards}</div>`;
+      <div class="fleet-head"><button type="button" class="${propose ? 'primary' : 'secondary'}" data-grill-propose="1">Grill on Auto start</button><button type="button" class="${propose ? 'secondary' : 'primary'}" data-grill-propose="0">Grill off</button></div>
+      <p class="muted fleet-hint">Provider usage is shared. If ChatGPT is exhausted, every ChatGPT model is exhausted. Inspect prefers a cheap model. Build prefers the default. Hard prefers the flagship.</p>
+      ${planCards}
+      <input class="fleet-search" type="search" placeholder="Search models" value="${escape(fleetQuery)}">
+      ${table}`;
     el.open = open;
+    const nextSearch = el.querySelector && el.querySelector('.fleet-search');
+    if (nextSearch) {
+      nextSearch.addEventListener('input', () => {
+        fleetQuery = nextSearch.value;
+        renderFleet();
+      });
+      if (searchFocused) {
+        nextSearch.focus();
+        if (Number.isFinite(caret)) nextSearch.setSelectionRange(caret, caret);
+      }
+    }
+  }
+
+  function fillSkills(info) {
+    const skills = info || orchestra.skills;
+    const short = skills && skills.sha ? String(skills.sha).slice(0, 7) : '…';
+    const when = skills && skills.date ? new Date(skills.date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+    const state = !skills ? ''
+      : skills.status === 'current' && !skills.behind ? ' · current with main'
+      : skills.behind ? ' · update on main'
+      : skills.status === 'cached' ? ' · cached'
+      : skills.status === 'offline' ? ' · offline'
+      : '';
+    const text = skills
+      ? `mattpocock/skills · ${skills.ref || 'main'} · ${short}${when ? ' · ' + when : ''}${state}`
+      : 'mattpocock/skills · main';
+    const title = skills && skills.sha ? `${skills.repo}@${skills.ref} ${skills.sha}` : 'mattpocock/skills main';
+    ['skills-version', 'skills-check'].forEach(id => {
+      const el = $(id);
+      if (!el) return;
+      el.textContent = text;
+      el.title = title;
+    });
+  }
+
+  function defaultDeadlineValue() {
+    const d = new Date();
+    d.setMinutes(0, 0, 0);
+    d.setHours(18);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    const pad = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  }
+
+  function bindTiming(form) {
+    if (!form || typeof form.querySelector !== 'function') return;
+    const update = () => {
+      const deadline = form.querySelector('input[name="timing"][value="deadline"]');
+      const field = form.querySelector('.deadline-at');
+      const input = form.elements && form.elements.deadlineAt;
+      const on = Boolean(deadline && deadline.checked);
+      if (field) field.hidden = !on;
+      if (input) input.required = on;
+      if (on && input && !input.value) input.value = defaultDeadlineValue();
+    };
+    if (typeof form.querySelectorAll !== 'function') return;
+    form.querySelectorAll('input[name="timing"]').forEach(el => {
+      if (el.dataset && el.dataset.boundTiming) return;
+      if (el.dataset) el.dataset.boundTiming = '1';
+      el.addEventListener('change', update);
+    });
+    update();
+  }
+
+  let autoStartProjectId = null;
+
+  function openAutoStart(id) {
+    if (!id) return;
+    autoStartProjectId = id;
+    const form = $('auto-start-form');
+    if (!form) return;
+    const discretion = form.querySelector('input[name="timing"][value="discretion"]');
+    if (discretion) discretion.checked = true;
+    if (form.elements.deadlineAt) form.elements.deadlineAt.value = defaultDeadlineValue();
+    if ($('auto-start-error')) $('auto-start-error').hidden = true;
+    bindTiming(form);
+    $('auto-start-dialog').showModal();
+  }
+
+  async function postAutoStart(id, timing, deadlineAt) {
+    const payload = { version, projectId: id, timing: timing === 'deadline' ? 'deadline' : 'discretion' };
+    if (payload.timing === 'deadline') payload.deadlineAt = deadlineAt;
+    const response = await fetch('/api/orchestrator/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || 'Save failed.');
+    if (body.plan) {
+      if (!Planwharf.validate(body.plan) || typeof body.version !== 'string') throw new Error('The plan file is invalid.');
+      data = body.plan;
+      version = body.version;
+    }
+    orchestra = body.snapshot;
+    render();
+    fillYard();
+    $('toast').textContent = body.phase === 'grill'
+      ? 'Matt grilling started from mattpocock/skills main. Answer the round, then work can start.'
+      : 'Repo read. Monitor shows the plan and who will take the job. Approve to assign.';
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+    revealMonitor();
+    return body;
+  }
+
+  async function maybeContinueAutoStart(id) {
+    const row = (orchestra.projects || []).find(item => item.id === (id || projectId));
+    if (!row || !row.pendingAutoStart) return;
+    try {
+      await postAutoStart(row.id, row.timing || 'discretion', row.deadlineAt);
+    } catch (error) {
+      notice(translateError(error.message));
+    }
   }
 
   function clock(iso) {
@@ -377,74 +593,178 @@
     const el = $('running-count');
     if (!el) return;
     const rows = orchestra.projects || [];
-    const watching = rows.filter(row => row.status === 'watching').length;
-    const attention = rows.filter(row => row.status === 'needs_approval' || row.status === 'propose_grill' || row.status === 'blocked_no_folder' || row.status === 'blocked_no_worker' || row.status === 'failed').length;
-    if (watching) el.textContent = watching === 1 ? '1 watching' : `${watching} watching`;
-    else if (attention) el.textContent = 'attention';
-    else el.textContent = 'idle';
+    const current = rows.find(row => row.id === projectId);
+    const openCount = data && project() ? project().revisions.at(-1).open.length : 0;
+    const kind = simpleKind(current, openCount);
+    el.textContent = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[kind] || 'Ready';
   }
 
   function monitorNow(rows, mode) {
-    const order = ['failed', 'blocked_no_worker', 'blocked_no_folder', 'needs_approval', 'propose_grill', 'watching', 'waiting_on_you', 'complete', 'idle'];
+    const order = ['failed', 'checkpointed', 'blocked_no_worker', 'blocked_no_folder', 'needs_approval', 'propose_grill', 'watching', 'waiting_on_you', 'complete', 'idle'];
     const top = [...rows].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0];
     if (!top) return 'No projects in the notebook.';
-    if (top.status === 'watching') return `Watching ${top.workerLabel || 'the worker'} on ${top.name} for STATUS: COMPLETE.`;
-    if (top.status === 'needs_approval') return `Plan ready on ${top.name}. Waiting for Approve run.`;
-    if (top.status === 'propose_grill') return `New on ${top.name}: Grill me or Grill with the docs.`;
-    if (top.status === 'waiting_on_you') return `Paused on ${top.name}: Grill me first.`;
+    if (top.status === 'watching') return `${top.orchestratorDoing || 'Orchestrator is monitoring workers.'} ${top.workerActivity || ''} ${top.workerLabel ? `Workers: ${top.workerLabel}.` : ''}`.replace(/\s+/g, ' ').trim();
+    if (top.status === 'needs_approval') return `Orchestrator split ${top.name} across ${top.dispatch && top.dispatch.length ? top.dispatch.length : 1} worker(s). Waiting for Approve run.`;
+    if (top.status === 'propose_grill') return `Auto start on ${top.name}: orchestrator is waiting on you. No worker assigned until grill is done.`;
+    if (top.status === 'waiting_on_you') return `Paused on ${top.name}: answer Grill me in For you, or Skip grill. No worker yet.`;
     if (top.status === 'blocked_no_folder') return `Blocked on ${top.name}: needs a folder.`;
     if (top.status === 'blocked_no_worker') return `Blocked on ${top.name}: no eligible worker.`;
     if (top.status === 'failed') return `Watch stopped on ${top.name}.`;
+    if (top.status === 'checkpointed') {
+      const stopped = top.checkpoint && top.checkpoint.reason === 'stop';
+      return stopped
+        ? `Stopped ${top.name}. Resume from checkpoint.`
+        : `Deadline reached on ${top.name}. Resume from checkpoint.`;
+    }
     if (top.status === 'complete') return `Evidence complete on ${top.name}.`;
-    return 'Idle. Start auto task to read the repo and propose a plan.';
+    return 'Idle. Auto start to check the project. Grill is proposed then if it is on.';
+  }
+
+  function monitorWho(top) {
+    if (!top) return 'Notebook: Planwharf. Orchestrator idle. Worker: None yet.';
+    const workers = (top.crew || []).filter(person => person.role === 'Worker');
+    const names = workers.map(person => person.name).join(' + ') || top.workerLabel || 'None yet';
+    const monitor = top.monitoring
+      ? ` Monitoring ${top.monitoring.alive}/${top.monitoring.workers} alive, ${top.monitoring.folderFiles} files.`
+      : '';
+    return `Notebook: Planwharf. Orchestrator: ${top.orchestratorDoing || 'on duty'}.${monitor} Workers: ${names}.`;
+  }
+
+  function fillOrchLead() {
+    const el = $('orch-lead');
+    if (!el) return;
+    if (document.activeElement === el) return;
+    const models = Array.isArray(orchestra.orchestrators) && orchestra.orchestrators.length
+      ? orchestra.orchestrators
+      : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
+    const current = orchestra.orchestratorId || '';
+    const groups = [];
+    const seen = new Map();
+    models.forEach(item => {
+      const plan = item.plan || 'Models';
+      if (!seen.has(plan)) {
+        seen.set(plan, []);
+        groups.push(plan);
+      }
+      seen.get(plan).push(item);
+    });
+    const options = groups.map(plan => `<optgroup label="${escape(plan)}">${seen.get(plan).map(item => {
+      const meter = (orchestra.plans || []).find(row => row.id === (item.plan || plan));
+      const tag = meter && meter.readable ? ` · ${meter.pct}% used` : '';
+      return `<option value="${escape(item.id)}"${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag)}</option>`;
+    }).join('')}</optgroup>`).join('');
+    el.innerHTML = `<option value="">Choose orchestrator</option>${options}`;
+  }
+
+  function renderAskThread(asks) {
+    const el = $('orch-ask-thread');
+    if (!el) return;
+    const items = Array.isArray(asks) ? asks.slice(0, watchMode ? 8 : 3) : [];
+    el.innerHTML = items.length
+      ? items.map(item => `<article class="orch-ask-item"><p class="orch-ask-q">${escape(item.question)}</p><p>${escape(item.answer)}</p><time>${escape(clock(item.at))}</time></article>`).join('')
+      : '<p class="muted">Ask what a worker is doing, why the job was split, or give an order: stop, resume, approve, turn a model on or off.</p>';
+  }
+
+  function revealMonitor() {
+    const card = (document.querySelector && document.querySelector('.card.running')) || $('orchestrator');
+    if (card && typeof card.scrollIntoView === 'function') {
+      card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  }
+
+  function projectActions(row) {
+    if (!row) return '';
+    const id = row.id;
+    const grillStuck = simpleKind(row, 0) === 'needs_you';
+    const grillMe = grillStuck ? `<button type="button" class="primary" data-grill-me="${escape(id)}">Answer</button>` : '';
+    const grillSkip = grillStuck ? `<button type="button" class="secondary" data-grill-skip="${escape(id)}">Skip</button>` : '';
+    const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">Go</button>` : '';
+    const resume = row.canResume && row.status === 'checkpointed' ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
+    const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
+    const startClass = grillStuck || approve || resume || stop ? 'secondary' : 'primary';
+    const start = `<button type="button" class="${startClass}" data-start="${escape(id)}">Start</button>`;
+    return `${grillMe}${grillSkip}${approve}${start}${resume}${stop}`;
+  }
+
+  function renderDashboard() {
+    const el = $('orchestrator');
+    if (!el) return;
+    const rows = orchestra.projects || [];
+    const fleet = Array.isArray(orchestra.fleet) && orchestra.fleet.length
+      ? orchestra.fleet
+      : (orchestra.models || []).map(item => ({ ...item, state: item.enabled ? 'idle' : 'off', role: item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Orchestrator' : 'Worker', assignments: [] }));
+    const interventions = Array.isArray(orchestra.interventions) ? orchestra.interventions : [];
+    const looked = clock(orchestra.updatedAt);
+    const lead = orchestra.orchestratorLabel || 'Orchestrator';
+    const briefing = `<div class="dash-brief"><p class="now-kicker">${escape(lead)}</p><p class="now-text">${escape(monitorNow(rows, orchestra.mode))}</p><p class="muted">Updated ${escape(looked || 'just now')}. I intervene on stall, death, or FAILED.</p></div>`;
+    const planList = Array.isArray(orchestra.plans) ? orchestra.plans : [];
+    const planCards = `<section class="dash-section dash-zone-plans"><h3>Provider usage</h3><div class="dash-models">${planList.map(item => {
+      const readable = item.readable;
+      const pct = Number.isFinite(item.pct) ? item.pct : 0;
+      const badge = item.exhausted ? '<span class="badge off">Exhausted</span>' : (readable ? '<span class="badge green">Live</span>' : '<span class="badge">Unread</span>');
+      const detail = readable
+        ? (Array.isArray(item.windows) && item.windows.length ? item.windows.map(win => `${win.name} ${win.pct}% used`).join(' · ') : `${pct}% used`)
+        : (item.reason || 'Not readable');
+      const bar = readable ? `<div class="quota"><div class="fleet-bar" role="progressbar" aria-valuemin="0" aria-valuenow="${pct}" aria-valuemax="100" aria-label="${pct}% used"><span style="width:${pct}%"></span></div><p class="quota-line"><strong>${pct}% used</strong><span>${Number.isFinite(item.leftPct) ? item.leftPct : 100}% left</span></p></div>` : `<p class="muted">${escape(detail)}</p>`;
+      return `<article class="dash-model${item.exhausted ? ' state-off' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header>${bar}${readable ? `<p class="muted">${escape(detail)}</p>` : ''}</article>`;
+    }).join('') || '<p class="muted">Provider usage loads from the local logins.</p>'}</div></section>`;
+    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3><div class="dash-models">${fleet.map(item => {
+      const jobs = item.assignments || [];
+      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.enabled ? 'Idle' : 'Off');
+      const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
+      const leadBtn = item.eligible && !item.lead ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>` : '';
+      const badge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.enabled ? 'On' : 'Off'}</button></div></article>`;
+    }).join('')}</div></section>`;
+    const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
+      const parts = row.dispatch || [];
+      const slices = parts.length
+        ? parts.map(part => `<li><strong>${escape(part.label || part.modelId)}</strong> · ${escape(part.slice || 'whole job')} · pid ${escape(String(part.pid || '—'))} ${part.alive ? 'alive' : 'stopped'} · ${escape(part.activity || row.workerActivity || 'quiet')}</li>`).join('')
+        : `<li class="muted">${row.workerLabel ? escape(row.workerLabel) : 'No process yet.'}</li>`;
+      const log = row.workerTail ? `<details class="monitor-log" open><summary>Live log</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '';
+      const monitor = row.monitoring ? `<p class="muted">${row.monitoring.alive}/${row.monitoring.workers} alive · ${row.monitoring.folderFiles} files</p>` : '';
+      return `<article class="dash-proc ${escape(row.status)}" data-open-project="${escape(row.id)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header><p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row)}</div></article>`;
+    }).join('') || '<p class="muted">No projects in the notebook.</p>'}</div></section>`;
+    const iv = `<section class="dash-section dash-zone-iv"><h3>Interventions</h3>${interventions.length
+      ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
+      : '<p class="muted">No interventions yet. I switch workers on stall, death, or FAILED.</p>'}</section>`;
+    el.innerHTML = `${briefing}${planCards}${models}${processes}${iv}`;
   }
 
   function renderOrchestra() {
     renderFleet();
     fillRunningCount();
+    fillSkills(orchestra.skills);
+    fillOrchLead();
+    renderAskThread(orchestra.asks);
     const el = $('orchestrator');
     if (!el) return;
-    const rows = orchestra.projects || [];
-    const mode = orchestra.mode === 'auto' ? 'auto' : 'manual';
-    const looked = clock(orchestra.updatedAt);
-    const head = `<div class="monitor-now"><div class="monitor-now-top"><strong>Monitor</strong><span class="badge">${mode === 'auto' ? 'Auto' : 'Manual'}</span><span class="muted">Last look ${looked || '—'}</span></div><p>${escape(monitorNow(rows, mode))}</p></div>`;
-    if (!rows.length) {
-      el.innerHTML = `${head}<p class="muted">Orchestrator will read the notebook on this computer.</p>`;
+    if (watchMode) {
+      renderDashboard();
       return;
     }
-    const body = rows.map(row => {
-      const start = row.canStart && row.status !== 'propose_grill' ? `<button type="button" class="primary" data-start="${escape(row.id)}">Start auto task</button>` : '';
-      const grillMe = row.status === 'propose_grill' ? `<button type="button" class="primary" data-grill-me="${escape(row.id)}">Grill me</button>` : '';
-      const grillDocs = row.status === 'propose_grill' ? `<button type="button" class="secondary" data-grill-docs="${escape(row.id)}" ${row.canGrillDocs ? '' : 'disabled'}>Grill with the docs</button>` : '';
-      const grillSkip = row.status === 'propose_grill' ? `<button type="button" class="secondary" data-grill-skip="${escape(row.id)}">Skip grill</button>` : '';
-      const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(row.id)}">Approve run</button>` : '';
-      const remove = row.jobId ? `<button type="button" class="secondary" data-remove-task="${escape(row.jobId)}" data-project="${escape(row.id)}">Remove job</button>` : '';
-      const showPlan = row.plan && row.plan.length && (row.status === 'needs_approval' || row.status === 'watching' || row.status === 'complete');
-      const plan = showPlan ? `<details class="orch-plan"${row.status === 'needs_approval' ? ' open' : ''}><summary>What it will do</summary><ol>${row.plan.map(step => `<li>${escape(step)}</li>`).join('')}</ol></details>` : '';
-      const logItems = (row.log || []).slice(0, 4);
-      const log = logItems.length ? `<details class="monitor-log"><summary>Log</summary><ol>${logItems.map(line => `<li><time>${escape(clock(line.at))}</time> ${escape(line.text)}</li>`).join('')}</ol></details>` : '';
-      const since = row.watchingSince ? ` since ${escape(clock(row.watchingSince))}` : '';
-      const latestBit = row.facts && row.facts.lastCommit ? row.facts.lastCommit : (row.facts && row.facts.git ? 'git' : '');
-      const dirtyBit = row.facts && row.facts.dirty && row.facts.dirty.length ? `${row.facts.dirty.length} uncommitted` : '';
-      const facts = row.facts && !row.facts.error ? [latestBit, dirtyBit, `${row.facts.fileCount} files`].filter(Boolean).join(' · ') : '';
-      const compact = row.status === 'idle' || row.status === 'propose_grill';
-      const sameNext = !row.next || !row.waitingFor || row.next.toLowerCase().includes(row.waitingFor.toLowerCase()) || row.waitingFor.toLowerCase().includes(row.next.toLowerCase());
-      const grid = compact ? '' : `<dl class="monitor-grid">
-          <div><dt>Job</dt><dd>${row.jobTitle ? escape(row.jobTitle) : 'None'}</dd></div>
-          <div><dt>Worker</dt><dd>${row.workerLabel ? escape(row.workerLabel) : 'None yet'}</dd></div>
-          <div><dt>Waiting for</dt><dd>${escape(row.waitingFor || row.doing)}</dd></div>
-          ${sameNext ? '' : `<div><dt>Next</dt><dd>${escape(row.next)}</dd></div>`}
-        </dl>`;
-      const line = '';
-      return `<article class="task orch ${escape(row.status)}" data-open-project="${escape(row.id)}">
-        <div class="task-top"><span>${escape(row.name)}</span><span class="orch-status">${escape(row.label)}</span></div>
-        ${line}${grid}
-        ${facts || since ? `<p class="muted">${escape(facts)}${since}</p>` : ''}
-        ${plan}${grillMe}${grillDocs}${grillSkip}${start}${approve}${remove}
-        ${log}
-      </article>`;
-    }).join('');
-    el.innerHTML = `${head}<div class="monitor-rows">${body}</div>`;
+    const rows = orchestra.projects || [];
+    const order = ['failed', 'checkpointed', 'blocked_no_worker', 'blocked_no_folder', 'needs_approval', 'propose_grill', 'watching', 'waiting_on_you', 'complete', 'idle'];
+    const top = [...rows].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0];
+    const focused = rows.find(row => row.id === projectId) || top;
+    const openList = data && project() ? project().revisions.at(-1).open : [];
+    const kind = simpleKind(focused, openList.length);
+    const copy = heroCopy(kind, focused, openList.length);
+    const questions = kind === 'needs_you' && openList.length
+      ? `<ol class="now-questions">${openList.map(q => `<li>${escape(q)}</li>`).join('')}</ol>`
+      : '';
+    const workerLine = kind === 'working' && focused && focused.workerLabel
+      ? `<p class="muted">${escape(focused.workerLabel)}${focused.workerAlive ? ' is working' : ''}</p>`
+      : '';
+    const rest = rows.filter(row => row.id !== projectId);
+    const others = rest.length
+      ? `<details class="orch-others"><summary>Other projects</summary><div class="orch-minis">${rest.map(row => {
+        const word = { needs_you: 'Your turn', working: 'Working', done: 'Done', stuck: 'Stuck', ready: 'Ready' }[simpleKind(row, 0)] || row.label;
+        return `<button type="button" class="orch-mini ${escape(row.status)}" data-open-project="${escape(row.id)}"><strong>${escape(row.name)}</strong><span class="orch-status">${escape(word)}</span></button>`;
+      }).join('')}</div></details>`
+      : '';
+    const hero = `<div class="now-hero kind-${kind}"><p class="now-kicker">${escape(copy.title)}</p><p class="now-text">${escape(copy.text)}</p>${questions}${workerLine}<div class="now-actions">${projectActions(focused)}</div></div>`;
+    el.innerHTML = `${hero}${others}`;
   }
 
   async function refreshOrchestra() {
@@ -653,7 +973,12 @@
     if (hit) openProject(hit.getAttribute('data-open-project'));
   };
   $('yard-list').addEventListener('click', openFrom);
-  $('waiting-content').addEventListener('click', openFrom);
+  $('waiting-content').addEventListener('click', event => {
+    const row = event.target && event.target.closest && event.target.closest('[data-open-project]');
+    if (!row) return;
+    openProject(row.getAttribute('data-open-project'));
+    beginGrillRound('me');
+  });
   async function removeJob(btn) {
     if (!data || saving || !btn) return;
     if (!window.confirm('Remove this job from Running? The rest of the notebook stays.')) return;
@@ -699,17 +1024,34 @@
     } finally { saving = false; }
   });
   $('run-tools').addEventListener('click', async event => {
+    if (event.target && event.target.closest && event.target.closest('[data-auto-start]')) {
+      event.preventDefault();
+      openAutoStart(projectId);
+      return;
+    }
     const mode = event.target && event.target.getAttribute && event.target.getAttribute('data-mode');
     const proposeFlag = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-propose');
     const modelId = event.target && event.target.getAttribute && event.target.getAttribute('data-model');
+    const leadPick = event.target && event.target.getAttribute && event.target.getAttribute('data-lead');
     try {
+      if (leadPick) {
+        const response = await fetch('/api/orchestrator/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: leadPick }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra = body;
+        renderOrchestra();
+        fillYard();
+        $('toast').textContent = `Orchestrator is now ${(orchestra.orchestratorLabel || leadPick)}.`;
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
+        return;
+      }
       if (proposeFlag === '0' || proposeFlag === '1') {
         const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propose: proposeFlag === '1' }) });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
         orchestra = body;
         render();
-        $('toast').textContent = proposeFlag === '1' ? 'Grill proposal on for new projects.' : 'Grill proposal off for every project.';
+        $('toast').textContent = proposeFlag === '1' ? 'Grill me / Grill with the docs will be proposed on Auto start.' : 'Auto start skips grill.';
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
         return;
       }
@@ -720,7 +1062,7 @@
         orchestra = body;
         renderOrchestra();
         fillYard();
-        $('toast').textContent = mode === 'auto' ? 'Auto on. The orchestrator picks a worker from enabled plans with remaining quota.' : 'Manual on. Approve run before a claim.';
+        $('toast').textContent = mode === 'auto' ? 'Automatic on. The orchestrator picks a worker from enabled models whose provider still has usage.' : 'Manual on. Approve run before a claim.';
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
         return;
       }
@@ -738,6 +1080,23 @@
     }
   });
   $('orchestrator').addEventListener('click', async event => {
+    const leadPick = event.target && event.target.getAttribute && event.target.getAttribute('data-lead');
+    if (leadPick) {
+      event.stopPropagation();
+      try {
+        const response = await fetch('/api/orchestrator/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: leadPick }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra = body;
+        renderOrchestra();
+        fillYard();
+        $('toast').textContent = `Orchestrator is now ${(orchestra.orchestratorLabel || leadPick)}.`;
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
+      } catch (error) {
+        notice(translateError(error.message));
+      }
+      return;
+    }
     const removeBtn = event.target && event.target.closest && event.target.closest('[data-remove-task]');
     if (removeBtn) {
       event.stopPropagation();
@@ -748,13 +1107,20 @@
     if (skipId) {
       event.stopPropagation();
       try {
-        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: skipId, skip: true }) });
+        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: skipId, skip: true, version }) });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
-        orchestra = body;
+        if (body.plan && body.version) {
+          data = body.plan;
+          version = body.version;
+          orchestra = body.snapshot || orchestra;
+        } else {
+          orchestra = body.snapshot || body;
+        }
         render();
         $('toast').textContent = 'Grill skipped on this project.';
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 4000);
+        await maybeContinueAutoStart(skipId);
       } catch (error) {
         notice(translateError(error.message));
       }
@@ -777,23 +1143,43 @@
     const startId = event.target && event.target.getAttribute && event.target.getAttribute('data-start');
     if (startId) {
       event.stopPropagation();
-      if (!data || saving) return;
-      saving = true;
+      openAutoStart(startId);
+      return;
+    }
+    const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
+    if (stopId) {
+      event.stopPropagation();
       try {
-        const response = await fetch('/api/orchestrator/start', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, projectId: startId }) });
+        const response = await fetch('/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: stopId }) });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
-        if (!Planwharf.validate(body.plan) || typeof body.version !== 'string') throw new Error('The plan file is invalid.');
-        data = body.plan;
-        version = body.version;
-        orchestra = body.snapshot;
-        render();
+        orchestra = body;
+        renderOrchestra();
         fillYard();
-        $('toast').textContent = 'Repo read. Approve the plan to pass the job to a worker.';
+        $('toast').textContent = 'Stopped. Checkpoint saved. Press Resume when you want the workers back.';
         clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+        revealMonitor();
       } catch (error) {
         notice(translateError(error.message));
-      } finally { saving = false; }
+      }
+      return;
+    }
+    const resumeId = event.target && event.target.getAttribute && event.target.getAttribute('data-resume');
+    if (resumeId) {
+      event.stopPropagation();
+      try {
+        const response = await fetch('/api/orchestrator/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: resumeId }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra = body;
+        renderOrchestra();
+        fillYard();
+        $('toast').textContent = 'Resumed from checkpoint. Monitor shows who is watching again.';
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+        revealMonitor();
+      } catch (error) {
+        notice(translateError(error.message));
+      }
       return;
     }
     const id = event.target && event.target.getAttribute && event.target.getAttribute('data-approve');
@@ -811,8 +1197,9 @@
       fillYard();
       await openEngine();
       renderClaims();
-      $('toast').textContent = 'Run approved. The orchestrator assigned a worker and is watching for evidence.';
+      $('toast').textContent = 'Run approved. Monitor shows the assigned worker and what it is waiting for.';
       clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 6000);
+      revealMonitor();
     } catch (error) {
       notice(translateError(error.message));
     }
@@ -892,7 +1279,6 @@
   });
   $('close-dialog').addEventListener('click', () => dialog.close());
   $('cancel-dialog').addEventListener('click', () => dialog.close());
-  let toastTimer;
 
   form.addEventListener('submit', async event => {
     event.preventDefault();
@@ -961,7 +1347,7 @@
     finally { saving = false; }
   }
 
-  for (const kind of ['grill', 'import', 'task', 'project', 'place']) {
+  for (const kind of ['grill', 'import', 'task', 'project', 'place', 'auto-start']) {
     $(`${kind}-cancel`).addEventListener('click', () => $(`${kind}-dialog`).close());
   }
   $('new-project').addEventListener('click', () => {
@@ -1046,7 +1432,7 @@
   async function beginGrillRound(kind) {
     if (!data || saving) return;
     let latest = project().revisions.at(-1);
-    if (!latest.open.length) {
+    if (!latest.open.length || (Planwharf.isGenericFrontier && Planwharf.isGenericFrontier(latest.open))) {
       saving = true;
       try {
         const payload = { version, projectId };
@@ -1082,7 +1468,10 @@
     event.preventDefault();
     const form = $('grill-form');
     const answers = project().revisions.at(-1).open.map((question, i) => ({ question, action: form.elements[`action-${i}`].value, answer: form.elements[`answer-${i}`].value }));
+    const grilledId = projectId;
     await mutate('/api/grill', 'round', { title: form.elements.title.value, answers }, 'grill-dialog', 'grill-error');
+    await refreshOrchestra();
+    await maybeContinueAutoStart(grilledId);
   });
   $('import-revision').addEventListener('click', () => {
     $('import-form').elements.json.value = '';
@@ -1099,13 +1488,94 @@
     $('task-context').textContent = `The task originates from R${taskRevision}, the revision you are reading.`;
     $('task-form').elements.title.value = '';
     $('task-form').elements.detail.value = '';
+    if (typeof $('task-form').querySelector === 'function') {
+      const discretion = $('task-form').querySelector('input[name="timing"][value="discretion"]');
+      if (discretion) discretion.checked = true;
+    }
+    if ($('task-form').elements.deadlineAt) $('task-form').elements.deadlineAt.value = defaultDeadlineValue();
     $('task-error').hidden = true;
+    bindTiming($('task-form'));
     $('task-dialog').showModal();
   });
   $('task-form').addEventListener('submit', async event => {
     event.preventDefault();
-    await mutate('/api/tasks', 'task', { revision_id: taskRevision, title: $('task-form').elements.title.value, detail: $('task-form').elements.detail.value }, 'task-dialog', 'task-error', true);
+    const form = $('task-form');
+    const timing = (form.elements.timing && form.elements.timing.value) || 'discretion';
+    const payload = { revision_id: taskRevision, title: form.elements.title.value, detail: form.elements.detail.value };
+    if (form.elements.timing) payload.timing = timing;
+    if (timing === 'deadline' && form.elements.deadlineAt) payload.deadlineAt = form.elements.deadlineAt.value;
+    await mutate('/api/tasks', 'task', payload, 'task-dialog', 'task-error', true);
   });
+  if ($('orch-lead')) {
+    $('orch-lead').addEventListener('change', async event => {
+      const id = event.target.value;
+      try {
+        const response = await fetch('/api/orchestrator/lead', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Save failed.');
+        orchestra = body;
+        fillOrchLead();
+        renderOrchestra();
+        $('toast').textContent = id ? `Orchestrator is now ${(orchestra.orchestratorLabel || id)}.` : 'Orchestrator lead cleared.';
+        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
+      } catch (error) {
+        notice(translateError(error.message));
+      }
+    });
+  }
+  if ($('orch-ask-form')) {
+    $('orch-ask-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      const input = $('orch-ask-input');
+      const submit = $('orch-ask-submit');
+      const question = input && input.value ? input.value.trim() : '';
+      if (!question) return;
+      if (submit) {
+        submit.disabled = true;
+        submit.textContent = 'Asking…';
+      }
+      try {
+        const response = await fetch('/api/orchestrator/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, projectId }) });
+        const body = await response.json();
+        if (!response.ok) throw new Error(body.error || 'Ask failed.');
+        if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
+        orchestra.asks = body.asks || orchestra.asks || [];
+        renderOrchestra();
+        fillYard();
+        if (input) input.value = '';
+      } catch (error) {
+        notice(translateError(error.message));
+      } finally {
+        if (submit) {
+          submit.disabled = false;
+          submit.textContent = 'Ask';
+        }
+      }
+    });
+  }
+  if ($('auto-start-form')) {
+    $('auto-start-form').addEventListener('submit', async event => {
+      event.preventDefault();
+      if (!data || saving || !autoStartProjectId) return;
+      const form = $('auto-start-form');
+      const timing = (form.elements.timing && form.elements.timing.value) || 'discretion';
+      const deadlineAt = form.elements.deadlineAt ? form.elements.deadlineAt.value : '';
+      if (timing === 'deadline' && !deadlineAt) {
+        $('auto-start-error').textContent = 'Set the finish-by time.';
+        $('auto-start-error').hidden = false;
+        return;
+      }
+      saving = true;
+      $('auto-start-error').hidden = true;
+      try {
+        await postAutoStart(autoStartProjectId, timing, deadlineAt ? new Date(deadlineAt).toISOString() : null);
+        $('auto-start-dialog').close();
+      } catch (error) {
+        $('auto-start-error').textContent = translateError(error.message);
+        $('auto-start-error').hidden = false;
+      } finally { saving = false; }
+    });
+  }
   request('/api/plan').then(async saved => {
     data = saved.plan;
     version = saved.version;

@@ -7,6 +7,7 @@ const { spawn } = require('node:child_process');
 const Plan = require('./plan.js');
 const { createServer, readPlan } = require('./server.cjs');
 const { createAttemptEngine } = require('./engine/attempts.js');
+const { spawnWorker, isProcessAlive, killWorker, askOrchestrator, abortAsk } = require('./engine/runner.cjs');
 
 const root = __dirname;
 const defaultPlan = path.join(root, 'plan.json');
@@ -28,6 +29,11 @@ function parseArgs(argv) {
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === 'status' || token === 'projects') opts.command = token;
+    else if (token === 'ask') {
+      opts.command = 'ask';
+      opts.question = args.slice(i + 1).join(' ').trim();
+      break;
+    }
     else if (token === '--no-window') opts.noWindow = true;
     else if (token === '--plan') opts.planFile = path.resolve(args[++i] || '');
     else if (token === '--attempts-dir') opts.attemptsDir = path.resolve(args[++i] || '');
@@ -116,7 +122,19 @@ function findBrowser() {
 function findEdge() { return findBrowser(); }
 
 function listen(opts) {
-  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir });
+  let watchChild = null;
+  const openWatchWindow = watchUrl => {
+    if (watchChild && watchChild.exitCode == null && !watchChild.killed) return watchChild;
+    watchChild = openWindow(watchUrl, path.join(root, '.planwharf-watch'));
+    if (watchChild) watchChild.on('exit', () => { watchChild = null; });
+    return watchChild;
+  };
+  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, syncSkills: true, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk, openWatchWindow });
+  server.on('close', () => {
+    if (watchChild && !watchChild.killed) {
+      try { watchChild.kill(); } catch (_) {}
+    }
+  });
   const start = opts.port;
   const last = opts.portExplicit && start !== 0 ? start : (start === 0 ? 0 : start + 20);
   return new Promise((resolve, reject) => {
@@ -152,6 +170,19 @@ function openWindow(url, profileDir) {
 }
 
 async function runCli(opts) {
+  if (opts.command === 'ask') {
+    if (!opts.question) throw new Error('ask needs a question.');
+    const origin = `http://127.0.0.1:${opts.port}`;
+    const response = await fetch(origin + '/api/orchestrator/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Origin: origin },
+      body: JSON.stringify({ question: opts.question })
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(body.error || 'Ask failed. Start Planwharf first.');
+    process.stdout.write((body.answer || '') + '\n');
+    return;
+  }
   const plan = await readPlan(opts.planFile);
   const attempts = loadAttempts(opts.attemptsDir);
   if (opts.command === 'projects') process.stdout.write(formatProjects(plan));
@@ -176,6 +207,9 @@ async function runApp(opts) {
       child.on('exit', () => shutdown());
       console.log(`Planwharf\nWindow: browser --app\n${url}\nPlan: ${opts.planFile}\nCtrl+C to close.`);
     } else {
+      if (process.platform === 'win32') {
+        spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
+      }
       console.log(`Planwharf\nNo Chromium browser found. Open ${url}\nPlan: ${opts.planFile}\nCtrl+C to close.`);
     }
   } else {

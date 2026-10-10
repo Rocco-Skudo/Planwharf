@@ -8,11 +8,13 @@ Serve Node.js, senza dipendenze da installare. È un’app locale: un processo N
 
 **Avvio**
 
-Windows — doppio clic su `planwharf.cmd`, oppure:
+Windows — doppio clic su **Planwharf.exe** (nella cartella del progetto). Serve Node.js. Se Node manca, una finestra lo dice. In alternativa doppio clic su `planwharf.cmd`, oppure:
 
 ```powershell
 node "D:\benit\Desktop\Projects\Planwharf-zombie\planwharf.cjs"
 ```
+
+Per ricostruire l’exe: doppio clic su `launch\build-exe.cmd` (serve .NET Framework 4).
 
 Linux e macOS — dalla cartella del repo:
 
@@ -28,7 +30,7 @@ Ctrl+C (o chiudere la finestra) spegne tutto. Se la porta 4173 è occupata, ne p
 
 Cartella locale: su Windows un percorso tipo `D:\benit\Desktop\Projects\RaceEngineer`; su Linux/macOS tipo `/home/tuo/Projects/RaceEngineer` o `/Users/tuo/Projects/RaceEngineer`.
 
-**Grill me** (Matt Pocock) sta in For you su ogni progetto, anche se lo hai appena aggiunto e non ha ancora domande. Se For you è vuoto, il tasto scrive il primo giro di domande e apre il round. **Grill with the docs** fa lo stesso e aggiunge domande sui README/AGENTS/docs della cartella. L’orchestratore **propone** Grill me o Grill with the docs su un progetto nuovo o mai grigliato. **Propose grill** / **Skip grill** in Workers and plans spegne la proposta per tutti; **Skip grill** sul progetto la spegne solo lì. Non lancia modelli.
+**Grill me** (Matt Pocock) sta in For you su ogni progetto, anche se lo hai appena aggiunto e non ha ancora domande. Se For you è vuoto, il tasto scrive il primo giro di domande e apre il round. **Grill with the docs** fa lo stesso e aggiunge domande sui README/AGENTS/docs della cartella. L’orchestratore **propone** Grill me o Grill with the docs solo al momento di **Auto start**, se **Grill on Auto start** è acceso (default) e il progetto non è ancora stato grigliato. **Grill off** spegne la proposta su Auto start; **Skip grill** sul progetto la salta solo lì. Non lancia modelli.
 
 Stessi file, senza aprire la finestra:
 
@@ -45,7 +47,11 @@ node "D:\benit\Desktop\Projects\Planwharf-zombie\planwharf.cjs" status
 - **The plan**: foglio principale (Goal, stato, decisioni, domande aperte) della revisione letta, con importazione JSON.
 - **What changed**: differenze rispetto alla precedente o salto dall'ultima visita; storico conservato.
 - **For you**: domande aperte di tutti i progetti; Grill me gira sul progetto aperto.
-- **Running**: in cima il **Monitor** (ultimo sguardo, job, worker, cosa aspetta, prossimo passo, log). **Start auto task** legge la cartella git (ultimo commit, log recente, file non committati), crea il job dal piano e aspetta **Approve run**; dopo l’approvazione assegna il worker adatto. Anche in Auto, un job partito da Start auto task aspetta Approve. Sotto **Workers and plans**. **Manual** / **Auto**. I consumi sono conteggi locali dei claim. Non chiama API a pagamento.
+- **Now** (su Planwharf): stato del lavoro sul progetto aperto (Your turn / Working / Done / Ready / Stuck) e l’azione primaria (Answer, Skip, Start, Go, Stop, Resume). **Functions** accende o spegne Manual / Automatic, Grill on Auto start, e i modelli, e lascia scegliere il **modello orchestratore**. **Auto start** è sempre disponibile, anche con domande aperte o un job già in corso: ferma i worker, salva un checkpoint se stavano lavorando, e riparte la pipeline. **Orchestrator** apre una finestra a parte (`/orchestrator.html`, profilo `.planwharf-watch`) sullo stesso processo Node: chat a sinistra, dashboard a destra. All’avvio Planwharf confronta `mattpocock/skills` con GitHub **main** (sha); **Check skills** in Functions rifà il fetch. **Provider usage** (ChatGPT, Grok, Gemini) è l’utilizzo reale del piano, in percentuale, letto dai login locali (Codex/ChatGPT e grok CLI). L’elenco modelli è una sezione a parte: se ChatGPT è esaurito, tutti i modelli ChatGPT sono esauriti. Gemini resta unread se sul PC non c’è un login quota-leggibile.
+
+## Orchestrator
+
+La finestra Orchestrator (`/orchestrator.html`) è una chat con dashboard: si cambia il lead quando si vuole, si vedono stato / utilizzo residuo / processi, e l’analisi di cosa stanno facendo. Interventi (stall / processo morto / FAILED → switch al prossimo modello). **Ask** parla con l’orchestratore e dà ordini (stop, resume, approve, turn a model on or off, use X as orchestrator). I dettagli sul lavoro arrivano in tempo reale (poll ~4s). **Manual** / **Automatic** scelgono se un job aggiunto a mano aspetta Approve. Dopo **Approve run** l’orchestratore smista il job a un worker, o lo spezza su più worker se è più efficiente. Un job da Auto start aspetta sempre Approve. In pianificazione si sceglie **Worker discretion** o **Finish by** (es. 18:00): a quell’ora l’orchestratore consegna l’output o salva un checkpoint da riprendere. **Stop** interrompe i worker e salva un checkpoint; **Resume** riparte. Non chiama API a pagamento.
 
 ## Manuale, Grillbench, importazione
 
@@ -83,9 +89,9 @@ Il file ora usa schema 2 con `projects`, un elenco di quaderni progetto (schema 
 
 Ogni progetto può avere una **cartella locale** (percorso assoluto sul PC) e un URL **GitHub** (`https://github.com/owner/repo`). Li incolli tu in Add project o Set place: Planwharf non scansiona il disco e non chiama l’API GitHub. Open folder apre Esplora file sulla cartella salvata; Open GitHub apre l’URL salvato.
 
-L’orchestratore è il nucleo: gira nello stesso processo Node. **Start auto task** fa un inspect read-only (`git log` / `status` / `diff`) della cartella collegata, scrive un job e si ferma su **Approve run**. Dopo Approve, `pickWorker` assegna un modello del catalogo (inspect → economico, build → default, hard → flagship) e scrive il file attempt WATCHING. Non lancia Grok né API a pagamento. Un job aggiunto a mano in Auto può essere claimed senza Approve; un job da Start auto task aspetta sempre Approve (`holdApproval`).
+Planwharf è il quaderno (stato dell’arte, lavoro, funzioni). L’**orchestratore** è la dashboard e gira nello stesso processo Node. All’avvio confronta `mattpocock/skills` con GitHub **main** (sha) e in Functions mostra current/update; **Check skills** rifà il fetch. **Auto start** resta sempre cliccabile. Fa un inspect read-only (`git log` / `status` / `diff`) della cartella collegata; se c’è un job in corso lo ferma (checkpoint se i worker erano attivi) e riparte. Se Grill on Auto start è acceso, apre un round di grilling Matt sul progetto (domande con recommended, non il vecchio template generico); poi scrive un job e aspetta **Approve run**. Nella chat e in Functions scegli il **modello orchestratore** (`POST /api/orchestrator/lead`) tra flagship e default (GPT-6 Astra, GPT-5, GPT-5.5, Grok Build, Grok 4.20, Grok 4.7). Si può cambiare in qualsiasi momento. Luna, mini, Fast e Flash restano worker. Poi la **chat** (`POST /api/orchestrator/ask`, CLI `node planwharf.cjs ask "…"`): conversazione vera (Send, Invio, storico) per domande live e ordini. Mentre il lead lavora compare **Thinking** con il tempo in corso; a fine turno resta il tempo impiegato e, se c’è, il testo di thinking. **Stop** (o Escape) interrompe la risposta in corso, riapre la casella e permette un nuovo messaggio. Con un lead (Astra, Grok 4.7, …) la chat è **solo coordinamento**: ispezione in sola lettura (permission-mode plan, niente `--always-approve`). I comandi di lavoro (implement, fix, continua, smista) diventano job per i **worker**, non una sessione in cui il lead scrive il codice. L’ispezione resta in thinking; in chat si vede solo la valutazione. Senza lead chiede di sceglierne uno. Ordini: stop, resume, approve, start, skip grill, automatic/manual, turn a model on or off, change lead. L’orchestratore spacchetta il job sui worker abilitati con quota: inspect 1, build/hard fino a 3 slice in parallelo. Dopo Approve lancia un `engine/runner.cjs` per slice. La dashboard mostra ogni modello (stato, utilizzo, processi), cosa sta facendo ogni worker (interpretazione del log), e gli interventi. Se un processo muore senza COMPLETE, FAILED, o 90s senza progresso, switch al prossimo modello. **Stop** (o un termine **Finish by** a scadenza non completa) uccide i worker e scrive un checkpoint; **Resume from checkpoint** continua. Il tasto **Orchestrator** (`POST /api/orchestrator/window`) apre `/orchestrator.html` nello stesso server. `/?watch=1` reindirizza lì. Un job aggiunto a mano in Automatic può essere claimed senza Approve; un job da Auto start aspetta sempre Approve (`holdApproval`).
 
-La cartella è locale: nessuna pubblicazione, provider, spawn di modelli o discovery dal PC. La finestra e il CLI parlano agli stessi file su 127.0.0.1.
+La cartella è locale. La finestra e il CLI parlano agli stessi file su 127.0.0.1.
 
 ## Verifica
 
@@ -98,6 +104,7 @@ node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-jump.cjs"
 node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-projects.cjs"
 node "D:\benit\Desktop\Projects\Planwharf-zombie\verify-app.cjs"
 node "D:\benit\Desktop\Projects\Planwharf-zombie\engine\orchestrator.test.cjs"
+node "D:\benit\Desktop\Projects\Planwharf-zombie\engine\skills.test.cjs"
 ```
 
 Le prove verificano schema, storico immutabile, modi, riferimenti task, secondo running rifiutato, grill chiusura/cambio direzione, diff della riapertura esplicita, import valido e invalidi senza scrittura, stato a due progetti dopo riavvio ed errori disco. Usano un file temporaneo isolato: non aggiungono revisioni a plan.json.

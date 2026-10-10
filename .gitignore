@@ -3,4 +3,5 @@ validation/**/*.dmp
 *.dmp
 .attempts-*/
 .planwharf-window/
+.planwharf-watch/
 plan.local.json
