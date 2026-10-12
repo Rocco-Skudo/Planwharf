@@ -15,7 +15,8 @@ const beforeHash = crypto.createHash('sha256').update(fs.readFileSync(production
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-app-'));
 const planFile = path.join(dir, 'plan.json');
 const attemptsDir = path.join(dir, 'attempts');
-fs.copyFileSync(production, planFile);
+fs.copyFileSync(path.join(__dirname, 'fixtures/notebook.json'), planFile);
+let runningServer;
 
 function runCli(args) {
   return new Promise((resolve, reject) => {
@@ -48,7 +49,12 @@ function runCli(args) {
   assert.equal(status.stdout, statusText);
 
   const opts = parseArgs([process.execPath, 'planwharf.cjs', '--no-window', '--plan', planFile, '--attempts-dir', attemptsDir, '--port', '0']);
+  opts.models = [];
+  opts.syncSkills = false;
+  opts.skillsEnabled = false;
+  opts.fetchPlans = async () => ['ChatGPT', 'Grok'].map(id => ({ id, label: id, readable: true, pct: 18, leftPct: 82, windows: [] }));
   const opened = await listen(opts);
+  runningServer = opened.server;
   const page = await fetch(opened.url + '/');
   assert.equal(page.status, 200);
   const html = await page.text();
@@ -81,7 +87,7 @@ function runCli(args) {
   const orchHtml = await orchPage.text();
   assert.match(orchHtml, /id="orch-lead"/);
   assert.match(orchHtml, /id="orch-ask-form"/);
-  assert.match(orchHtml, /id="orch-ask-stop"/);
+  assert.match(orchHtml, /id="dashboard-orch-ask-stop"/);
   assert.match(orchHtml, /Message the orchestrator/);
   assert.match(orchHtml, />Send</);
   assert.match(orchHtml, />Stop</);
@@ -89,7 +95,7 @@ function runCli(args) {
   assert.match(orchHtml, /Command the orchestrator/);
   const watch = await fetch(opened.url + '/?watch=1', { redirect: 'manual' });
   assert.equal(watch.status, 302);
-  assert.match(watch.headers.get('location') || '', /orchestrator\.html/);
+  assert.match(watch.headers.get('location') || '', /#orchestrator/);
   assert.match(html, /Worker discretion/);
   const api = await (await fetch(opened.url + '/api/plan')).json();
   assert.equal(api.plan.projects.length, plan.projects.length);
@@ -99,7 +105,7 @@ function runCli(args) {
   if (edge) {
     const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     const profile = path.join(dir, `edge-chat-${Date.now()}`);
-    const browser = spawn(edge, ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+    const browser = spawn(edge, ['--headless=new', '--disable-gpu', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
     try {
       let port;
       for (let i = 0; i < 100; i++) {
@@ -147,23 +153,24 @@ function runCli(args) {
       await command('Page.navigate', { url: opened.url + '/orchestrator.html' });
       let ready = false;
       for (let i = 0; i < 80; i++) {
-        if (await evaluate("Boolean(document.body && document.body.getAttribute('data-orch-ready') === '1' && document.getElementById('orch-ask-input') && document.getElementById('orch-ask-submit'))")) {
+        if (await evaluate("Boolean(document.body && document.body.getAttribute('data-orch-ready') === '1' && document.getElementById('dashboard-orch-ask-input') && document.getElementById('dashboard-orch-ask-submit') && document.getElementById('dashboard-orch-project')?.options.length > 1)")) {
           ready = true;
           break;
         }
         await pause(100);
       }
       assert.equal(ready, true);
-      const submitLabel = await evaluate("document.getElementById('orch-ask-submit').textContent");
+      const submitLabel = await evaluate("document.getElementById('dashboard-orch-ask-submit').textContent");
       assert.equal(submitLabel, 'Send');
-      assert.equal(await evaluate("Boolean(document.getElementById('orch-ask-stop') && document.getElementById('orch-ask-stop').hidden)"), true);
-      await evaluate("document.getElementById('orch-ask-input').value = 'Switch to automatic'");
-      await evaluate("document.getElementById('orch-ask-submit').click()");
+      assert.equal(await evaluate("Boolean(document.getElementById('dashboard-orch-ask-stop') && document.getElementById('dashboard-orch-ask-stop').hidden)"), true);
+      await evaluate("const recipient = document.getElementById('dashboard-orch-project'); recipient.value = recipient.options[1].value; recipient.dispatchEvent(new Event('change'))");
+      await evaluate("document.getElementById('dashboard-orch-ask-input').value = 'Switch to automatic'");
+      await evaluate("document.getElementById('dashboard-orch-ask-submit').click()");
       let replied = false;
       let thread = '';
       let threadHtml = '';
       for (let i = 0; i < 80; i++) {
-        const view = await evaluate("(() => { const el = document.getElementById('orch-ask-thread'); return { html: el ? el.innerHTML : '', text: el ? el.innerText : '', pending: Boolean(el && el.querySelector('.is-pending')) }; })()");
+        const view = await evaluate("(() => { const el = document.getElementById('dashboard-orch-ask-thread'); return { html: el ? el.innerHTML : '', text: el ? el.innerText : '', pending: Boolean(el && el.querySelector('.is-pending')) }; })()");
         threadHtml = view && view.html || '';
         thread = view && view.text || '';
         if (!view.pending && /chat-turn/.test(threadHtml) && /mode is now Automatic/i.test(thread) && /chat-elapsed|Thought for|Answered in/.test(threadHtml)) {
@@ -175,11 +182,11 @@ function runCli(args) {
       assert.equal(replied, true, thread);
       assert.match(threadHtml, /chat-elapsed|Thought for|Answered in/);
       assert.match(thread, /\d+\s*ms|Answered in|Thought for/i);
-      const remaining = await evaluate("document.getElementById('orchestrator') ? document.getElementById('orchestrator').innerText : ''");
-      assert.match(remaining, /Provider usage/i);
+      const remaining = await evaluate("document.getElementById('dashboard-orchestrator') ? document.getElementById('dashboard-orchestrator').innerText : ''");
+      assert.match(remaining, /Provider quota remaining/i);
       assert.match(remaining, /ChatGPT/i);
       assert.match(remaining, /Grok/i);
-      assert.match(remaining, /% used/i);
+      assert.match(remaining, /REMAINING|left/i);
       ws.close();
     } finally {
       try { browser.kill(); } catch (_) {}
@@ -200,6 +207,7 @@ function runCli(args) {
   console.error(error);
   process.exitCode = 1;
 }).finally(async () => {
+  if (runningServer && runningServer.listening) await new Promise(resolve => runningServer.close(resolve));
   try {
     await fsp.rm(dir, { recursive: true, force: true });
   } catch (_) {}

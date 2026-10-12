@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
 const Plan = require('./plan.js');
+const { createAppWindows } = require('./engine/app-windows.cjs');
 const { createServer, readPlan } = require('./server.cjs');
 const { createAttemptEngine } = require('./engine/attempts.js');
 const { spawnWorker, isProcessAlive, killWorker, askOrchestrator, abortAsk } = require('./engine/runner.cjs');
@@ -122,19 +123,12 @@ function findBrowser() {
 function findEdge() { return findBrowser(); }
 
 function listen(opts) {
-  let watchChild = null;
-  const openWatchWindow = watchUrl => {
-    if (watchChild && watchChild.exitCode == null && !watchChild.killed) return watchChild;
-    watchChild = openWindow(watchUrl, path.join(root, '.planwharf-watch'));
-    if (watchChild) watchChild.on('exit', () => { watchChild = null; });
-    return watchChild;
-  };
-  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, syncSkills: true, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk, openWatchWindow });
-  server.on('close', () => {
-    if (watchChild && !watchChild.killed) {
-      try { watchChild.kill(); } catch (_) {}
-    }
-  });
+  const windows = opts.windows || createAppWindows({ open: (url, view) => openWindow(url, path.join(opts.attemptsDir, 'windows', view)) });
+  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, models: opts.models, fetchPlans: opts.fetchPlans, syncSkills: opts.syncSkills !== false, skillsEnabled: opts.skillsEnabled !== false, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk,
+    appWindows: windows, quitApp: () => server.quitApp && server.quitApp(),
+    openWatchWindow: url => windows.openView('orchestrator', url), openPlanWindow: url => windows.openView('planwharf', url) });
+  server.windows = windows;
+  server.on('close', () => windows.closeAll());
   const start = opts.port;
   const last = opts.portExplicit && start !== 0 ? start : (start === 0 ? 0 : start + 20);
   return new Promise((resolve, reject) => {
@@ -162,11 +156,21 @@ function listen(opts) {
 
 function openWindow(url, profileDir) {
   const browser = findBrowser();
-  if (!browser) return null;
+  if (!browser) {
+    const child = process.platform === 'win32'
+      ? spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true })
+      : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' });
+    child.on('error', error => console.error('Open this view in your browser:', url, error.message));
+    child.unref();
+    return child;
+  }
   fs.mkdirSync(profileDir, { recursive: true });
   const opts = { stdio: 'ignore' };
   if (process.platform === 'win32') opts.windowsHide = false;
-  return spawn(browser, ['--app=' + url, `--user-data-dir=${profileDir}`], opts);
+  const child = spawn(browser, ['--app=' + url, `--user-data-dir=${profileDir}`], opts);
+  child.profileDir = profileDir;
+  child.on('error', error => console.error('Browser launch failed:', error.message));
+  return child;
 }
 
 async function runCli(opts) {
@@ -189,37 +193,68 @@ async function runCli(opts) {
   else process.stdout.write(formatStatus(plan, attempts));
 }
 
+// One launcher owner per notebook. Reopening either view talks to that owner.
+async function acquireApp(opts) {
+  fs.mkdirSync(opts.attemptsDir, { recursive: true });
+  const lockFile = path.join(opts.attemptsDir, 'app-instance.json');
+  for (let attempt = 0; attempt < 100; attempt++) {
+    try {
+      const fd = fs.openSync(lockFile, 'wx');
+      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, planFile: path.resolve(opts.planFile) }));
+      fs.closeSync(fd);
+      return { lockFile };
+    } catch (error) { if (error.code !== 'EEXIST') throw error; }
+    let existing;
+    try { existing = JSON.parse(fs.readFileSync(lockFile, 'utf8')); } catch { await new Promise(resolve => setTimeout(resolve, 100)); continue; }
+    let alive = true;
+    try { process.kill(existing.pid, 0); } catch (error) { alive = error.code !== 'ESRCH'; }
+    if (!alive) { fs.unlinkSync(lockFile); continue; }
+    if (existing.planFile !== path.resolve(opts.planFile)) throw new Error('This attempts directory belongs to another running notebook.');
+    if (existing.url) {
+      const response = await fetch(existing.url + '/api/app', { signal: AbortSignal.timeout(2000) }).catch(() => null);
+      const app = response && response.ok ? await response.json() : null;
+      if (app && app.pid === existing.pid && app.planFile === path.resolve(opts.planFile) && app.attemptsDir === path.resolve(opts.attemptsDir)) return { existing };
+    }
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error('A Planwharf instance owns this notebook but is not responding.');
+}
 async function runApp(opts) {
   await readPlan(opts.planFile);
-  const { server, url } = await listen(opts);
-  const profileDir = path.join(root, '.planwharf-window');
-  let child = null;
+  const ownership = await acquireApp(opts);
+  if (ownership.existing) {
+    const url = ownership.existing.url;
+    if (!opts.noWindow) {
+      const response = await fetch(url + '/api/planwharf/window', { method: 'POST', headers: { 'Content-Type': 'application/json', Origin: url }, body: '{}' });
+      if (!response.ok) throw new Error('Could not reopen the application.');
+    }
+    console.log(`Planwharf already running: ${url}`);
+    return { url, reused: true };
+  }
+  let server, url;
+  const release = () => {
+    try { if (JSON.parse(fs.readFileSync(ownership.lockFile, 'utf8')).pid === process.pid) fs.unlinkSync(ownership.lockFile); } catch {}
+  };
+  try {
+    ({ server, url } = await listen(opts));
+    fs.writeFileSync(ownership.lockFile, JSON.stringify({ pid: process.pid, planFile: path.resolve(opts.planFile), url }));
+  } catch (error) { release(); throw error; }
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
     closing = true;
-    try { await server.shutdown(); } catch (error) { console.error("Checkpoint shutdown failed:", error.message); }
-    if (child && !child.killed) child.kill();
-    server.close(() => process.exit(0));
-    setTimeout(() => process.exit(0), 1500).unref();
+    try { await server.shutdown(); } catch (error) { console.error('Checkpoint shutdown failed:', error.message); }
+    server.close(() => { release(); process.exit(0); });
+    setTimeout(() => { release(); process.exit(0); }, 1500).unref();
   };
+  server.quitApp = shutdown;
+  server.on('close', release);
+  process.on('exit', release);
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  if (!opts.noWindow) {
-    child = openWindow(url, profileDir);
-    if (child) {
-      child.on('exit', () => shutdown());
-      console.log(`Planwharf\nWindow: browser --app\n${url}\nPlan: ${opts.planFile}\nCtrl+C to close.`);
-    } else {
-      if (process.platform === 'win32') {
-        spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true }).unref();
-      }
-      console.log(`Planwharf\nNo Chromium browser found. Open ${url}\nPlan: ${opts.planFile}\nCtrl+C to close.`);
-    }
-  } else {
-    console.log(`Planwharf\n${url}\nPlan: ${opts.planFile}\nCtrl+C to close.`);
-  }
-  return { server, url, child };
+  if (!opts.noWindow) server.windows.openApp(url);
+  console.log(`Planwharf\n${url}\nOrchestrator: ${url}/#orchestrator\nPlan: ${opts.planFile}\nSwitch views with Show Orchestrator / Show Planwharf. Close the window to keep work running. Quit application or Ctrl+C to shut down.`);
+  return { server, url };
 }
 
 async function main(argv = process.argv) {
@@ -244,5 +279,7 @@ module.exports = {
   findEdge,
   findBrowser,
   listen,
-  main
+  main,
+  runApp,
+  acquireApp
 };

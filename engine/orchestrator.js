@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const Plan = require('../plan.js');
 const { planExhausted, emptyPlans } = require('./planUsage.js');
 const { createRepositoryInspector } = require('./repository.cjs');
+const { modelRouteError } = require('./model-routing.cjs');
 
 const LABELS = {
   waiting_on_you: 'Waiting on you',
@@ -147,19 +148,26 @@ function notebookProjects(plan) {
 }
 
 function normalizeModels(models) {
-  return (Array.isArray(models) ? models : []).filter(item => item && typeof item.id === 'string').map(item => ({
-    id: item.id,
-    label: typeof item.label === 'string' && item.label.trim() ? item.label : item.id,
-    enabled: item.enabled === true && item.available !== false,
-    available: item.available !== false,
-    unavailableReason: item.unavailableReason || null,
-    provider: item.provider,
-    plan: typeof item.plan === 'string' && item.plan.trim() ? item.plan : 'Unnamed plan',
-    kind: item.kind === 'premium' || item.kind === 'local' ? item.kind : 'default',
-    cost: Number.isFinite(item.cost) && item.cost >= 0 ? item.cost : 1,
-    limit: Number.isFinite(item.limit) && item.limit > 0 ? item.limit : 50,
-    cli: typeof item.cli === 'string' && item.cli.trim() ? item.cli.trim() : undefined
-  }));
+  return (Array.isArray(models) ? models : []).filter(item => item && typeof item.id === 'string').map(item => {
+    // Legacy roster-only fixtures have no route. Real configured routes must be valid.
+    const routeError = item.provider !== undefined || item.cli !== undefined ? modelRouteError(item) : null;
+    return {
+      id: item.id,
+      label: typeof item.label === 'string' && item.label.trim() ? item.label : item.id,
+      enabled: item.enabled === true && item.available !== false && !routeError,
+      available: item.available !== false && !routeError,
+      unavailableReason: item.unavailableReason || routeError || null,
+      availabilityVerified: item.availabilityVerified,
+      availabilityWarning: item.availabilityWarning || null,
+      provider: item.provider,
+      modelRouting: item.modelRouting,
+      plan: typeof item.plan === 'string' && item.plan.trim() ? item.plan : 'Unnamed plan',
+      kind: item.kind === 'premium' || item.kind === 'local' ? item.kind : 'default',
+      cost: Number.isFinite(item.cost) && item.cost >= 0 ? item.cost : 1,
+      limit: Number.isFinite(item.limit) && item.limit > 0 ? item.limit : 50,
+      cli: typeof item.cli === 'string' && item.cli.trim() ? item.cli : undefined
+    };
+  });
 }
 
 function usedOf(usage, id) {
@@ -378,28 +386,13 @@ function tailLog(file, maxChars) {
 }
 
 function lastActivity(tail) {
+  if (/[{}]|"event"|"step_update"/.test(String(tail || ''))) return activityMessages(tail).at(-1) || '';
   const lines = String(tail || '').split('\n').map(line => line.trim()).filter(Boolean);
   if (!lines.length) return '';
   return clip(lines[lines.length - 1], 180);
 }
 
-function interpretActivity(tail, facts, alive) {
-  const files = facts && Number.isFinite(facts.fileCount) ? facts.fileCount : 0;
-  const text = String(tail || '');
-  const last = lastActivity(text);
-  if (/\b(test|unittest|pytest|assert|ok:)\b/i.test(text)) {
-    return clip(`Running tests.${last ? ` ${last}` : ''}`, 180);
-  }
-  if (/\b(wrote|writing|created|creating|edit|saving)\b/i.test(text) || /\.(py|js|ts|cjs|md|json)\b/i.test(last)) {
-    return clip(`Writing project files (${files} in folder).${last ? ` ${last}` : ''}`, 180);
-  }
-  if (/\berror\b|\bfail/i.test(text)) {
-    return clip(`Hit an error.${last ? ` ${last}` : ''}`, 180);
-  }
-  if (last) return clip(alive ? `Working. ${last}` : `Stopped. Last: ${last}`, 180);
-  if (alive) return files ? `Working. ${files} top-level names in the folder. Log still quiet.` : 'Working. No output yet.';
-  return '';
-}
+const { interpretActivity, activityMessages } = require('./activity.cjs');
 
 function pickAskedProject(snap, projectId, question) {
   const rows = snap && Array.isArray(snap.projects) ? snap.projects : [];
@@ -410,8 +403,7 @@ function pickAskedProject(snap, projectId, question) {
   const q = String(question || '').toLowerCase();
   const named = rows.find(row => q.includes(String(row.name || '').toLowerCase()) || q.includes(String(row.id || '').toLowerCase()));
   if (named) return named;
-  const order = ['watching', 'needs_approval', 'failed', 'checkpointed', 'blocked_no_worker', 'blocked_no_folder', 'propose_grill', 'waiting_on_you', 'complete', 'idle'];
-  return [...rows].sort((a, b) => order.indexOf(a.status) - order.indexOf(b.status))[0];
+  return rows.length === 1 ? rows[0] : null;
 }
 
 function packState(snap, row) {
@@ -426,6 +418,7 @@ function packState(snap, row) {
   return {
     orchestrator: (snap && snap.orchestratorLabel) || ORCH_NAME,
     orchestratorId: snap && snap.orchestratorId,
+    researches: snap && Array.isArray(snap.researches) ? snap.researches : [],
     mode: snap && snap.mode,
     grill: {
       propose: snap && snap.grillPropose !== false,
@@ -525,6 +518,7 @@ function answerQuestion(question, snap, projectId) {
     return { ok: true, answer: rows.map(row => briefRow(row, lead)).join('\n'), projectId: null };
   }
   const row = pickAskedProject(snap, projectId, q);
+
   if (!row) return { ok: true, answer: `${lead}: no projects in the notebook.`, projectId: null };
   const ql = q.toLowerCase();
   const workerHit = (row.dispatch || []).find(part => {
@@ -597,6 +591,9 @@ function looksLikeWork(question) {
   if (/^(do it|fallo|procedi|smista|go)$/i.test(t)) return true;
   return /\b(implement(?:a|are)?|smista|dispatch|assign(?:a)? |metti i worker|dai il lavoro|do the (?:job|task|work)|fai (?:il |la )(?:job|task|lavoro)|fallo(?: fare)?|lavora(?:ci)?(?: su)?|procedi|esegui|costruisci|continua(?:re)?|continue\b|go ahead|vai avanti|fix (?:the |this )|sistema )\b/i.test(t);
 }
+function freshTaskIntent(question) {
+  return /^(?:please\s+|per favore\s+)?(?:(?:vorrei|voglio|puoi|can you)\s+(?:fare\s+|fai\s+|an?\s+)?)?(?:implement(?:a|are)?|build|fix|sistema|esegui|fai|audit|review|analizza|controlla|verifica)\b/i.test(String(question || '').trim());
+}
 
 function checkpointTalk(reason) {
   const why = reason || 'deadline';
@@ -624,19 +621,18 @@ function checkpointTalk(reason) {
   };
 }
 
-function workOrderFor(row) {
-  const status = row && row.status;
-  if (status === 'watching') return 'watching';
-  if (status === 'needs_approval') return 'approve';
-  if (status === 'checkpointed' || (row && row.checkpoint && (status === 'failed' || status === 'blocked_no_worker'))) return 'resume';
-  return 'start';
-}
-
 function parseOrder(question, snap, projectId) {
   const q = String(question || '').trim();
   if (!q) return null;
   const ql = q.toLowerCase();
   const row = pickAskedProject(snap, projectId, q);
+  const commandText = ql.replace(/[.!]+$/, '').trim();
+  const projectCommand = verbs => {
+    const match = commandText.match(new RegExp(`^(?:${verbs})(?:\\s+(.+))?$`, 'i'));
+    if (!match) return false;
+    const target = (match[1] || '').replace(/^on\s+/, '');
+    return !target || Boolean(row && [row.id, row.name].some(name => String(name || '').toLowerCase() === target));
+  };
   const models = snap && Array.isArray(snap.models) ? snap.models : [];
   const named = models.find(item => {
     const label = String(item.label || '').toLowerCase();
@@ -650,16 +646,16 @@ function parseOrder(question, snap, projectId) {
   if (named && /\b(orchestrator|as lead|use as|usa come)\b/i.test(ql)) {
     return { action: 'lead', id: named.id, label: named.label };
   }
-  if (/\b(stop|ferma|kill|arresta)\b/i.test(ql)) {
+  if (projectCommand('stop|ferma|kill|arresta')) {
     return { action: 'stop', projectId: row && row.id, name: row && row.name };
   }
-  if (/\b(resume|riprendi)\b/i.test(ql)) {
+  if (projectCommand('resume|riprendi')) {
     return { action: 'resume', projectId: row && row.id, name: row && row.name };
   }
-  if (/\b(approve run|approva|approve)\b/i.test(ql)) {
+  if (projectCommand('approve run|approva|approve')) {
     return { action: 'approve', projectId: row && row.id, name: row && row.name };
   }
-  if (/\b(skip grill|salta grill|skip the grill)\b/i.test(ql)) {
+  if (projectCommand('skip grill|salta grill|skip the grill')) {
     return { action: 'skip', projectId: row && row.id, name: row && row.name };
   }
   if (/\bgrill\b/i.test(ql) && /\b(off|disable|spegni|disattiva)\b/i.test(ql)) {
@@ -674,7 +670,7 @@ function parseOrder(question, snap, projectId) {
   if (/\bgrill\b/i.test(ql) && /\b(on|enable|accendi|attiva)\b/i.test(ql) && !named) {
     return { action: 'grillPropose', enabled: true };
   }
-  if (/\b(auto start|avvia|start)\b/i.test(ql)) {
+  if (projectCommand('auto start|avvia|start')) {
     return { action: 'start', projectId: row && row.id, name: row && row.name };
   }
   const wantsMode = /\b(mode|modalit|switch to|set to|passa a)\b/i.test(ql);
@@ -684,11 +680,29 @@ function parseOrder(question, snap, projectId) {
   if (wantsMode && /\b(manual|manuale)\b/i.test(ql)) {
     return { action: 'mode', mode: 'manual' };
   }
-  if (looksLikeWork(q) && !looksLikeQuestion(q) && !/\b(do not|don't|non)\s+(implement|edit|write|implementare|modificare|scrivere)\b/i.test(q)) {
-    const action = workOrderFor(row);
-    return { action, projectId: row && row.id, name: row && row.name, work: true };
-  }
   return null;
+}
+
+function researchIntent(question, history = []) {
+  const q = String(question || '').trim();
+  if (/^(research|investigate|cerca|ricerca|indaga)\b/i.test(q)) return true;
+  if (/\b(fai|fa|manda|assegna|chiedi|vorrei|voglio|puoi|can you|please|have|ask|assign|delegate|send|avvia)\b[\s\S]*\b(research|researching|ricerca|ricerche|cercare|cerca|investiga|indaga|investigate)\b/i.test(q)) return true;
+  return /^(fallo|procedi|vai|do it|go ahead|yes|s[iì])(?:[.!\s]|$)/i.test(q)
+    && history.length > 0 && /\b(research|ricerca|ricerche|cercare|investigat\w*)\b/i.test(history[0].question + ' ' + history[0].answer);
+}
+
+function leadEnvelope(answer, actions) {
+  if (actions !== undefined) return { answer, actions };
+  const text = String(answer || '').trim();
+  const raw = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  if (!raw.startsWith('{')) return { answer: text, actions: [] };
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.answer !== 'string' || !Array.isArray(parsed.actions) || Object.keys(parsed).some(key => !['answer', 'actions'].includes(key))) {
+      return { answer: text, actions: [], error: 'Invalid lead action envelope; no workers were dispatched.' };
+    }
+    return parsed;
+  } catch (_) { return { answer: text, actions: [], error: 'Unreadable lead action envelope; no workers were dispatched.' }; }
 }
 
 function fleetOf(models, projects, leadId, plans) {
@@ -972,6 +986,7 @@ function createOrchestrator(options) {
   const attempts = opts.attempts;
   const sentinel = opts.sentinel || null;
   const models = Array.isArray(opts.models) ? opts.models : [];
+  const sessionId = opts.sessionId || crypto.randomUUID();
   const inspect = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
   const readRepository = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
   const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
@@ -1002,12 +1017,28 @@ function createOrchestrator(options) {
             ]))
             : {},
           asks: Array.isArray(parsed.asks) ? parsed.asks : [],
+          researches: Array.isArray(parsed.researches) ? parsed.researches : [],
+          workerHistory: Array.isArray(parsed.workerHistory) ? parsed.workerHistory : [],
+          archivedProjects: parsed.archivedProjects && typeof parsed.archivedProjects === 'object' ? parsed.archivedProjects : {},
+          sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
           orchestratorId: typeof parsed.orchestratorId === 'string' && parsed.orchestratorId.trim() ? parsed.orchestratorId : null
         };
       }
     } catch (_) {}
   }
   if (!Array.isArray(store.asks)) store.asks = [];
+  if (!Array.isArray(store.researches)) store.researches = [];
+  if (!Array.isArray(store.workerHistory)) store.workerHistory = [];
+  if (!Array.isArray(store.sessions)) store.sessions = [];
+  const knownSessions = new Map(store.sessions.map(session => [session.id, session]));
+  const historicalSessions = [...store.asks, ...store.researches, ...Object.values(store.projects).flatMap(row => row.dispatch || []), ...store.workerHistory.flatMap(row => row.dispatch || [])];
+  for (const record of historicalSessions) if (record.sessionId && !knownSessions.has(record.sessionId)) knownSessions.set(record.sessionId, { id: record.sessionId, startedAt: record.startedAt || record.at || null });
+  store.sessions = [...knownSessions.values()];
+  store.sessions.push({ id: sessionId, startedAt: now() });
+  let startupProjects = null;
+  function rememberStartup(plan) {
+    if (!startupProjects) startupProjects = new Map(notebookProjects(plan).map(item => [item.project.id, new Set((item.tasks || []).filter(task => task.status === 'running').map(task => task.id))]));
+  }
 
   function persist() {
     if (!stateFile) return;
@@ -1041,9 +1072,10 @@ function createOrchestrator(options) {
 
   function collectPids(row) {
     const pids = Array.isArray(row.dispatch)
-      ? row.dispatch.map(part => part && part.pid).filter(pid => Number.isInteger(pid))
+      ? row.dispatch.filter(part => part && !part.stoppedByUser).map(part => part.pid).filter(pid => Number.isInteger(pid))
       : [];
-    if (row.workerPid && !pids.includes(row.workerPid)) pids.push(row.workerPid);
+    const stoppedPid = (row.dispatch || []).some(part => part && part.stoppedByUser && part.pid === row.workerPid);
+    if (row.workerPid && !stoppedPid && !pids.includes(row.workerPid)) pids.push(row.workerPid);
     return pids;
   }
 
@@ -1210,6 +1242,7 @@ function createOrchestrator(options) {
     const parts = Array.isArray(row.dispatch) ? row.dispatch : [];
     parts.forEach(part => {
       if (!part) return;
+      if (part.stoppedByUser) { part.alive = false; part.activity = 'Stopped by you. Resume the project to continue this slice.'; return; }
       part.alive = Boolean(part.pid) && typeof opts.isProcessAlive === 'function'
         ? Boolean(opts.isProcessAlive(part.pid))
         : Boolean(part.pid && row.workerAlive);
@@ -1318,6 +1351,7 @@ function createOrchestrator(options) {
             folder: item.project.folder,
             resultPath: part.resultPath,
             job: {
+              kind: job.kind || '',
               title: job.title,
               detail: [
                 job.detail,
@@ -1334,6 +1368,8 @@ function createOrchestrator(options) {
           });
           if (!launched || !Number.isInteger(launched.pid) || launched.pid <= 0) throw new Error('worker did not start');
           part.pid = launched.pid;
+          part.sessionId = sessionId;
+          part.startedAt = now();
           part.logPath = launched.logPath || part.logPath;
           part.alive = true;
           note(id, `Started ${part.label} process ${launched.pid} on slice: ${part.slice}`);
@@ -1404,15 +1440,159 @@ function createOrchestrator(options) {
     });
   }
 
+  function researchModel(modelId) {
+    const worker = roster().find(model => model.id === modelId);
+    if (!worker) throw new Error('Requested research model is not in the roster: ' + modelId);
+    if (!worker.enabled || worker.available === false) throw new Error('Requested research model is disabled or unavailable: ' + modelId);
+    if (worker.provider !== 'codex') throw new Error('Source-protected research supports the Codex workspace sandbox only; requested provider: ' + worker.provider);
+    const routeError = modelRouteError(worker);
+    if (routeError) throw new Error(routeError);
+    if (planExhausted(plansLive, worker.plan) || worker.remaining < worker.cost) throw new Error('Requested research model has no remaining usage: ' + modelId);
+    return worker;
+  }
+
+  function finishResearch(record, status, reason) {
+    record.status = status;
+    record.reason = reason || '';
+    record.updatedAt = now();
+    if (record.attemptId) attempts.closeAttempt({ attemptId: record.attemptId, reason: reason || status });
+  }
+
+  function refreshResearch() {
+    for (const record of store.researches) {
+      record.alive = Boolean(record.pid) && typeof opts.isProcessAlive === 'function' ? Boolean(opts.isProcessAlive(record.pid)) : Boolean(record.pid && record.status === 'watching');
+      const tail = tailLog(record.logPath);
+      if (tail !== record.workerTail) record.updatedAt = now();
+      record.workerTail = tail;
+      record.activity = interpretActivity(record.workerTail, null, record.alive);
+      record.reportAvailable = false;
+      try { record.reportAvailable = fs.statSync(record.reportPath).isFile() && fs.statSync(record.reportPath).size > 0; } catch (_) {}
+      if (record.status !== 'watching') continue;
+      const status = resultStatus(record.resultPath);
+      let exitedSuccessfully = false;
+      try { exitedSuccessfully = /(^|\n)\s*EXIT:\s*0\s*(?:\n|$)/i.test(fs.readFileSync(record.resultPath, 'utf8')); } catch (_) {}
+      if (status === 'COMPLETE' && exitedSuccessfully) finishResearch(record, record.reportAvailable ? 'complete' : 'failed', record.reportAvailable ? 'Report and successful provider exit recorded.' : 'Provider exited successfully without the required report.md.');
+      else if (status === 'FAILED') finishResearch(record, 'failed', 'Research provider or runner failed; inspect the log and result evidence.');
+      else if (record.pid && typeof opts.isProcessAlive === 'function' && !record.alive) finishResearch(record, 'failed', 'Research process exited without successful completion evidence.');
+    }
+  }
+
+  function launchResearch(record) {
+    if (shuttingDown) throw new Error('The notebook is shutting down.');
+    if (!dir || typeof opts.spawnWorker !== 'function') throw new Error('Research worker launcher or attempt storage is unavailable.');
+    const worker = researchModel(record.modelId);
+    const claim = attempts.claim({ taskId: record.id, projectId: 'research:' + record.id, modelId: worker.id, candidates: roster() });
+    if (!claim.ok) throw new Error(claim.reason || 'Research attempt claim failed.');
+    record.attemptId = claim.attempt.id;
+    record.folder = path.join(dir, 'research', record.id, record.attemptId);
+    record.reportPath = path.join(record.folder, 'report.md');
+    record.resultPath = path.join(record.folder, 'result.txt');
+    record.logPath = path.join(record.folder, 'worker.log');
+    fs.mkdirSync(record.folder, { recursive: true });
+    writeWatchFile(record.resultPath, 'STATUS: WATCHING\n');
+    attempts.attachResult({ attemptId: record.attemptId, resultPath: record.resultPath });
+    record.status = 'watching';
+    record.sessionId = sessionId;
+    record.startedAt = now();
+    record.reason = '';
+    record.workerLabel = worker.label || worker.id;
+    record.provider = worker.provider;
+    record.cli = worker.cli;
+    record.updatedAt = now();
+    try {
+      const launched = opts.spawnWorker({ folder: record.folder, resultPath: record.resultPath, logPath: record.logPath, attemptId: record.attemptId, worker,
+        job: { kind: 'research', title: record.title, detail: [record.detail,
+          record.sourceFolder ? 'Read-only source folder: ' + record.sourceFolder : '',
+          record.github ? 'Source GitHub repository: ' + record.github : '',
+          record.attempts && record.attempts.length ? 'Previous isolated evidence folders (read to continue): ' + record.attempts.map(attempt => attempt.folder).join(', ') : '',
+          'Write findings and citations to report.md in this isolated folder. Linked project source must remain unchanged.'
+        ].filter(Boolean).join('\n\n') }, slice: 'Research only; report.md; no source changes' });
+      if (!launched || !Number.isInteger(launched.pid) || launched.pid <= 0) throw new Error('Research worker did not return a process ID.');
+      record.pid = launched.pid;
+      record.logPath = launched.logPath || record.logPath;
+      record.alive = true;
+      record.reportAvailable = false;
+      if (!store.usage[worker.id]) store.usage[worker.id] = { used: 0 };
+      store.usage[worker.id].used += worker.cost;
+    } catch (error) { finishResearch(record, 'failed', error.message); throw error; }
+  }
+
+  async function dispatchResearch(action, stillAuthorized = () => true) {
+    try {
+      if (!action || typeof action !== 'object' || Object.keys(action).some(key => !['type', 'projectId', 'modelId', 'title', 'detail'].includes(key)) || action.type !== 'dispatch_research') throw new Error('Invalid research dispatch action.');
+      for (const key of ['projectId', 'modelId', 'title', 'detail']) if (typeof action[key] !== 'string' || !action[key].trim()) throw new Error('Research action requires ' + key + '.');
+      if (action.title.length > 200 || action.detail.length > 12000) throw new Error('Research instructions are too large (title 200, detail 12000 characters).');
+      const plan = await opts.readPlan();
+      const project = notebookProjects(plan).find(item => item.project.id === action.projectId);
+      if (!project) throw new Error('Research project not found: ' + action.projectId);
+      await refreshPlans(false);
+      researchModel(action.modelId);
+      if (!dir || typeof opts.spawnWorker !== 'function') throw new Error('Research worker launcher or attempt storage is unavailable.');
+      const duplicate = store.researches.find(record => record.status === 'watching' && record.projectId === action.projectId && record.modelId === action.modelId && record.title === action.title && record.detail === action.detail);
+      if (!stillAuthorized()) throw new Error('Research request was cancelled before worker launch.');
+      if (duplicate) return { ok: true, duplicate: true, research: clone(duplicate) };
+      const record = { id: 'research-' + crypto.randomUUID(), projectId: action.projectId, projectName: project.project.name, modelId: action.modelId,
+        title: action.title, detail: action.detail, sourceFolder: project.project.folder || null, github: project.project.github || null, createdAt: now(), attempts: [] };
+      store.researches.push(record);
+      try { launchResearch(record); record.attempts.push({ attemptId: record.attemptId, folder: record.folder }); }
+      catch (error) { finishResearch(record, 'failed', error.message); throw error; }
+      finally { persist(); }
+      return { ok: true, research: clone(record) };
+    } catch (error) { return { ok: false, reason: error.message }; }
+  }
+
+  async function stopResearch(id) {
+    const record = store.researches.find(item => item.id === id);
+    if (!record) return { ok: false, reason: 'Research job not found.' };
+    refreshResearch();
+    if (record.status === 'watching') {
+      if (record.alive && (typeof opts.killWorker !== 'function' || !opts.killWorker(record.pid))) return { ok: false, reason: 'Could not stop the research process.' };
+      record.alive = false;
+      finishResearch(record, 'checkpointed', 'Research stopped; existing evidence preserved.');
+      persist();
+    }
+    return { ok: true, research: clone(record), snapshot: await tick() };
+  }
+
+  async function resumeResearch(id) {
+    const record = store.researches.find(item => item.id === id);
+    if (!record) return { ok: false, reason: 'Research job not found.' };
+    refreshResearch();
+    if (!['checkpointed', 'failed'].includes(record.status)) return { ok: false, reason: 'Only stopped or failed research can resume.' };
+    try { launchResearch(record); record.attempts.push({ attemptId: record.attemptId, folder: record.folder }); persist(); return { ok: true, research: clone(record), snapshot: await tick() }; }
+    catch (error) { persist(); return { ok: false, reason: error.message }; }
+  }
+
+  function researchReport(id) {
+    const record = store.researches.find(item => item.id === id);
+    if (!record) return { ok: false, reason: 'Research job not found.' };
+    refreshResearch();
+    const root = path.resolve(dir, 'research', record.id);
+    const reportPath = path.resolve(record.reportPath || root);
+    if (!reportPath.startsWith(root + path.sep)) return { ok: false, reason: 'Invalid research report path.' };
+    try {
+      const canonicalRoot = fs.realpathSync(root);
+      const canonicalReport = fs.realpathSync(reportPath);
+      if (!canonicalReport.startsWith(canonicalRoot + path.sep)) return { ok: false, reason: 'Research report points outside its isolated folder.' };
+      return { ok: true, id, status: record.status, report: fs.readFileSync(canonicalReport, 'utf8') };
+    }
+    catch (_) { return { ok: false, reason: 'Research report is not available yet.' }; }
+  }
+
   function snapshot(plan) {
+    rememberStartup(plan);
     const projects = notebookProjects(plan);
     const lead = leadModel();
     const view = {
       updatedAt: now(),
+      sessionId,
+      sessions: clone(store.sessions),
+      workerHistory: clone(store.workerHistory),
       mode: store.mode === 'auto' ? 'auto' : 'manual',
       grillPropose: store.grillPropose !== false,
       grillKind: store.grillPropose === false ? 'off' : (store.grillKind === 'docs' ? 'docs' : 'me'),
       models: roster(),
+      researches: clone(store.researches),
       asks: clone(store.asks || []),
       thinking: thinkingLive ? clone(thinkingLive) : null,
       asking: Boolean(thinkingLive),
@@ -1423,6 +1603,17 @@ function createOrchestrator(options) {
         const row = entry(item.project.id);
         const latest = item.revisions.at(-1);
         const docs = Array.isArray(row.docs) && row.docs.length ? row.docs : collectDocs(row.facts);
+        const terminal = ['complete', 'failed', 'checkpointed'].includes(row.status);
+        // Stored process flags are historical evidence, not current liveness.
+        const dispatch = clone(row.dispatch || []).map(part => {
+          if (!part) return part;
+          const alive = Boolean(part.pid) && typeof opts.isProcessAlive === 'function'
+            ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
+          return { ...part, alive: !terminal && !part.stoppedByUser && alive };
+        });
+        const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
+          : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
+            ? Boolean(opts.isProcessAlive(row.workerPid)) : Boolean(row.workerPid && row.workerAlive)));
         return {
           id: item.project.id,
           name: item.project.name,
@@ -1450,14 +1641,15 @@ function createOrchestrator(options) {
           resultPath: row.resultPath || null,
           watchingSince: row.watchingSince || null,
           approved: Boolean(row.approved),
+          sessionId: row.authorizedSessionId || null,
           canStart: true,
-          canResume: Boolean(row.checkpoint && (item.tasks || []).some(task => task.status === 'running' && checkpointMatches(row.checkpoint, task))),
+          canResume: Boolean(row.status !== 'complete' && row.checkpoint && (item.tasks || []).some(task => task.status === 'running' && checkpointMatches(row.checkpoint, task))),
           canStop: Boolean(
             row.status === 'watching'
             && (item.tasks || []).some(task => task.status === 'running')
           ),
           pendingAutoStart: Boolean(row.pendingAutoStart),
-          dispatch: clone(row.dispatch || []),
+          dispatch,
           checkpoint: row.checkpoint ? clone(row.checkpoint) : null,
           timing: ((item.tasks || []).find(task => task.status === 'running') || {}).timing || (row.pendingAutoStart && row.pendingAutoStart.timing) || null,
           deadlineAt: ((item.tasks || []).find(task => task.status === 'running') || {}).deadlineAt || (row.pendingAutoStart && row.pendingAutoStart.deadlineAt) || null,
@@ -1466,18 +1658,14 @@ function createOrchestrator(options) {
           grillSkipped: Boolean(row.grillSkipped),
           log: clone(row.log || []),
           workerPid: row.workerPid || null,
-          workerAlive: Array.isArray(row.dispatch) && row.dispatch.length && typeof opts.isProcessAlive === 'function'
-            ? row.dispatch.some(part => part && part.pid && opts.isProcessAlive(part.pid))
-            : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
-              ? Boolean(opts.isProcessAlive(row.workerPid))
-              : Boolean(row.workerAlive)),
+          workerAlive,
           workerLog: row.workerLog || null,
           workerTail: row.workerTail || '',
           workerActivity: row.workerActivity || '',
           orchestratorDoing: orchestratorDoing(row),
           orchestratorId: lead ? lead.id : null,
           orchestratorLabel: lead ? lead.label : ORCH_NAME,
-          monitoring: row.monitoring ? clone(row.monitoring) : null,
+          monitoring: row.monitoring ? { ...clone(row.monitoring), alive: dispatch.length ? dispatch.filter(part => part && part.alive).length : (workerAlive ? 1 : 0) } : null,
           progressAt: row.progressAt || null,
           tried: clone(row.tried || [])
         };
@@ -1487,7 +1675,9 @@ function createOrchestrator(options) {
       row.analysis = analysisOf(row);
     });
     view.plans = clone(plansLive);
-    view.fleet = fleetOf(view.models, view.projects, view.orchestratorId, plansLive);
+    const researchRows = store.researches.map(record => ({ id: record.projectId, name: record.projectName, status: record.status,
+      dispatch: [{ modelId: record.modelId, pid: record.pid, alive: record.alive, slice: 'Research: ' + record.title, activity: record.activity }] }));
+    view.fleet = fleetOf(view.models, view.projects.concat(researchRows), view.orchestratorId, plansLive);
     view.interventions = collectInterventions(view.projects);
     return view;
   }
@@ -1518,7 +1708,26 @@ function createOrchestrator(options) {
     const row = entry(id);
     const latest = item.revisions.at(-1);
     const job = (item.tasks || []).find(task => task.status === 'running') || null;
-    const open = latest && Array.isArray(latest.open) ? latest.open : [];
+    const recordedFiles = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
+    if (!recordedFiles.length && row.resultPath) recordedFiles.push(row.resultPath);
+    if (job && row.jobId === job.id && row.jobFingerprint === jobFingerprint(job)
+      && !(row.dispatch || []).some(part => part && part.stoppedByUser)
+      && recordedFiles.length && recordedFiles.every(file => resultStatus(file) === 'COMPLETE')) {
+      row.status = 'complete';
+      row.doing = `Evidence complete for ${job.title} on ${item.project.name}.`;
+      row.waitingFor = 'Nothing. Evidence is complete.';
+      row.next = 'Read the result, or add a new job.';
+      row.workerActivity = 'Evidence complete.';
+      row.orchestratorDoing = 'Verified STATUS: COMPLETE and folder output.';
+    }
+    // A completed assignment must never be dispatched again on a later poll.
+    const completedJob = job || (item.tasks || []).find(task => task.id === row.jobId && task.status === 'complete');
+    if (row.status === 'complete' && completedJob && row.jobId === completedJob.id
+      && (!row.jobFingerprint || row.jobFingerprint === jobFingerprint(completedJob))) {
+      settleCompletedAttempt(row, id, completedJob);
+      return row;
+    }
+    const open = job && job.source === 'chat' ? [] : latest && Array.isArray(latest.open) ? latest.open : [];
     const stallMs = Number.isFinite(opts.stallMs) && opts.stallMs >= 0 ? opts.stallMs : 90 * 1000;
     const worker = pickWorker(roster(), { job, usage: store.usage, facts: row.facts, skip: row.tried, plans: plansLive });
 
@@ -1538,6 +1747,12 @@ function createOrchestrator(options) {
     row.jobTitle = job ? job.title : null;
     row.jobDetail = job ? job.detail : null;
     row.jobRevisionId = job ? job.revision_id : null;
+    const ongoing = (row.dispatch || []).some(part => part && !part.stoppedByUser && part.pid && typeof opts.isProcessAlive === 'function' && opts.isProcessAlive(part.pid));
+    if (opts.enforceSessionBoundary && startupProjects?.get(id)?.has(job?.id) && row.authorizedSessionId !== sessionId && !ongoing) {
+      if (row.status === 'complete') return row;
+      row.approved = false;
+      row.holdApproval = true;
+    }
 
     if (job && holdSavedCheckpoint(item, job)) return row;
 
@@ -1688,11 +1903,16 @@ function createOrchestrator(options) {
 
     const watching = attempts.getActiveAttempt({ projectId: id, taskId: job.id })
       || attempts.getActiveAttempt({ projectId: id });
-    const sentinelTick = watching && sentinel && typeof sentinel.tick === 'function' ? sentinel.tick(watching) : null;
+    const pausedSlices = (row.dispatch || []).some(part => part && part.stoppedByUser);
+    const sentinelTick = !pausedSlices && watching && sentinel && typeof sentinel.tick === 'function' ? sentinel.tick(watching) : null;
     const sliceFiles = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
     const allSlicesDone = sliceFiles.length
       ? sliceFiles.every(file => resultStatus(file) === 'COMPLETE')
       : resultStatus(row.resultPath) === 'COMPLETE';
+    if (pausedSlices && (row.dispatch || []).every(part => part.stoppedByUser || resultStatus(part.resultPath) === 'COMPLETE')) {
+      applyCheckpoint(id, item, job, facts, 'stop');
+      return row;
+    }
     if (allSlicesDone || (sentinelTick && sentinelTick.complete && sliceFiles.length <= 1)) {
       row.status = 'complete';
       row.doing = `Evidence complete for ${job.title} on ${item.project.name}.`;
@@ -1700,6 +1920,7 @@ function createOrchestrator(options) {
       row.next = 'Read the result, or add a new job.';
       row.workerActivity = 'Evidence complete.';
       row.orchestratorDoing = 'Verified STATUS: COMPLETE and folder output.';
+      settleCompletedAttempt(row, id, job);
       note(id, sliceFiles.length > 1 ? 'All worker slices reported STATUS: COMPLETE.' : 'Sentinel saw STATUS: COMPLETE.');
       return row;
     }
@@ -1727,7 +1948,7 @@ function createOrchestrator(options) {
       ))
       : Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function' && !row.workerAlive;
     const noVerdict = Boolean(sentinelTick && sentinelTick.closed);
-    if (failedFile || dead || stalled || noVerdict) {
+    if (!pausedSlices && (failedFile || dead || stalled || noVerdict)) {
       const reason = failedFile ? 'worker failed' : (dead || noVerdict ? 'no verdict' : 'stall');
       if (failover(item, job, facts, reason)) {
         row.workerAlive = Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1760,10 +1981,36 @@ function createOrchestrator(options) {
   }
 
   let shuttingDown = false;
+  function settleCompletedAttempt(row, projectId, job) {
+    row.workerAlive = false;
+    for (const part of row.dispatch || []) if (part) part.alive = false;
+    row.monitoring = { ...row.monitoring, alive: 0 };
+    const files = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
+    if (!files.length && row.resultPath) files.push(row.resultPath);
+    // Historical UI state alone is insufficient evidence to close a claim.
+    if (!files.length || !files.every(file => resultStatus(file) === 'COMPLETE')) return;
+    const active = attempts.getActiveAttempt({ projectId, taskId: job.id });
+    if (active && active.id === row.attemptId) attempts.closeAttempt({ attemptId: active.id, reason: 'complete' });
+  }
+
   async function tick() {
     await refreshPlans(false);
-    const plan = await opts.readPlan();
+    let plan = await opts.readPlan();
+    rememberStartup(plan);
     if (!shuttingDown) for (const item of notebookProjects(plan)) decide(item);
+    refreshResearch();
+    if (typeof opts.completeTasks === 'function') {
+      const completed = notebookProjects(plan).flatMap(item => {
+        const row = entry(item.project.id);
+        const job = (item.tasks || []).find(task => task.status === 'running' && task.id === row.jobId);
+        const files = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
+        if (!files.length && row.resultPath) files.push(row.resultPath);
+        return row.status === 'complete' && job && row.jobFingerprint === jobFingerprint(job)
+          && files.length && files.every(file => resultStatus(file) === 'COMPLETE')
+          ? [{ projectId: item.project.id, taskId: job.id, fingerprint: row.jobFingerprint, attemptId: row.attemptId }] : [];
+      });
+      if (completed.length) plan = await opts.completeTasks(completed);
+    }
     persist();
     return snapshot(plan);
   }
@@ -1858,27 +2105,46 @@ function createOrchestrator(options) {
         thinking: live.thinking || null,
         ms: Number.isFinite(live.ms) ? live.ms : (Number.isFinite(started) ? Date.now() - started : null),
         projectId: null,
+        sessionId,
         orchestratorId: lead ? lead.id : null,
         order: 'abort'
       };
-      store.asks = [item, ...(Array.isArray(store.asks) ? store.asks : [])].slice(0, 40);
+      store.asks = [item, ...(Array.isArray(store.asks) ? store.asks : [])];
       persist();
     }
     return { ok: true, aborted: Boolean(live), asks: clone(store.asks || []), snapshot: await tick() };
   }
 
-  async function ask(question, projectId) {
+  async function ask(question, projectId, chatSessionId) {
     const q = String(question || '').trim();
     if (!q) return { ok: false, reason: 'empty question' };
-    if (q.length > 2000) return { ok: false, reason: 'message too long' };
+    if (Buffer.byteLength(q, 'utf8') > 1024 * 1024) return { ok: false, reason: 'message too long (maximum 1 MiB)' };
     const token = ++askToken;
     const askedAt = Date.now();
-    let snap = await tick();
+    let snap = snapshot(await opts.readPlan());
+    if (projectId !== undefined && !(snap.projects || []).some(row => row.id === projectId)) return { ok: false, reason: 'Selected project no longer exists. Select a project before sending.' };
+    const mentionedProjects = (snap.projects || []).filter(row => [row.id, row.name].some(name => name && q.toLowerCase().includes(name.toLowerCase())));
+    if (projectId && mentionedProjects.some(row => row.id !== projectId)) return { ok: false, reason: 'Message names a different project from the selected recipient. Select the intended project before sending.' };
+    if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
-    const order = parseOrder(q, snap, projectId);
+    const conversation = chatSessionId ? store.asks.filter(item => item.chatSessionId === chatSessionId && item.projectId === projectId) : store.asks;
+    const researchRequested = researchIntent(q, conversation);
+    if (researchRequested && !pickAskedProject(snap, projectId, q)) return { ok: false, reason: 'Select a project or name it explicitly before dispatching research.' };
+    const order = researchRequested ? null : parseOrder(q, snap, projectId);
+    if (order && ['start', 'stop', 'resume', 'approve', 'skip', 'watching'].includes(order.action) && !order.projectId) return { ok: false, reason: 'Select a project or name it explicitly before issuing a command.' };
+    let currentTask = null;
+    if (!order && !researchRequested && freshTaskIntent(q) && typeof opts.prepareTask === 'function') {
+      const target = pickAskedProject(snap, projectId, q);
+      if (!target) return { ok: false, reason: 'Select the project for this new task.' };
+      const prepared = await opts.prepareTask(target.id, q, () => token === askToken);
+      if (!prepared.ok) return prepared;
+      currentTask = prepared.task;
+      snap = prepared.snapshot;
+    }
     let answer;
     let thinking = '';
     let ms = null;
+    const actionResults = [];
     if (order) {
       const acted = await runOrder(order);
       snap = acted.snapshot || await tick();
@@ -1928,7 +2194,7 @@ function createOrchestrator(options) {
       }
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
-      const history = (store.asks || []).slice(0, 16).slice().reverse().map(turn => ({
+      const history = (conversation || []).slice().reverse().map(turn => ({
         user: turn.question,
         orchestrator: turn.answer
       }));
@@ -1952,14 +2218,14 @@ function createOrchestrator(options) {
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, packState(snap, row), { history }),
+            state: Object.assign({}, packState(snap, row), { history, currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
                 question: q,
                 lead: lead.label,
                 thinking: typeof part.thinking === 'string' ? part.thinking : (thinkingLive && thinkingLive.thinking) || '',
-                draft: typeof part.answer === 'string' ? part.answer : (thinkingLive && thinkingLive.draft) || '',
+                draft: typeof part.answer === 'string' ? (/^\s*(\{|```)/.test(part.answer) ? '' : part.answer) : (thinkingLive && thinkingLive.draft) || '',
                 startedAt: thinkingLive && thinkingLive.startedAt,
                 ms: Number.isFinite(part.ms) ? part.ms : Date.now() - started
               };
@@ -1978,8 +2244,31 @@ function createOrchestrator(options) {
             };
           thinking = unpacked.thinking;
           ms = unpacked.ms;
-          if (unpacked.answer) answer = unpacked.answer;
+          const envelope = leadEnvelope(unpacked.answer, spoken && typeof spoken === 'object' ? spoken.actions : undefined);
+          if (envelope.answer) answer = envelope.answer;
           else answer = `${lead.label} returned no answer. The provider CLI in the project folder produced nothing.`;
+          if (envelope.error) answer += '\n\n' + envelope.error;
+          if (!Array.isArray(envelope.actions) || envelope.actions.length > 3) {
+            answer += '\n\nInvalid lead actions; no workers were dispatched.';
+          } else if (envelope.actions.length && !researchRequested) {
+            answer += '\n\nResearch was not dispatched: this message did not authorize research work.';
+            actionResults.push({ ok: false, reason: 'No research work authorization in the current message.' });
+          } else {
+            for (const action of envelope.actions) {
+              if (token !== askToken) return finishCancelled();
+              const mentioned = roster().filter(model => [model.label, model.cli].some(name => typeof name === 'string' && q.toLowerCase().includes(name.toLowerCase())));
+              const requested = mentioned.length > 1 ? mentioned.filter(model => model.id !== lead.id) : mentioned;
+              const receipt = requested.length === 1 && action && action.modelId !== requested[0].id
+                ? { ok: false, reason: 'The action chose a different model from the requested worker: ' + requested[0].id + '. No model was substituted.' }
+                : action && row && action.projectId !== row.id
+                  ? { ok: false, reason: 'Research action targets a different project from the selected recipient.' }
+                  : await dispatchResearch(action, () => token === askToken);
+              actionResults.push(receipt);
+              answer += receipt.ok
+                ? `\n\nNotebook: ${receipt.duplicate ? 'already running' : 'started'} ${receipt.research.workerLabel} (${receipt.research.provider}/${receipt.research.cli}), process ${receipt.research.pid}, for research "${receipt.research.title}". Source files are protected; findings will be saved to report.md.`
+                : '\n\nResearch was not dispatched: ' + receipt.reason;
+            }
+          }
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
@@ -1993,6 +2282,7 @@ function createOrchestrator(options) {
     }
     if (token !== askToken) return finishCancelled();
     if (!Number.isFinite(ms)) ms = Date.now() - askedAt;
+    if (currentTask) answer += `\n\nNew task prepared from this message: ${currentTask.title}. Approve this task to assign workers. No previous checkpoint was resumed.`;
     const row = pickAskedProject(snap, projectId, q);
     const lead = leadModel();
     const item = {
@@ -2002,12 +2292,16 @@ function createOrchestrator(options) {
       thinking: thinking || null,
       ms: Number.isFinite(ms) ? ms : null,
       projectId: (row && row.id) || null,
+      sessionId,
+      chatSessionId: chatSessionId || null,
       orchestratorId: lead ? lead.id : null,
       order: order ? order.action : null
     };
-    store.asks = [item, ...(Array.isArray(store.asks) ? store.asks : [])].slice(0, 40);
+    if (actionResults.length) item.actionResults = clone(actionResults);
+    store.asks = [item, ...(Array.isArray(store.asks) ? store.asks : [])];
     persist();
-    snap = await tick();
+    refreshResearch();
+    snap = snapshot(await opts.readPlan());
     return {
       ok: true,
       question: q,
@@ -2019,7 +2313,8 @@ function createOrchestrator(options) {
       orchestratorId: item.orchestratorId,
       asks: clone(store.asks),
       snapshot: snap,
-      order: order ? order.action : null
+      order: order ? order.action : null,
+      actionResults
     };
   }
 
@@ -2053,11 +2348,12 @@ function createOrchestrator(options) {
     const item = notebookProjects(plan).find(row => row.project.id === projectId);
     if (!item) return { ok: false, reason: 'project not found' };
     const latest = item.revisions.at(-1);
-    if (latest.open && latest.open.length) return { ok: false, reason: 'open questions remain' };
+    if (latest.open && latest.open.length && !(item.tasks || []).some(task => task.status === 'running' && task.source === 'chat')) return { ok: false, reason: 'open questions remain' };
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
     if (!item.project.folder) return { ok: false, reason: 'no folder' };
     const row = entry(projectId);
     row.approved = true;
+    row.authorizedSessionId = sessionId;
     row.holdApproval = false;
     note(projectId, 'User approved the execution plan. Passing the job to the worker.');
     persist();
@@ -2093,10 +2389,11 @@ function createOrchestrator(options) {
           model: lead,
           projectId: item.project.id,
           folder: item.project.folder || null,
-          state: { name: item.project.name, goal: latest && latest.direction, folder: item.project.folder, docs }
+          state: { name: item.project.name, goal: latest && latest.direction, folder: item.project.folder, docs },
+          allowActions: false
         });
         const text = spoken && typeof spoken === 'object' && !Array.isArray(spoken) ? spoken.answer : spoken;
-        const parsed = parseGrillQuestions(text);
+        const parsed = parseGrillQuestions(leadEnvelope(text).answer);
         if (parsed.length) return parsed;
       } catch (_) {}
     }
@@ -2140,6 +2437,7 @@ function createOrchestrator(options) {
     if (!item) return { ok: false, reason: 'project not found' };
     if (!item.project.folder) return { ok: false, reason: 'no folder' };
     const row = entry(projectId);
+    row.authorizedSessionId = sessionId;
     const source = options && options.timing ? options : (row.pendingAutoStart || options);
     const timing = readTiming(source);
     if (!timing.ok) return timing;
@@ -2168,7 +2466,7 @@ function createOrchestrator(options) {
       const kind = wanted === 'me' ? 'me' : (wanted === 'docs' || docs.length ? 'docs' : 'me');
       const questions = await composeGrillRound(item, facts, kind);
       row.grillAsked = true;
-      note(projectId, `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
+      note(projectId, opts.mattSkillsEnabled?.() === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
       persist();
       await tick();
       return {
@@ -2215,10 +2513,43 @@ function createOrchestrator(options) {
     row.modelId = null;
     row.workerLog = null;
     row.resumeRequested = true;
+    row.authorizedSessionId = sessionId;
     if (row.checkpoint.reason === 'deadline') row.deadlineHonored = true;
     row.approved = true;
     row.holdApproval = false;
     note(projectId, 'Resuming from checkpoint.');
+    persist();
+    return { ok: true, snapshot: await tick() };
+  }
+
+  function prepareForNewTask(projectId) {
+    const row = entry(projectId);
+    if (row.checkpoint?.path && fs.existsSync(row.checkpoint.path)) {
+      const archive = path.join(path.dirname(row.checkpoint.path), 'history', `${projectId}-${crypto.randomUUID()}.json`);
+      fs.mkdirSync(path.dirname(archive), { recursive: true });
+      fs.copyFileSync(row.checkpoint.path, archive, fs.constants.COPYFILE_EXCL);
+    }
+    if ((row.dispatch || []).some(part => part && (part.pid || part.startedAt || part.resultPath))) {
+      store.workerHistory.push({ id: projectId, name: projectId, jobTitle: row.jobTitle, attemptId: row.attemptId, status: 'checkpointed', dispatch: clone(row.dispatch).map(part => ({ ...part, alive: false })), workerTail: row.workerTail || '', sessionId: row.authorizedSessionId || null });
+    }
+    const active = attempts.getActiveAttempt({ projectId });
+    if (active && typeof attempts.closeAttempt === 'function') attempts.closeAttempt({ attemptId: active.id, reason: 'Superseded by a new chat request; existing execution evidence preserved.' });
+    Object.assign(row, { approved: false, holdApproval: true, authorizedSessionId: sessionId, resumeRequested: false, checkpoint: null, dispatch: [], plan: [], tried: [], jobId: null, jobFingerprint: null, attemptId: null, modelId: null, workerPid: null, workerAlive: false, workerLog: null, resultPath: null, workerTail: '', status: 'needs_approval' });
+    persist();
+  }
+
+  async function stopWorker(projectId, pid) {
+    const plan = await opts.readPlan();
+    const item = notebookProjects(plan).find(item => item.project.id === projectId);
+    if (!item) return { ok: false, reason: 'project not found' };
+    const row = entry(projectId);
+    const part = (row.dispatch || []).find(part => part && part.pid === pid && !part.stoppedByUser);
+    if (!part || row.status !== 'watching') return { ok: false, reason: 'Worker is no longer active on this project.' };
+    if (typeof opts.killWorker !== 'function' || !opts.killWorker(pid)) return { ok: false, reason: 'Could not stop the worker process.' };
+    part.stoppedByUser = true;
+    part.alive = false;
+    part.activity = 'Stopped by you. Resume the project to continue this slice.';
+    note(projectId, `Stopped worker ${part.modelId}, process ${pid}. Other slices continue; automatic replacement is suspended.`);
     persist();
     return { ok: true, snapshot: await tick() };
   }
@@ -2243,6 +2574,12 @@ function createOrchestrator(options) {
     askToken += 1;
     thinkingLive = null;
     if (typeof opts.abortAsk === 'function') opts.abortAsk();
+    refreshResearch();
+    for (const record of store.researches.filter(item => item.status === 'watching')) {
+      const stopped = !record.alive || (typeof opts.killWorker === 'function' && opts.killWorker(record.pid));
+      if (stopped) { record.alive = false; finishResearch(record, 'checkpointed', 'Notebook shutdown; research evidence preserved.'); }
+      else record.reason = 'Notebook shutdown could not stop the research process; inspect its PID before resuming.';
+    }
     const watching = Object.entries(store.projects).filter(([, row]) => row.status === 'watching');
     if (!watching.length) { persist(); return; }
     let plan;
@@ -2270,6 +2607,8 @@ function createOrchestrator(options) {
       const row = store.projects[id];
       if (row && row.attemptId === attemptId) return row.workerPid || null;
     }
+    const research = store.researches.find(record => record.attemptId === attemptId);
+    if (research) return research.pid || null;
     return null;
   }
 
@@ -2285,7 +2624,7 @@ function createOrchestrator(options) {
     return { ok: true, repository, snapshot: snapshot(plan) };
   }
 
-  return { tick, shutdown, approve, startAutoTask, resume, stop, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setOrchestrator, ask, abortAsk, pidFor, snapshot: async () => snapshot(await opts.readPlan()) };
+  return { tick, shutdown, approve, startAutoTask, resume, stop, stopWorker, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setOrchestrator, ask, abortAsk, dispatchResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async () => { refreshResearch(); return snapshot(await opts.readPlan()); } };
 }
 
-module.exports = { createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };
+module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

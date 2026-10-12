@@ -44,7 +44,7 @@ Double-click `Planwharf.exe` or `planwharf.cmd`, or run:
 node .\planwharf.cjs
 ```
 
-The launcher opens a local window. If a supported browser is missing, open the printed local address, usually `http://127.0.0.1:4173`. Opening `index.html` directly does not start the server that saves your work.
+The launcher opens one local window. Use **Show Orchestrator** / **Show Planwharf** to switch views on the same page while keeping the project selection, chat, and unsent draft. If a supported browser is missing, open the printed local address, usually `http://127.0.0.1:4173`. Opening `index.html` directly does not start the server that saves your work.
 
 Select **Add project**. Enter a name and a concrete goal. In **Projects folder**, enter an existing absolute base directory, for example `D:\benit\Desktop\Projects`, and click **Save projects folder**. The choice is kept on disk for this notebook and survives restarts.
 
@@ -76,7 +76,13 @@ The notebook and answer round work locally. Auto start can ask the lead to formu
 
 ## Lead, providers, and workers
 
-Choose the lead in Functions or the Orchestrator window. It receives a coordination prompt and full local/network tool access, without interactive permission prompts. Worker processes receive their own implementation prompts. The lead coordinates; its role no longer imposes a CLI plan/read-only restriction.
+Choose the lead in Functions or the Orchestrator view. It receives a coordination prompt and full local/network tool access, without interactive permission prompts. Worker processes receive their own implementation prompts. The lead coordinates; its role no longer imposes a CLI plan/read-only restriction.
+
+Matt skills are enabled for every lead and worker by default. The visible startup status shows the checked `main` revision, update result and skill count. Use **Check skills updates** to retry a failed check, or turn off **Use Matt skills for all models** for subsequent model requests. The setting persists for this notebook. A complete cached revision remains available if an update fails; without one, enabled skills block model execution until checked successfully or explicitly disabled.
+
+After switching Grok accounts, use **Refresh Grok models**. Planwharf queries the active CLI login and checks exact configured IDs. It displays authentication or policy failures and does not substitute models. A verified available model still needs to be enabled.
+
+A new work request such as “Audit Sayaku” prepares a new task using that exact message and waits for approval. Previous inactive tasks and checkpoints remain in history. Stop an active job before replacing it; use **Resume** only to deliberately continue the same checkpointed job. The Workers section starts clean when the page opens. Filters select project, session and state; its legend counts active processes across all sessions, including ones hidden by the filters. **Copy output** appears beneath each generated answer.
 
 Every entry in `models.json` declares an exact `provider` and `cli` model ID. The runner launches the corresponding CLI with that ID. It rejects incompatible combinations and never silently replaces a GPT or Gemini model with Grok.
 
@@ -127,7 +133,7 @@ The UI shows **Paused**, **Checkpoint saved**, and **Resume**. Saved checkpoints
 
 **Resume** checks that the checkpoint belongs to the current job, creates a fresh assignment using eligible models, and passes the saved plan. It resumes from existing files and instructions; it does not restore the interrupted CLI's internal memory or cursor. A missing model or exhausted quota can prevent progress.
 
-Closing only the Orchestrator window leaves the main server running. Closing the main app or pressing Ctrl+C asks the launcher to save state and shut down. A power failure or forced process kill cannot execute normal shutdown; recovery can only use information already available on disk.
+Closing the application window keeps the server and workers running. Relaunch Planwharf to reopen the same notebook and backend. **Quit application** or Ctrl+C saves checkpoints and shuts down. A power failure or forced process kill cannot execute normal shutdown; recovery can only use information already available on disk.
 
 Back up the notebook, its `.settings.json` file, the attempts directory, and the project folder together. A checkpoint already saved does not require an open browser.
 

@@ -1,6 +1,7 @@
 'use strict';
 (() => {
-  const $ = id => document.getElementById(id);
+  const embedded = document.documentElement.hasAttribute?.('data-unified-app') || false;
+  const $ = id => document.getElementById(embedded && id !== 'toast' ? `dashboard-${id}` : id);
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const themeKey = 'planwharf_theme';
   let orchestra = { mode: 'manual', models: [], projects: [], asks: [], fleet: [] };
@@ -14,6 +15,8 @@
   let thinkTimer = null;
   let askAbort = null;
   let sendGen = 0;
+  const researchReports = new Map();
+  const workerSessionStartedAt = Date.now();
 
   function formatMs(ms) {
     const n = Math.max(0, Number(ms) || 0);
@@ -81,14 +84,13 @@
   }
 
   function quotaHtml(plan) {
-    if (!plan) return '<p class="muted">Usage not loaded.</p>';
-    if (!plan.readable) return `<p class="muted">${escape(plan.reason || 'Not readable')}</p>`;
-    const windows = Array.isArray(plan.windows) && plan.windows.length ? plan.windows : [{ name: 'usage', pct: plan.pct || 0, leftPct: plan.leftPct == null ? 100 : plan.leftPct, resetAt: null }];
-    return windows.map(win => {
-      const pct = Number.isFinite(win.pct) ? win.pct : 0;
-      const left = Number.isFinite(win.leftPct) ? win.leftPct : Math.max(0, 100 - pct);
+    const summary = PlanwharfQuota.html(plan);
+    if (!plan || !plan.readable) return summary + (plan?.reason ? `<p class="muted">${escape(plan.reason)}</p>` : '');
+    const windows = Array.isArray(plan.windows) && plan.windows.length ? plan.windows : [{ name: 'Provider quota', pct: plan.pct, leftPct: plan.leftPct }];
+    return summary + windows.map(win => {
+      const q = PlanwharfQuota.describe({ ...win, readable: true });
       const reset = formatReset(win.resetAt);
-      return `<div class="quota"><p class="quota-window">${escape(win.name)}</p><div class="fleet-bar" role="progressbar" aria-valuemin="0" aria-valuenow="${pct}" aria-valuemax="100" aria-label="${pct}% used"><span style="width:${pct}%"></span></div><p class="quota-line"><strong>${pct}% used</strong><span>${left}% left${reset ? ` · resets ${escape(reset)}` : ''}</span></p></div>`;
+      return `<div class="quota quota-${q.band}"><p class="quota-window">${escape(win.name)}</p><div class="fleet-bar" role="progressbar" aria-valuemin="0" aria-valuenow="${q.remaining}" aria-valuemax="100" aria-label="${q.text}"><span style="width:${q.remaining}%"></span></div><p class="quota-line"><strong>${q.text}</strong><span>${reset ? `Resets ${escape(reset)}` : ''}</span></p></div>`;
     }).join('');
   }
 
@@ -108,6 +110,7 @@
       ? orchestra.orchestrators
       : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
     const current = orchestra.orchestratorId || '';
+    if (typeof el.setAttribute === 'function') el.setAttribute('data-quota-band', PlanwharfQuota.describe((orchestra.plans || []).find(p => p.id === (orchestra.models || []).find(m => m.id === current)?.plan)).band);
     const groups = [];
     const seen = new Map();
     models.forEach(item => {
@@ -119,17 +122,17 @@
       seen.get(plan).push(item);
     });
     const roster = orchestra.models || [];
-    const options = groups.map(plan => `<optgroup label="${escape(plan)}">${seen.get(plan).map(item => {
+    const options = groups.map(plan => `<optgroup label="${escape(plan)} | ${PlanwharfQuota.describe(planById(plan)).text}">${seen.get(plan).map(item => {
       const meter = planById(item.plan || plan);
-      const tag = meter && meter.readable ? ` · ${meter.pct}% used` : (meter && meter.exhausted ? ' · exhausted' : '');
-      return `<option value="${escape(item.id)}"${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag)}</option>`;
+      const tag = ` | ${PlanwharfQuota.describe(meter).text}`;
+      return `<option class="quota-${PlanwharfQuota.describe(meter).band}" value="${escape(item.id)}"${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag)}</option>`;
     }).join('')}</optgroup>`).join('');
     el.innerHTML = `<option value="">Choose orchestrator</option>${options}`;
     const now = $('orch-lead-now');
     if (now) {
       const lead = roster.find(item => item.id === current);
       const meter = lead ? planById(lead.plan) : null;
-      const tag = meter && meter.readable ? ` · ${lead.plan} ${meter.pct}% used` : '';
+      const tag = ` | ${PlanwharfQuota.describe(meter).text}`;
       now.textContent = lead ? `Lead: ${lead.label}${tag}` : 'Lead: none yet. Pick a model.';
     }
   }
@@ -144,13 +147,15 @@
   function renderChat() {
     const el = $('orch-ask-thread');
     if (!el) return;
-    const items = Array.isArray(orchestra.asks) ? orchestra.asks.slice().reverse() : [];
-    const sig = chatSignature(orchestra.asks);
+    const sessionFilter = $('worker-session-filter')?.value || 'current';
+    const turns = (orchestra.asks || []).filter(item => sessionFilter === 'all' || sessionFilter === 'legacy' && !item.sessionId || sessionFilter === 'current' && Date.parse(item.at) >= workerSessionStartedAt || item.sessionId === sessionFilter);
+    const items = turns.slice().reverse();
+    const sig = sessionFilter + chatSignature(turns);
     if (sig === chatSig && el.childElementCount) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
     chatSig = sig;
     if (!items.length && !sending) {
-      el.innerHTML = '<div class="chat-empty"><p>Command the orchestrator here. Orders run on the live fleet.</p><ul><li>Stop DummyCalculator</li><li>Start RaceEngineer</li><li>Skip grill</li><li>Switch to automatic</li><li>Use Grok 4.7 as orchestrator</li><li>How much quota is left?</li></ul></div>';
+      el.innerHTML = '<div class="chat-empty"><p>Select a project recipient, then discuss the work or give an explicit command.</p><ul><li>Start</li><li>Resume</li><li>Stop</li><li>Skip grill</li><li>Switch to automatic</li><li>How much quota is left?</li></ul></div>';
       return;
     }
     const live = orchestra.thinking;
@@ -161,7 +166,7 @@
     el.innerHTML = items.map(item => {
       const order = item.order ? `<span class="chat-order">${escape(item.order)}</span>` : '';
       const elapsed = Number.isFinite(item.ms) ? ` · ${formatMs(item.ms)}` : '';
-      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p></div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p>${escape(item.answer)}</p><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
+      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p></div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p><button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
     }).join('') + pending;
     if (nearBottom || sending || !items.length) el.scrollTop = el.scrollHeight;
   }
@@ -191,18 +196,76 @@
     return `${approve}${grillTriggers}${resume}${stop}`;
   }
 
+  function workerState(row, part) {
+    if (part.stoppedByUser) return 'Paused';
+    if (row.status === 'complete') return 'Finished';
+    if (row.status === 'checkpointed') return 'Paused';
+    if (row.status === 'failed') return 'Stopped';
+    if (part.pid && part.alive) return 'Running';
+    if (part.pid) return 'Exited';
+    return 'Awaiting launch';
+  }
+
+  function workersHtml(rows) {
+    const models = orchestra.models || orchestra.fleet || [];
+    const workers = [...rows, ...(orchestra.workerHistory || [])].flatMap(row => {
+      const parts = Array.isArray(row.dispatch) ? row.dispatch.filter(part => part && (part.pid || part.startedAt || part.resultPath)) : [];
+      if (parts.length) return parts.map((part, index) => ({ row, part, index }));
+      return row.workerPid ? [{ row, part: { modelId: row.modelId, label: row.workerLabel, pid: row.workerPid, alive: row.workerAlive, activity: row.workerActivity }, index: 0 }] : [];
+    });
+    (orchestra.researches || []).forEach(job => {
+      const row = { id: job.id, projectId: job.projectId, research: true, name: job.projectName || 'Research', jobTitle: job.title, attemptId: job.attemptId, status: job.status, label: job.status, workerTail: job.workerTail || '', progressAt: job.updatedAt, reportAvailable: job.reportAvailable };
+      workers.push({ row, part: { modelId: job.modelId, label: job.workerLabel, provider: job.provider, cli: job.cli, pid: job.pid, alive: job.alive, activity: job.activity || job.reason || '', slice: 'Research', sessionId: job.sessionId, startedAt: job.startedAt || job.createdAt }, index: 0 });
+    });
+    const globalRunning = workers.filter(({ row, part }) => workerState(row, part) === 'Running').length;
+    const projectFilter = $('worker-project-filter')?.value || (projectId ? 'current' : 'all');
+    const sessionFilter = $('worker-session-filter')?.value || 'current';
+    const stateFilter = $('worker-state-filter')?.value || 'all';
+    const visible = workers.filter(({ row, part }) =>
+      (projectFilter === 'all' || (row.projectId || row.id) === (projectFilter === 'current' ? projectId : projectFilter)) &&
+      (sessionFilter === 'all' || sessionFilter === 'legacy' && !part.sessionId || sessionFilter === 'current' && (orchestra.sessionId ? part.sessionId === orchestra.sessionId && Date.parse(part.startedAt) >= workerSessionStartedAt : false) || part.sessionId === sessionFilter) &&
+      (stateFilter === 'all' || workerState(row, part) === stateFilter));
+    const running = visible.filter(({ row, part }) => workerState(row, part) === 'Running').length;
+    const paused = visible.filter(({ row, part }) => workerState(row, part) === 'Paused').length;
+    const finished = visible.filter(({ row, part }) => workerState(row, part) === 'Finished').length;
+    visible.sort((a, b) => Number(workerState(b.row, b.part) === 'Running') - Number(workerState(a.row, a.part) === 'Running'));
+    return `<section class="dash-section dash-zone-workers" aria-label="Workers"><div class="workers-heading"><h3>Workers</h3><span class="badge${running ? ' green' : ''}">${running} running</span></div><p class="worker-legend" role="status">${globalRunning} active across all projects and sessions | ${running} running, ${paused} paused, ${finished} finished in this view. Previous sessions are hidden by default.</p><div class="dash-workers">${visible.map(({ row, part, index }) => {
+      const model = models.find(item => item.id === part.modelId) || {};
+      const state = workerState(row, part);
+      const key = `${row.id}:${row.attemptId || ''}:${index}`;
+      const progress = clock(row.monitoring && row.monitoring.lastProgress || row.progressAt);
+      const activity = part.activity || row.workerActivity || 'No worker output yet.';
+      const log = row.workerTail ? `<details class="monitor-log" data-worker-log="${escape(key)}"><summary>${(row.dispatch || []).length > 1 ? 'Project worker logs (all slices)' : 'Worker output'}</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '<p class="muted">No log output yet.</p>';
+      const report = researchReports.get(row.id);
+      const actions = row.research ? `<div class="now-actions">${row.reportAvailable || row.status === 'complete' ? `<button type="button" class="secondary compact" data-research-report="${escape(row.id)}">Read research report</button>` : ''}${state === 'Running' ? `<button type="button" class="secondary compact" data-research-stop="${escape(row.id)}">Stop</button>` : ''}${row.status === 'checkpointed' ? `<button type="button" class="secondary compact" data-research-resume="${escape(row.id)}">Resume</button>` : ''}</div>${report != null ? `<details class="monitor-log" data-worker-log="${escape(key)}:report" open><summary>Research report</summary><pre class="worker-tail">${escape(report)}</pre></details>` : ''}` : (state === 'Running' ? `<div class="now-actions"><button type="button" class="secondary compact" data-worker-stop="${escape(row.id)}" data-worker-pid="${escape(part.pid)}">Stop worker</button></div>` : '');
+      return `<article class="dash-worker${state === 'Running' ? ' is-running' : ''}" data-worker-state="${escape(state)}"><header><strong>${escape(part.label || model.label || part.modelId || 'Unknown worker')}</strong><span class="badge${state === 'Running' ? ' green' : ''}">${escape(state)}</span></header><p class="worker-model">Provider: ${escape(part.provider || model.provider || 'unknown')} · Model: ${escape(part.cli || model.cli || part.modelId || 'unknown')} · ID: ${escape(part.modelId || 'unknown')}</p><p><strong>${escape(row.name)}</strong>${row.jobTitle ? ` · ${escape(row.jobTitle)}` : ''}</p><p class="muted">${escape(part.slice || 'Whole job')} · ${part.pid ? `PID ${escape(part.pid)} · ${part.alive ? 'alive' : 'not alive'}` : (state === 'Awaiting launch' ? 'No process launched' : 'No live process')} · Project: ${escape(row.label || row.status || 'unknown')}</p><p class="worker-activity">${escape(activity)}</p>${progress ? `<p class="muted">Last ${row.research ? 'research update' : 'project progress'}: ${escape(progress)}</p>` : ''}${log}${actions}</article>`;
+    }).join('') || '<p class="workers-empty">No workers launched in the selected filters. Previous sessions remain available under All sessions.</p>'}</div></section>`;
+  }
+
   function renderBoard() {
     const live = $('orch-live');
     const el = $('orchestrator');
     if (!el) return;
     const rows = orchestra.projects || [];
+    const sessionControl = $('worker-session-filter');
+    if (sessionControl) {
+      const selectedSession = sessionControl.value || 'current';
+      sessionControl.innerHTML = '<option value="current">Current view session</option><option value="all">All sessions</option><option value="legacy">Earlier sessions (before tracking)</option>' + (orchestra.sessions || []).slice().reverse().map(session => `<option value="${escape(session.id)}">${escape(session.startedAt ? new Date(session.startedAt).toLocaleString('en-GB') : 'Date not recorded')} (${escape(session.id.slice(0, 8))})</option>`).join('');
+      sessionControl.value = ['current', 'all', 'legacy', ...(orchestra.sessions || []).map(session => session.id)].includes(selectedSession) ? selectedSession : 'current';
+    }
+    const projectFilter = $('worker-project-filter');
+    if (projectFilter) {
+      const selectedFilter = projectFilter.value || 'current';
+      projectFilter.innerHTML = '<option value="current">Selected project</option><option value="all">All projects</option>' + rows.map(row => `<option value="${escape(row.id)}">${escape(row.name)}</option>`).join('');
+      projectFilter.value = ['current', 'all', ...rows.map(row => row.id)].includes(selectedFilter) ? selectedFilter : 'current';
+    }
     const fleet = Array.isArray(orchestra.fleet) && orchestra.fleet.length ? orchestra.fleet : (orchestra.models || []);
     const interventions = Array.isArray(orchestra.interventions) ? orchestra.interventions : [];
     const looked = clock(orchestra.updatedAt);
     const lead = orchestra.orchestratorLabel || 'Orchestrator';
     if (live) live.textContent = `${lead} · updated ${looked || 'just now'}. I intervene on stall, death, or FAILED.`;
     const plans = Array.isArray(orchestra.plans) ? orchestra.plans : [];
-    const planCards = `<section class="dash-section dash-zone-plans"><h3>Provider usage</h3><p class="muted">Shared across every model on that provider. If ChatGPT is exhausted, every ChatGPT model is exhausted.</p><div class="dash-models">${plans.map(item => {
+    const planCards = `<section class="dash-section dash-zone-plans"><h3>Provider quota remaining</h3><p class="muted">Shared across every model on that provider. If ChatGPT is exhausted, every ChatGPT model is exhausted.</p><div class="dash-models">${plans.map(item => {
       const badge = item.exhausted ? '<span class="badge off">Exhausted</span>' : (item.readable ? '<span class="badge green">Live</span>' : '<span class="badge">Unread</span>');
       return `<article class="dash-model${item.exhausted ? ' state-off' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header>${quotaHtml(item)}</article>`;
     }).join('') || '<p class="muted">Provider usage loads from the local Grok and ChatGPT logins.</p>'}</div></section>`;
@@ -214,7 +277,7 @@
         ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>`
         : '';
       const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p><p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planById(item.plan))}<p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -228,10 +291,19 @@
     const iv = `<section class="dash-section dash-zone-iv"><h3>Interventions</h3>${interventions.length
       ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
       : '<p class="muted">No interventions yet. I switch workers on stall, death, or FAILED.</p>'}</section>`;
-    el.innerHTML = `${planCards}${models}${processes}${iv}`;
+    const openLogs = new Set(Array.from(el.querySelectorAll('details[data-worker-log][open]')).map(detail => detail.getAttribute('data-worker-log')));
+    el.innerHTML = `${workersHtml(rows)}${planCards}${models}${processes}${iv}`;
+    el.querySelectorAll('details[data-worker-log]').forEach(detail => {
+      if (openLogs.has(detail.getAttribute('data-worker-log'))) detail.open = true;
+    });
   }
 
   function render() {
+    const recipient = $('orch-project');
+    const projects = orchestra.projects || [];
+    try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
+    if (!projects.some(row => row.id === projectId)) projectId = null;
+    if (recipient) recipient.innerHTML = '<option value="">Select a project</option>' + projects.map(row => `<option value="${escape(row.id)}"${row.id === projectId ? ' selected' : ''}>${escape(row.name)}</option>`).join('');
     fillLead();
     renderChat();
     renderBoard();
@@ -245,7 +317,6 @@
       const keep = sending ? orchestra.thinking : null;
       orchestra = snap;
       if (keep && !orchestra.thinking) orchestra.thinking = keep;
-      if (!projectId && Array.isArray(orchestra.projects) && orchestra.projects[0]) projectId = orchestra.projects[0].id;
       render();
     } catch (_) {}
   }
@@ -255,9 +326,6 @@
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || 'Save failed.');
     version = body.version;
-    if (body.plan && body.plan.schema === 2 && body.plan.projects && body.plan.projects[0]) {
-      projectId = body.plan.projects[0].project.id;
-    }
   }
 
   async function post(url, payload, signal) {
@@ -357,10 +425,10 @@
         const response = await fetch('/api/orchestrator');
         if (!response.ok) return;
         const snap = await response.json();
-        if (snap.thinking) orchestra.thinking = snap.thinking;
-        if (Array.isArray(snap.asks)) orchestra.asks = snap.asks;
-        if (Array.isArray(snap.projects)) orchestra.projects = snap.projects;
-        renderChat();
+        const keepThinking = orchestra.thinking;
+        orchestra = snap;
+        if (!orchestra.thinking) orchestra.thinking = keepThinking;
+        render();
       } catch (_) {}
     };
     stopThinkTimers();
@@ -370,7 +438,9 @@
     };
     pollThink();
     try {
-      const body = await post('/api/orchestrator/ask', { question: text, projectId }, askAbort ? askAbort.signal : undefined);
+      try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
+      if (!projectId || !(orchestra.projects || []).some(row => row.id === projectId)) throw new Error('Select the project recipient before sending.');
+      const body = await post('/api/orchestrator/ask', { question: text, projectId, ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
       if (myGen !== sendGen) return;
       if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
       orchestra.asks = body.asks || orchestra.asks || [];
@@ -414,6 +484,9 @@
 
   if ($('orchestrator')) {
     $('orchestrator').addEventListener('click', async event => {
+      const researchReport = event.target && event.target.getAttribute && event.target.getAttribute('data-research-report');
+      const researchStop = event.target && event.target.getAttribute && event.target.getAttribute('data-research-stop');
+      const researchResume = event.target && event.target.getAttribute && event.target.getAttribute('data-research-resume');
       const leadId = event.target && event.target.getAttribute && event.target.getAttribute('data-lead');
       const modelId = event.target && event.target.getAttribute && event.target.getAttribute('data-model');
       const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
@@ -422,6 +495,32 @@
       const grillStartId = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-start');
       const grillStartKind = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
       try {
+        const workerStop = event.target.closest('[data-worker-stop]');
+        if (workerStop) {
+          workerStop.disabled = true;
+          try {
+            const body = await post('/api/orchestrator/worker/stop', { projectId: workerStop.dataset.workerStop, pid: Number(workerStop.dataset.workerPid) });
+            orchestra = body.snapshot;
+            render();
+            notice('Worker stopped. Other slices continue.');
+          } finally { workerStop.disabled = false; }
+          return;
+        }
+        if (researchReport) {
+          const response = await fetch(`/api/orchestrator/research/report?id=${encodeURIComponent(researchReport)}`);
+          const body = await response.json();
+          if (!response.ok) throw new Error(body.error || 'Report unavailable.');
+          researchReports.set(researchReport, body.report || 'No report output yet.');
+          renderBoard();
+          return;
+        }
+        if (researchStop || researchResume) {
+          const body = await post(`/api/orchestrator/research/${researchStop ? 'stop' : 'resume'}`, { id: researchStop || researchResume });
+          if (body.ok === false) throw new Error(body.reason || 'Research action failed.');
+          if (body.snapshot) orchestra = body.snapshot;
+          render();
+          return;
+        }
         if (leadId) {
           orchestra = await post('/api/orchestrator/lead', { id: leadId });
           render();
@@ -467,6 +566,23 @@
     });
   }
 
+  ['worker-project-filter', 'worker-session-filter', 'worker-state-filter'].forEach(id => { if ($(id)) $(id).addEventListener('change', () => { renderChat(); renderBoard(); }); });
+  if ($('orch-project')) $('orch-project').addEventListener('change', event => {
+    projectId = event.target.value || null;
+    try { localStorage.setItem('planwharf_chat_project', projectId || ''); } catch (_) {}
+    if (embedded && projectId) window.dispatchEvent(new CustomEvent('planwharf-select-project', { detail: projectId }));
+    render();
+  });
+  if (embedded) window.addEventListener('planwharf-project', event => {
+    projectId = event.detail;
+    render();
+  });
+  if (embedded) window.addEventListener('planwharf-view', event => {
+    if (event.detail === 'orchestrator') refresh();
+  });
+  if (typeof window !== 'undefined') window.addEventListener('storage', event => {
+    if (event.key === 'planwharf_chat_project') { projectId = event.newValue || null; render(); }
+  });
   loadPlan().catch(() => {});
   refresh();
   setInterval(refresh, 4000);

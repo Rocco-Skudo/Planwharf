@@ -3,20 +3,27 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const { spawn } = require('node:child_process');
 const Plan = require('./plan.js');
 const { createAttemptEngine } = require('./engine/attempts.js');
 const { createSentinel } = require('./engine/sentinel.js');
-const { createOrchestrator } = require('./engine/orchestrator.js');
+const { createOrchestrator, jobFingerprint } = require('./engine/orchestrator.js');
 const { createSkillsCache } = require('./engine/skills.js');
+const { createProviderModels } = require('./engine/provider-models.cjs');
 const { fetchPlanUsage } = require('./engine/planUsage.js');
 const defaultModels = require('./models.json');
+const { projectHome } = require('./engine/project-home.cjs');
+const { ensureDefaultNotebook } = require('./engine/notebook-file.cjs');
 
-const version = plan => crypto.createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+// Notes and visit markers do not invalidate an open Living Plan editor.
+const withoutHome = ({ home, ...project }) => project;
+const version = plan => crypto.createHash('sha256').update(JSON.stringify(plan.schema === 2 ? { ...plan, projects: plan.projects.map(withoutHome) } : withoutHome(plan))).digest('hex');
 class RequestError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
 async function readPlan(file) {
+  ensureDefaultNotebook(file);
   const plan = JSON.parse(await fs.readFile(file, 'utf8'));
   if (!Plan.validate(plan)) throw new Error('The plan file is invalid.');
   return plan;
@@ -36,12 +43,12 @@ async function writePlan(file, plan) {
     await fs.rm(temporary, { force: true });
   }
 }
-async function body(request) {
+async function body(request, maxBytes = 65536, tooLarge = 'Revision too large.') {
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
     size += chunk.length;
-    if (size > 65536) throw new RequestError(413, 'Revision too large.');
+    if (size > maxBytes) throw new RequestError(413, tooLarge);
     chunks.push(chunk);
   }
   try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
@@ -64,8 +71,11 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder, skills, fetchSkills, syncSkills, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, fetchPlans = fetchPlanUsage } = {}) {
+function createServer({ planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, inspectFolder, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans = fetchPlanUsage } = {}) {
+  models = models.map(model => ({ ...model }));
+  const providerModels = createProviderModels(models, discoverModels ? { discover: discoverModels } : {});
   let queue = Promise.resolve();
+  const transaction = new AsyncLocalStorage();
   const settingsFile = `${planFile}.settings.json`;
   async function readSettings() {
     try {
@@ -102,7 +112,11 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     throw new RequestError(409, 'Too many folders with this project name.');
   }
   const enqueue = work => {
-    const pending = queue.then(work);
+    if (transaction.getStore()?.active) return Promise.resolve().then(work);
+    const pending = queue.then(() => transaction.run({ active: true }, async () => {
+      const context = transaction.getStore();
+      try { return await work(); } finally { context.active = false; }
+    }));
     queue = pending.catch(() => {});
     return pending;
   };
@@ -120,20 +134,69 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     }
   });
   const skillsCache = skills || createSkillsCache({ dir: path.join(storeDir, 'matt-skills'), fetchImpl: fetchSkills });
+  const skillsPolicyFile = path.join(storeDir, 'skills-policy.json');
+  try { skillsEnabled = JSON.parse(require('node:fs').readFileSync(skillsPolicyFile, 'utf8')).enabled !== false; } catch {}
+  const skillsSnapshot = () => ({ ...skillsCache.snapshot(), enabled: skillsEnabled });
+  let initialSkillsSync = syncSkills ? skillsCache.ensure() : null;
+  async function readySkills() {
+    if (!skillsEnabled) return;
+    if (!initialSkillsSync && !skillsCache.snapshot().sha) initialSkillsSync = skillsCache.ensure();
+    if (initialSkillsSync) await initialSkillsSync;
+    if (!skillsCache.prompt?.('lead')) throw new Error('Matt skills are enabled but no complete catalog is available. Check skills or turn off Use Matt skills before running models.');
+  }
+  function skillsPrompt(role, context) {
+    if (!skillsEnabled) return 'Matt skills are disabled for this notebook. Do not load or invoke Matt skills for this request.';
+    const prompt = skillsCache.prompt?.(role, context);
+    if (!prompt) throw new Error('Matt skills are enabled but their complete catalog is unavailable.');
+    return prompt;
+  }
   orchestra = createOrchestrator({
     readPlan: () => readPlan(planFile),
+    completeTasks: completions => enqueue(async () => {
+      const current = await readPlan(planFile);
+      let changed = false;
+      const projects = (current.schema === 2 ? current.projects : [current]).map(item => {
+        const tasks = item.tasks.map(task => {
+          const completion = completions.find(record => record.projectId === item.project.id && record.taskId === task.id);
+          if (!completion || task.status !== 'running' || jobFingerprint(task) !== completion.fingerprint) return task;
+          changed = true;
+          return { ...task, status: 'complete', completedAt: new Date().toISOString(), attemptId: completion.attemptId };
+        });
+        return { ...item, tasks };
+      });
+      const next = current.schema === 2 ? { ...current, projects } : projects[0];
+      if (changed) { if (!Plan.validate(next)) throw new Error('Completed tasks failed notebook validation.'); await save(planFile, next); }
+      return next;
+    }),
     attempts,
     sentinel,
     models,
+    enforceSessionBoundary: true,
+    mattSkillsEnabled: () => skillsEnabled,
     dir: storeDir,
     inspectFolder,
-    spawnWorker,
+    spawnWorker: typeof spawnWorker === 'function' ? info => spawnWorker({ ...info, job: { ...info.job, detail: [info.job?.detail || '', skillsPrompt(info.job?.kind === 'research' ? 'research' : info.job?.kind === 'audit' ? 'audit' : 'worker', `${info.job?.title || ''} ${info.job?.detail || ''}`)].join('\n\n') } }) : undefined,
     isProcessAlive,
     killWorker,
-    askModel,
+    askModel: typeof askModel === 'function' ? async info => { await readySkills(); return askModel({ ...info, skillsPrompt: skillsPrompt('lead', info.question) }); } : undefined,
     abortAsk,
     fetchPlans,
-    readSkill: relative => (typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
+    readSkill: relative => (skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
+    prepareTask: (projectId, question, stillAuthorized) => enqueue(async () => {
+      const current = await readPlan(planFile);
+      const item = (current.schema === 2 ? current.projects : [current]).find(item => item.project.id === projectId);
+      if (!item) return { ok: false, reason: 'Selected project no longer exists.' };
+      const live = (await orchestra.snapshot()).projects.find(row => row.id === projectId);
+      if (live && live.workerAlive) return { ok: false, reason: 'This project has active workers. Stop its current job before preparing a new task.' };
+      if (!stillAuthorized()) return { ok: false, reason: 'Request cancelled before creating the task.' };
+      const task = { id: 'chat-' + crypto.randomUUID(), projectId, revision_id: item.revisions.at(-1).id, title: question.split('\n')[0].slice(0, 120), detail: question, status: 'running', source: 'chat', createdAt: new Date().toISOString(), timing: 'discretion', kind: /\b(audit|review)\b/i.test(question) && !/\b(implement|fix|sistema)\b/i.test(question) ? 'audit' : 'implementation' };
+      const updated = { ...item, tasks: [...item.tasks.map(task => task.status === 'running' ? { ...task, status: 'superseded' } : task), task] };
+      const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === projectId ? updated : item) } : updated;
+      if (!Plan.validate(next)) return { ok: false, reason: 'New task failed notebook validation.' };
+      await save(planFile, next);
+      orchestra.prepareForNewTask(projectId);
+      return { ok: true, task, snapshot: await orchestra.tick() };
+    }),
     applyStart: (projectId, options) => enqueue(async () => {
       const current = await readPlan(planFile);
       return executeStart(current, projectId, options);
@@ -197,10 +260,9 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     const snapshot = await orchestra.tick();
     return { ok: true, plan: next, version: version(next), snapshot, phase: prepared.phase || (prepared.job ? 'plan' : 'grill') };
   }
-  if (syncSkills) {
-    Promise.resolve().then(() => skillsCache.ensure()).catch(() => {});
-  }
-  const staticFiles = { '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  if (initialSkillsSync) initialSkillsSync.catch(() => {});
+  if (refreshModels) providerModels.refresh().catch(() => {});
+  const staticFiles = { '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/claims.js': ['engine/claims.js', 'text/javascript'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -211,14 +273,81 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
       if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Open the interface from its local address.');
       const loc = new URL(request.url, `http://${expectedHost}`);
       const pathname = loc.pathname;
+      if (refreshModels && pathname.startsWith('/api/orchestrator') && !pathname.includes('/ask/cancel')) await providerModels.refresh();
+      if (skillsEnabled && typeof spawnWorker === 'function' && (pathname === '/api/orchestrator' && loc.searchParams.get('readOnly') !== '1' || request.method === 'POST' && ['/api/orchestrator/approve', '/api/orchestrator/resume', '/api/orchestrator/start', '/api/orchestrator/mode', '/api/orchestrator/ask', '/api/orchestrator/research/resume'].includes(pathname))) {
+        try { await readySkills(); } catch (error) { throw new RequestError(503, error.message); }
+      }
       if (request.method === 'GET' && pathname === '/' && (loc.searchParams.get('watch') === '1' || loc.searchParams.get('view') === 'watch')) {
-        response.writeHead(302, { Location: '/orchestrator.html' });
+        response.writeHead(302, { Location: '/#orchestrator' });
+        response.end();
+        return;
+      }
+      if (request.method === 'GET' && pathname === '/orchestrator.html') {
+        response.writeHead(302, { Location: '/#orchestrator' });
         response.end();
         return;
       }
       if (request.method === 'GET' && pathname === '/api/plan') {
         const plan = await readPlan(planFile);
         return json(200, { plan, version: version(plan) });
+      }
+      if (request.method === 'GET' && pathname === '/api/app') return json(200, { planFile: path.resolve(planFile), attemptsDir: path.resolve(storeDir), pid: process.pid, views: appWindows ? appWindows.status() : {} });
+      if (request.method === 'POST' && pathname === '/api/app/heartbeat') {
+        const input = await body(request);
+        if (!['planwharf', 'orchestrator'].includes(input.view) || typeof input.id !== 'string' || input.id.length > 100) throw new RequestError(400, 'Invalid view.');
+        return json(200, appWindows ? appWindows.heartbeat(input) : { views: {}, focus: false });
+      }
+      if (request.method === 'POST' && pathname === '/api/app/quit') {
+        if (!quitApp) throw new RequestError(409, 'Quit this server with Ctrl+C.');
+        json(200, { ok: true });
+        setImmediate(quitApp);
+        return;
+      }
+      if (request.method === 'POST' && ['/api/project-home', '/api/notes'].includes(pathname)) {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON.');
+        const input = await body(request, pathname === '/api/project-home' ? 1024 * 1024 : 65536);
+        if (pathname === '/api/project-home') {
+          const notebook = await readPlan(planFile);
+          const project = (notebook.schema === 2 ? notebook.projects : [notebook]).find(p => p.project.id === input.projectId);
+          if (!project) throw new RequestError(404, 'Project not found.');
+          if (input.baseline != null && (!Array.isArray(input.baseline.revisionIds) || !input.baseline.revisionIds.every(Number.isSafeInteger) || (input.baseline.git?.head && !/^[a-f0-9]{40,64}$/.test(input.baseline.git.head)))) throw new RequestError(400, 'Invalid visit baseline.');
+          // Git reads must not block notebook edits in the persistence queue.
+          const home = await projectHome(project, await orchestra.snapshot(), input.baseline, { planFile });
+          if (input.visit === true) await enqueue(async () => {
+            const latest = await readPlan(planFile);
+            const target = (latest.schema === 2 ? latest.projects : [latest]).find(p => p.project.id === input.projectId);
+            if (!target) throw new RequestError(404, 'Project not found.');
+            target.home = { ...(target.home || { notes: [] }), lastVisit: home.current };
+            await save(planFile, latest);
+          });
+          return json(200, home);
+        }
+        return json(200, await enqueue(async () => {
+          const notebook = await readPlan(planFile);
+          const project = (notebook.schema === 2 ? notebook.projects : [notebook]).find(p => p.project.id === input.projectId);
+          if (!project) throw new RequestError(404, 'Project not found.');
+          if (pathname === '/api/notes') {
+            const home = project.home || { notes: [] };
+            const notes = [...home.notes];
+            if (input.action === 'add') {
+              if (typeof input.text !== 'string' || !input.text.trim() || input.text.length > 10000 || notes.length >= 1000) throw new RequestError(400, 'Enter a note of up to 10,000 characters.');
+              notes.push({ id: crypto.randomUUID(), text: input.text.trim(), createdAt: new Date().toISOString(), pinned: false });
+            } else {
+              const index = notes.findIndex(n => n.id === input.id);
+              if (index < 0) throw new RequestError(404, 'Note not found.');
+              if (input.action === 'delete') notes.splice(index, 1);
+              else if (input.action === 'pin' && typeof input.pinned === 'boolean') notes[index] = { ...notes[index], pinned: input.pinned };
+              else throw new RequestError(400, 'Invalid note action.');
+            }
+            project.home = { ...home, notes };
+            await save(planFile, notebook);
+            return { notes };
+          }
+        }));
+      }
+      if (request.method === 'POST' && pathname === '/api/planwharf/window') {
+        const url = `http://127.0.0.1:${request.socket.localPort}/`;
+        return json(200, { ok: true, url, opened: typeof openPlanWindow === 'function' ? Boolean(openPlanWindow(url)) : false });
       }
       if (request.method === 'GET' && pathname === '/api/settings') return json(200, await readSettings());
       if (request.method === 'POST' && pathname === '/api/settings') {
@@ -236,17 +365,33 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         return json(200, result);
       }
       if (request.method === 'GET' && pathname === '/api/orchestrator') {
-        const snapshot = await orchestra.tick();
-        snapshot.skills = skillsCache.snapshot();
+        const snapshot = loc.searchParams.get('readOnly') === '1' ? await orchestra.snapshot() : await enqueue(() => orchestra.tick());
+        snapshot.skills = skillsSnapshot();
+        snapshot.providerModels = providerModels.snapshot();
         return json(200, snapshot);
       }
       if (request.method === 'GET' && pathname === '/api/skills') {
-        return json(200, skillsCache.snapshot());
+        return json(200, skillsSnapshot());
       }
       if (request.method === 'POST' && pathname === '/api/skills') {
-        const snapshot = await skillsCache.ensure();
-        return json(200, snapshot);
+        initialSkillsSync = skillsCache.ensure();
+        await initialSkillsSync;
+        return json(200, skillsSnapshot());
       }
+      if (request.method === 'POST' && pathname === '/api/skills/settings') {
+        const input = await body(request);
+        if (!input || typeof input.enabled !== 'boolean' || Object.keys(input).some(key => key !== 'enabled')) throw new RequestError(400, 'Invalid Matt skills setting.');
+        await enqueue(() => writePlan(skillsPolicyFile, { enabled: input.enabled }));
+        skillsEnabled = input.enabled;
+        return json(200, skillsSnapshot());
+      }
+      if (request.method === 'POST' && pathname === '/api/models/refresh') {
+        await providerModels.refresh(true);
+        const snapshot = await orchestra.snapshot();
+        return json(200, { ...snapshot, skills: skillsSnapshot(), providerModels: providerModels.snapshot() });
+      }
+      if (request.method === 'GET' && pathname === '/api/models/status') return json(200, providerModels.snapshot());
+      if (request.method === 'GET' && pathname === '/models.json') return json(200, models);
       if (request.method === 'POST' && pathname === '/api/orchestrator/lead') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
@@ -258,11 +403,24 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask/cancel') {
         return json(200, await orchestra.abortAsk());
       }
+      if (request.method === 'GET' && pathname === '/api/orchestrator/research/report') {
+        const result = orchestra.researchReport(loc.searchParams.get('id'));
+        if (!result.ok) throw new RequestError(404, result.reason);
+        return json(200, result);
+      }
+      if (request.method === 'POST' && ['/api/orchestrator/research/stop', '/api/orchestrator/research/resume'].includes(pathname)) {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON.');
+        const input = await body(request);
+        if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => key !== 'id')) throw new RequestError(400, 'Invalid research job ID.');
+        const result = pathname.endsWith('/stop') ? await orchestra.stopResearch(input.id) : await orchestra.resumeResearch(input.id);
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result);
+      }
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
-        const input = await body(request);
-        if (!input || typeof input.question !== 'string' || Object.keys(input).some(key => !['question', 'projectId'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined);
+        const input = await body(request, 1024 * 1024, 'Chat request too large (maximum 1 MiB).');
+        if (!input || typeof input.question !== 'string' || input.chatSessionId !== undefined && (typeof input.chatSessionId !== 'string' || !/^[\w-]{1,100}$/.test(input.chatSessionId)) || Object.keys(input).some(key => !['question', 'projectId', 'chatSessionId'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined, input.chatSessionId);
         if (!asked.ok) throw new RequestError(400, asked.reason || 'Invalid data.');
         return json(200, asked);
       }
@@ -315,6 +473,14 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
       }
+      if (request.method === 'POST' && pathname === '/api/orchestrator/worker/stop') {
+        if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON.');
+        const input = await body(request);
+        if (!input || typeof input.projectId !== 'string' || !Number.isSafeInteger(input.pid) || input.pid <= 0 || Object.keys(input).some(key => !['projectId', 'pid'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        const result = await orchestra.stopWorker(input.projectId, input.pid);
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result);
+      }
       if (request.method === 'POST' && pathname === '/api/orchestrator/stop') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
@@ -327,7 +493,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         if (input && typeof input === 'object' && Object.keys(input).length) throw new RequestError(400, 'Invalid data.');
-        const watchUrl = `http://127.0.0.1:${request.socket.localPort}/orchestrator.html`;
+        const watchUrl = `http://127.0.0.1:${request.socket.localPort}/#orchestrator`;
         let opened = false;
         if (typeof openWatchWindow === 'function') {
           try {
@@ -362,7 +528,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         const input = await body(request);
         if (!input || typeof input.version !== 'string' || input.project === undefined || (input.createFolder != null && typeof input.createFolder !== 'boolean') || Object.keys(input).some(key => !['version', 'project', 'createFolder'].includes(key))) throw new RequestError(400, 'Invalid data.');
         if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['name', 'direction', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
@@ -394,7 +560,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || Object.keys(input).some(key => !['version', 'projectId'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
@@ -415,7 +581,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || !input.task || typeof input.task !== 'object' || Array.isArray(input.task) || Object.keys(input.task).some(key => key !== 'id') || Object.keys(input).some(key => !['version', 'projectId', 'task'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : current;
@@ -439,7 +605,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         const input = await body(request);
         if (!input || typeof input.version !== 'string' || input.project === undefined || Object.keys(input).some(key => !['version', 'project'].includes(key))) throw new RequestError(400, 'Invalid data.');
         if (!input.project || typeof input.project !== 'object' || Array.isArray(input.project) || Object.keys(input.project).some(key => !['id', 'folder', 'github'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
@@ -477,7 +643,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
         if (!input || typeof input.version !== 'string' || typeof input.projectId !== 'string' || (input.kind !== undefined && input.kind !== 'me' && input.kind !== 'docs') || Object.keys(input).some(key => !['version', 'projectId', 'kind'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           const project = current.schema === 2 ? current.projects.find(item => item.project.id === input.projectId) : current;
@@ -519,7 +685,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
         if (field !== 'json' && (!input[field] || typeof input[field] !== 'object' || Array.isArray(input[field]) || Object.keys(input[field]).some(key => !keys[field].includes(key)))) throw new RequestError(400, 'Invalid data.');
         if (field === 'json' && typeof input.json !== 'string') throw new RequestError(400, 'Invalid import JSON.');
         // Serialize disk reads and writes: a second browser cannot replace history.
-        const pending = queue.then(async () => {
+        const pending = enqueue(async () => {
           const current = await readPlan(planFile);
           if (input.version !== version(current)) throw new RequestError(409, 'The plan has changed. Reload the page before saving.');
           let next;
@@ -533,6 +699,7 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
           }
           catch (error) { throw new RequestError(400, error.message); }
           await save(planFile, next);
+          if (field === 'task') { await orchestra.tick(); next = await readPlan(planFile); }
           return { plan: next, version: version(next) };
         });
         queue = pending.catch(() => {});
@@ -550,7 +717,20 @@ function createServer({ planFile = path.join(__dirname, 'plan.json'), save = wri
     }
   });
   let closing;
-  server.shutdown = () => closing || (closing = orchestra.shutdown());
+  let monitorTimer, monitoring = false;
+  server.on('listening', () => {
+    monitorTimer = setInterval(async () => {
+      if (closing || monitoring) return;
+      monitoring = true;
+      try {
+        const state = await orchestra.snapshot();
+        if (state.projects.some(row => row.status === 'watching') || (state.researches || []).some(row => row.status === 'watching')) await enqueue(() => orchestra.tick());
+      } catch (error) { console.error('Execution monitoring failed:', error.message); }
+      finally { monitoring = false; }
+    }, monitorIntervalMs);
+    monitorTimer.unref();
+  });
+  server.shutdown = () => { clearInterval(monitorTimer); return closing || (closing = orchestra.shutdown()); };
   const close = server.close.bind(server);
   server.close = callback => { server.shutdown().then(() => close(callback), error => { console.error('Checkpoint shutdown failed:', error.message); close(callback); }); return server; };
   return server;

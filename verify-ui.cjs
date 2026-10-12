@@ -137,7 +137,7 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
   assert.equal(unavailable.node('revision-badge').textContent, '');
   assert.equal(unavailable.node('storage-notice').textContent, 'File unreadable.');
   const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
-  assert.equal((html.match(/<section class="card /g) || []).length, 4);
+  assert.equal((html.match(/<section class="card /g) || []).length, 9);
   for (const id of ['project-select', 'grill-dialog', 'import-dialog', 'task-dialog']) assert.ok(html.includes(`id="${id}"`));
   console.log('PASS: UI eventi, due progetti/quattro aree, manual corrente, grill solo domande correnti, cambio direzione, task storico, secondo running visibilmente rifiutato, import invalido intatto/valido, diff riapertura, reload API e errore save. Simulazione DOM; non verifica visiva.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

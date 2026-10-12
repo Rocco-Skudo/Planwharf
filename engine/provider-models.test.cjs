@@ -1,0 +1,23 @@
+'use strict';
+const assert = require('node:assert/strict');
+const { createProviderModels } = require('./provider-models.cjs');
+(async () => {
+  const models = [{ id: 'grok-fixture', provider: 'grok', cli: 'grok-fixture', available: true, enabled: true }, { id: 'other', provider: 'grok', cli: 'grok-other', available: false }];
+  let result = { ok: true, ids: ['grok-fixture'] };
+  const discovery = createProviderModels(models, { discover: async () => result });
+  await discovery.refresh(true);
+  assert.equal(models[0].availabilityVerified, true);
+  result = { ok: false, reason: 'Fixture temporary quota or policy failure.' };
+  const failed = await discovery.refresh(true);
+  assert.equal(failed.status, 'unread');
+  assert.equal(models[0].available, true, 'Failed check cannot revoke previously verified exact-model availability');
+  assert.equal(models[0].enabled, true);
+  assert.equal(models[0].availabilityVerified, false);
+  assert.equal(models[1].available, false, 'Failed check cannot fabricate access to an unverified model');
+  assert.equal(models[0].cli, 'grok-fixture');
+  result = { ok: true, ids: ['grok-other'] };
+  await discovery.refresh(true);
+  assert.equal(models[0].available, false);
+  assert.equal(models[1].available, true);
+  console.log('OK: exact Grok model discovery, preserved access on failed checks and no invented provider/model substitutions.');
+})().catch(error => { console.error(error); process.exitCode = 1; });

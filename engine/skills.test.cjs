@@ -20,6 +20,7 @@ const { createSkillsCache, SKILL_FILES, REPO, REF } = require('./skills.js');
         })
       };
     }
+    if (url.includes('/git/trees/')) return { ok: true, status: 200, text: async () => JSON.stringify({ truncated: false, tree: SKILL_FILES.map(path => ({ path, type: 'blob' })) }) };
     const name = SKILL_FILES.find(item => url.endsWith(item));
     if (!name) return { ok: false, status: 404, text: async () => '' };
     files[name] = `# ${name}\n`;
@@ -34,10 +35,30 @@ const { createSkillsCache, SKILL_FILES, REPO, REF } = require('./skills.js');
   assert.equal(first.status, 'current');
   assert.equal(first.updated, true);
   assert.equal(first.files.length, SKILL_FILES.length);
-  assert.equal(fs.existsSync(path.join(dir, SKILL_FILES[0])), true);
+  assert.ok(cache.read(SKILL_FILES[0]));
+  assert.ok(cache.prompt('worker', 'Implement fixture').includes(REPO));
+  assert.equal(cache.read('../outside'), '');
   const second = await cache.sync();
   assert.equal(second.updated, false);
   assert.equal(second.sha, 'abc123def456');
+  assert.equal(second.installedAt, first.installedAt, 'Checking the same revision does not change the installation date');
+  const completeMeta = JSON.parse(fs.readFileSync(path.join(dir, 'meta.json'), 'utf8'));
+  fs.writeFileSync(path.join(dir, 'meta.json'), JSON.stringify({ ...completeMeta, catalog: [] }));
+  const missingCatalog = createSkillsCache({ dir, fetchImpl });
+  assert.equal(missingCatalog.snapshot().status, 'incomplete', 'Matching SHA alone cannot verify an empty catalog');
+  assert.equal(missingCatalog.snapshot().catalogComplete, false);
+  assert.equal(missingCatalog.prompt('worker'), '', 'Incomplete catalog cannot be supplied to models');
+  const repaired = await missingCatalog.ensure();
+  assert.equal(repaired.status, 'current');
+  assert.equal(repaired.catalogComplete, true);
+  assert.equal(repaired.skillCount, SKILL_FILES.filter(file => file.endsWith('/SKILL.md')).length);
+  assert.equal(repaired.updated, true, 'An incomplete catalog is rebuilt even when the remote SHA is unchanged');
+
+  const legacyDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-skills-legacy-'));
+  fs.writeFileSync(path.join(legacyDir, 'meta.json'), JSON.stringify({ sha: first.sha, status: 'current', files: SKILL_FILES }));
+  const legacy = createSkillsCache({ dir: legacyDir, fetchImpl });
+  assert.equal(legacy.snapshot().status, 'incomplete');
+  assert.equal((await legacy.ensure()).catalogComplete, true, 'Legacy six-file cache migrates to a complete revision');
 
   const offline = createSkillsCache({
     dir: fs.mkdtempSync(path.join(os.tmpdir(), 'pw-skills-off-')),
@@ -45,7 +66,7 @@ const { createSkillsCache, SKILL_FILES, REPO, REF } = require('./skills.js');
   });
   const missed = await offline.sync();
   assert.equal(missed.status, 'offline');
-  console.log('OK: mattpocock/skills main cache updates from GitHub and keeps a snapshot.');
+  console.log('OK: complete Matt skill catalog, same-SHA repair, legacy cache migration and honest offline status.');
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;

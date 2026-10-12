@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { launchSpec } = require('./providers.cjs');
+const { resolveCliModel } = require('./model-routing.cjs');
 
 function which(cmd) {
   const pathEnv = process.env.PATH || '';
@@ -38,6 +39,23 @@ function whichGrok() {
 function parseArgs(argv) {
   const args = argv.slice(2);
   const opts = { folder: '', result: '', title: '', detail: '', worker: '', attempt: '', slice: '' };
+  if (args[0] === '--job-file') {
+    if (args.length !== 2 || !args[1]) throw new Error('--job-file requires one input file');
+    const job = JSON.parse(fs.readFileSync(args[1], 'utf8'));
+    if (!job || typeof job !== 'object' || Array.isArray(job)) throw new Error('Worker job input must be an object');
+    const fields = ['folder', 'result', 'title', 'detail', 'worker', 'attempt', 'slice', 'kind'];
+    for (const key of fields) {
+      if (job[key] != null && typeof job[key] !== 'string') throw new Error('Worker job ' + key + ' must be a string');
+      opts[key] = job[key] || '';
+    }
+    if (!opts.folder || !opts.result) throw new Error('Worker job requires folder and result');
+    if (!job.model || typeof job.model !== 'object' || Array.isArray(job.model)) throw new Error('Worker job requires a model object');
+    for (const key of ['id', 'provider', 'cli', 'label']) {
+      if (job.model[key] != null && typeof job.model[key] !== 'string') throw new Error('Worker model ' + key + ' must be a string');
+    }
+    opts.model = job.model;
+    return opts;
+  }
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
     if (token === '--folder') opts.folder = args[++i] || '';
@@ -48,12 +66,26 @@ function parseArgs(argv) {
     else if (token === '--attempt') opts.attempt = args[++i] || '';
     else if (token === '--model-json') opts.model = JSON.parse(args[++i]);
     else if (token === '--slice') opts.slice = args[++i] || '';
+    else if (token === '--kind') opts.kind = args[++i] || '';
     else throw new Error('Unknown argument: ' + token);
   }
   return opts;
 }
 
 function promptFor(opts) {
+  if (opts.kind === 'audit') return [
+    'You are the Planwharf audit worker. Inspect only the requested project and assess the current request.',
+    'Do not implement or modify project source, user data, notebooks or branches. Do not push, merge or dispatch other workers. Save findings as an audit report beside the assigned result file.',
+    opts.result ? `Evidence directory: ${path.dirname(opts.result)}` : '',
+    opts.title ? `Audit: ${opts.title}` : '', opts.detail || ''
+  ].filter(Boolean).join('\n\n');
+  if (opts.kind === 'research') return [
+    'You are the Planwharf research worker. Perform only the requested investigation.',
+    'Read linked source files only when useful. Do not modify linked project source, notebooks, branches, or user data. Do not implement, push, merge, or dispatch other workers.',
+    'Use network access to inspect original GitHub repositories and documentation. Cite exact repository URLs and relevant source files; distinguish verified facts from inference and report access failures honestly.',
+    'Write report.md in this isolated working folder, with findings, evidence, limitations, and practical recommendations. Do not claim completed research before writing the report. Leave source projects untouched.',
+    opts.title ? `Research: ${opts.title}` : '', opts.detail || ''
+  ].filter(Boolean).join('\n\n');
   return [
     'You are the Planwharf worker for this project folder.',
     'Implement the job in this folder. Add tests. Do not wait for the user.',
@@ -118,13 +150,7 @@ function killWorker(pid) {
 }
 
 function cliModelOf(model) {
-  if (!model || typeof model !== 'object') return null;
-  if (typeof model.cli === 'string' && model.cli.trim()) {
-    const provider = model.provider || (String(model.id || '').startsWith('grok') ? 'grok' : '');
-    const prefix = { grok: /^grok-/, codex: /^gpt-/, antigravity: /^(gemini-|claude-|gpt-oss-)/ }[provider];
-    return prefix && prefix.test(model.cli) ? model.cli.trim() : null;
-  }
-  return null;
+  return resolveCliModel(model);
 }
 
 function askPrompt(info) {
@@ -132,6 +158,7 @@ function askPrompt(info) {
   const folder = info && typeof info.folder === 'string' && info.folder.trim() ? info.folder.trim() : '';
   const focus = info && info.state && info.state.focus ? info.state.focus.name : '';
   const github = info && (info.github || info.state?.focus?.github) || '';
+  const { history = [], ...briefing } = (info && info.state) || {};
   return [
     `You are ${model}, the Planwharf orchestrator lead.`,
     'You coordinate. You do not implement. Workers write code, tests, and files. You never edit the project, never apply patches, never run the job yourself, never spawn subagents that change the repo.',
@@ -142,15 +169,20 @@ function askPrompt(info) {
     github ? `GitHub repository: ${github}. Use authenticated access, including when it is private.` : 'No GitHub repository is linked.',
     'The briefing includes every registered project folder and GitHub URL. You may inspect those linked locations for coordination. Local uncommitted changes are separate from commits ahead/behind GitHub. Compare the stated branch and refreshed remote SHA; never use old tracking refs as proof of current GitHub state.',
     focus ? `They are asking about ${focus}.` : '',
+    'CURRENT REQUEST is authoritative for this turn: use its explicit project ID and exact text. If it contains a new task ID, that is a fresh task awaiting approval. Do not describe a previous job or checkpoint as if it performed the current request; verify task IDs and dispatch receipts. Resume applies only to an explicit resume command for the same job.',
     'LIVE STATE is a briefing of what the notebook already thinks. Do not recite STATUS labels, file counts, or waiting-for lines as the answer.',
     'Put inspection, tool use, and "I will read…" narration in thinking. The visible answer is only the final assessment. Do not start the answer with I will inspect.',
-    'If they want work done, say which workers you would assign and that the notebook dispatches jobs. Do not start implementing.',
+    'For implementation jobs, the notebook uses its existing job and approval workflow. For explicitly requested research, use the structured dispatch action described below; do not implement or launch workers directly with tools.',
+    'When the user asks to delegate research (including conversational requests or an explicit followup confirming research), return only a JSON object: {"answer":"brief assessment without claiming a launch","actions":[{"type":"dispatch_research","projectId":"exact registered project id","modelId":"exact enabled roster id","title":"bounded research title","detail":"complete research instructions, maximum 12000 characters"}]}. The notebook validates and executes these actions after your final answer, and reports the actual launch or failure. Select an explicit model from the briefing; never substitute a requested model. Source-protected research currently supports Codex workers only. Research runs in an isolated folder and does not change project source or replace implementation tasks.',
+    'For discussion or questions that do not authorize research work, return your normal answer or {"answer":"your answer","actions":[]}. Do not infer dispatch authorization from old history alone. Do not emit actions for implementation, approvals, or shell commands. If asked about prior research, read the research briefing and existing reports rather than launching another job.',
+    info && info.allowActions === false ? 'This request is an internal planning/Grill query: actions are disabled. Follow the requested answer format exactly; do not wrap it in a dispatch envelope.' : '',
+    info && info.skillsPrompt ? info.skillsPrompt : '',
     'Do not invent workers that are not in the briefing.',
-    'Keyword orders are already executed before you speak: stop, resume, approve, start, skip grill, lead, model on/off, automatic/manual, and work orders (implement/fix/continue) which start or approve a worker job.',
+    'Explicit project commands are executed before you speak. Ordinary work requests and mentions of start/resume inside discussion do not automatically dispatch implementation workers.',
     'BRIEFING:',
-    JSON.stringify((info && info.state) || {}, null, 2),
+    JSON.stringify(briefing, null, 2),
     'RECENT CHAT:',
-    JSON.stringify((info && info.state && info.state.history) || [], null, 2),
+    JSON.stringify(history, null, 2),
     'USER:',
     info && info.question ? String(info.question).trim() : ''
   ].filter(item => item !== '').join('\n\n');
@@ -160,19 +192,8 @@ function askCliArgs(info) {
   const cwd = askCwd(info);
   const work = cwd || (info && info.folder) || '';
   const prompt = askPrompt(Object.assign({}, info, { folder: cwd || info.folder || '' }));
-  const args = [
-    '-p', prompt,
-    '--cwd', work || '.',
-    '--output-format', 'streaming-messages-json',
-    '--include-partial-messages',
-    '--max-turns', '8',
-    '--permission-mode', 'auto',
-    '--always-approve',
-    '--no-subagents'
-  ];
-  const cli = cliModelOf(info && info.model);
-  if (cli) args.push('-m', cli);
-  return { cwd, work, args, prompt };
+  const spec = launchSpec(info && info.model, work || '.', prompt, true);
+  return { ...spec, cwd, work, prompt };
 }
 
 function askCwd(info) {
@@ -205,6 +226,12 @@ function parseAskLine(acc, row) {
   if (row.event === 'result' && row.result && typeof row.result.response === 'string') {
     acc.answer = row.result.response;
     acc.ms = Math.round((row.result.duration_seconds || 0) * 1000);
+  }
+  if (row.event === 'result' && row.result && row.result.status && row.result.status !== 'SUCCESS') {
+    // Stream-input AGY can report a failed turn and still exit with code zero.
+    acc.failure = String(row.result.status);
+    acc.error = typeof row.result.error === 'string' && row.result.error.trim()
+      ? row.result.error.trim().split(/\r?\n/)[0].slice(0, 500) : 'No successful result was reported.';
   }
   if (row.type === 'item.completed' && row.item && row.item.type === 'agent_message') acc.answer = row.item.text || '';
   if (row.type === 'result') {
@@ -262,12 +289,27 @@ function createAskStream() {
     }
     const thinking = String(acc.thinking || '').trim();
     const answer = dropThinkingPrefix(acc.answer, thinking);
-    return { thinking, answer, ms: acc.ms };
+    return { thinking, answer, ms: acc.ms, ...(acc.failure ? { failure: acc.failure, error: acc.error } : {}) };
   }
   return { push, finish, acc };
 }
 
 let askChild = null;
+
+function writePrompt(child, spec, onError) {
+  if (typeof spec.stdin !== 'string') return;
+  // A CLI can exit before consuming its prompt. Always handle pipe errors,
+  // including EPIPE, so failed launches cannot crash the notebook process.
+  let failed = false;
+  const fail = error => {
+    if (failed) return;
+    failed = true;
+    try { child.kill(); } catch (_) {}
+    onError(error);
+  };
+  child.stdin.on('error', fail);
+  try { child.stdin.end(spec.stdin, 'utf8'); } catch (error) { fail(error); }
+}
 
 function abortAsk() {
   const child = askChild;
@@ -294,7 +336,7 @@ function askOrchestrator(info) {
   const started = Date.now();
   return new Promise(resolve => {
     abortAsk();
-    const child = spawn(spec.command, spec.args, { cwd: work, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(spec.command, spec.args, { cwd: work, windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     askChild = child;
     const stream = createAskStream();
     let settled = false;
@@ -323,12 +365,14 @@ function askOrchestrator(info) {
       if (askChild === child) askChild = null;
       clearTimeout(timer);
       const out = stream.finish();
+      if (out.failure) out.answer = `${spec.provider} CLI failed (${out.failure}): ${out.error}${out.answer ? '\n\nPartial response:\n' + out.answer : ''}`;
       if (!out.answer && (errorOrCode || stderr)) out.answer = `${spec.provider} CLI failed: ${stderr.trim() || String(errorOrCode)}`;
       if (!Number.isFinite(out.ms)) out.ms = Date.now() - started;
       resolve(out);
     };
     child.on('error', done);
     child.on('close', done);
+    writePrompt(child, spec, done);
   });
 }
 
@@ -337,27 +381,24 @@ function spawnWorker(info) {
   if (!info.folder || !info.resultPath) throw new Error('worker launch requires folder and resultPath');
   const logPath = info.logPath || path.join(path.dirname(info.resultPath), '..', 'logs', `${info.attemptId || 'worker'}.log`);
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
+  const inputPath = path.join(path.dirname(logPath), `worker-input-${require('node:crypto').randomUUID()}.json`);
+  fs.writeFileSync(inputPath, JSON.stringify({
+    folder: info.folder, result: info.resultPath,
+    title: (info.job && info.job.title) || '', detail: (info.job && info.job.detail) || '',
+    worker: (info.worker && (info.worker.label || info.worker.id)) || 'worker',
+    attempt: info.attemptId || '', slice: info.slice || (info.job && info.job.slice) || '',
+    kind: (info.job && info.job.kind) || '', model: info.worker
+  }), { encoding: 'utf8', flag: 'wx' });
   const logFd = fs.openSync(logPath, 'a');
-  const args = [
-    __filename,
-    '--folder', info.folder,
-    '--result', info.resultPath,
-    '--title', (info.job && info.job.title) || '',
-    '--detail', (info.job && info.job.detail) || '',
-    '--worker', (info.worker && (info.worker.label || info.worker.id)) || 'worker',
-    '--attempt', info.attemptId || '',
-    '--slice', info.slice || (info.job && info.job.slice) || '',
-    '--model-json', JSON.stringify(info.worker)
-  ];
-  const child = spawn(process.execPath, args, {
-    detached: true,
-    stdio: ['ignore', logFd, logFd],
-    windowsHide: true,
-    env: { ...process.env }
-  });
-  child.unref();
-  try { fs.closeSync(logFd); } catch (_) {}
-  return { pid: child.pid, logPath };
+  try {
+    const child = spawn(process.execPath, [__filename, '--job-file', inputPath], {
+      detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, env: { ...process.env }
+    });
+    child.unref();
+    return { pid: child.pid, logPath, inputPath };
+  } finally {
+    try { fs.closeSync(logFd); } catch (_) {}
+  }
 }
 
 function run(argv = process.argv) {
@@ -368,7 +409,7 @@ function run(argv = process.argv) {
     return;
   }
   let spec;
-  try { spec = launchSpec(opts.model, opts.folder, promptFor(opts)); }
+  try { spec = launchSpec(opts.model, opts.folder, promptFor(opts), false, opts.kind === 'research'); }
   catch (error) {
     patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message });
     process.exitCode = 1;
@@ -378,7 +419,7 @@ function run(argv = process.argv) {
   let finalStatus = null;
   let settled = false;
   let pending = '';
-  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
+  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'inherit'] });
   child.stdout.on('data', chunk => {
     process.stdout.write(chunk);
     if (spec.provider !== 'antigravity') return;
@@ -388,12 +429,13 @@ function run(argv = process.argv) {
       try { const row = JSON.parse(line); if (row.event === 'result' && row.result) finalStatus = row.result.status; } catch (_) {}
     }
   });
-  child.on('error', error => {
+  const fail = error => {
     if (settled) return;
     settled = true;
     patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message || 'spawn failed' });
     process.exitCode = 1;
-  });
+  };
+  child.on('error', fail);
   child.on('close', (code, signal) => {
     if (settled) return;
     settled = true;
@@ -408,6 +450,7 @@ function run(argv = process.argv) {
     patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : (reportedFailure ? `Antigravity result ${finalStatus || 'missing'}` : `worker exit ${exitCode}`) });
     process.exitCode = exitCode;
   });
+  writePrompt(child, spec, fail);
 }
 
 if (require.main === module) run();

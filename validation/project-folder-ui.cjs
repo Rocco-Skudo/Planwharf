@@ -5,15 +5,15 @@ const path = require('node:path');
 const { spawn } = require('node:child_process');
 const { createServer } = require('../server.cjs');
 const { findBrowser } = require('../planwharf.cjs');
-const dir = path.join(__dirname, 'folder-ui-' + Date.now());
-fs.mkdirSync(dir);
+const dir = process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname, 'folder-ui-' + Date.now());
+fs.mkdirSync(dir, { recursive: true });
 const projectsRoot = path.join(dir, 'Projects');
 fs.mkdirSync(projectsRoot);
 const planFile = path.join(dir, 'notebook.json');
 fs.copyFileSync(path.join(__dirname, '../fixtures/notebook.json'), planFile);
-const server = createServer({ planFile, models: [], fetchPlans: async () => [] });
-const profile = path.join(__dirname, 'edge-profile-folders-' + Date.now());
-const browser = spawn(findBrowser(), ['--headless=new', '--disable-gpu', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+const server = createServer({ skillsEnabled: false, planFile, models: [], fetchPlans: async () => [] });
+const profile = path.join(dir, 'edge-profile-folders-' + Date.now());
+const browser = spawn(findBrowser(), ['--headless=new', '--disable-gpu', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
 let ws, command;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
@@ -61,7 +61,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   assert.equal(await evaluate("document.getElementById('projects-root').value"), projectsRoot);
   assert.equal(await evaluate("document.getElementById('project-form').elements.folder.disabled"), true);
   const shot = await command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
-  fs.writeFileSync(path.join(__dirname, 'project-folder-dialog.png'), Buffer.from(shot.data, 'base64'));
+  fs.writeFileSync(path.join(dir, 'project-folder-dialog.png'), Buffer.from(shot.data, 'base64'));
   for (const leaf of ['Browser calculator', 'Browser calculator-2']) {
     await evaluate("(() => { const form = document.getElementById('project-form'); form.elements.name.value = 'Browser calculator'; form.elements.direction.value = 'Verify project folder creation'; form.requestSubmit(); })()");
     await waitFor("!document.getElementById('project-dialog').open");
@@ -76,7 +76,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   }
   await evaluate("document.getElementById('project-create-folder').click()");
   assert.equal(await evaluate("document.getElementById('project-form').elements.folder.disabled"), false);
-  fs.writeFileSync(path.join(__dirname, 'project-folder-ui-results.json'), JSON.stringify({ at: new Date().toISOString(), passed: true, planFile, projectsRoot, cases: ['Save base folder', 'Restore saved default', 'Create folder from UI', 'Preserve collision', 'Enable existing-folder input'] }, null, 2));
+  fs.writeFileSync(path.join(dir, 'project-folder-ui-results.json'), JSON.stringify({ at: new Date().toISOString(), passed: true, planFile, projectsRoot, cases: ['Save base folder', 'Restore saved default', 'Create folder from UI', 'Preserve collision', 'Enable existing-folder input'] }, null, 2));
   console.log('PASS: real browser saves projects folder, restores default, creates unique folders, supports existing folders, and checks repository access.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (command) try { await command('Browser.close'); } catch {}

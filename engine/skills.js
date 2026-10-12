@@ -1,174 +1,99 @@
 'use strict';
-
 const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
-
-const REPO = 'mattpocock/skills';
-const REF = 'main';
-const COMMIT_URL = `https://api.github.com/repos/${REPO}/commits/${REF}`;
-const RAW_BASE = `https://raw.githubusercontent.com/${REPO}/${REF}/`;
-const SKILL_FILES = [
-  'skills/productivity/grill-me/SKILL.md',
-  'skills/productivity/grilling/SKILL.md',
-  'skills/engineering/grill-with-docs/SKILL.md',
-  'skills/engineering/domain-modeling/SKILL.md',
-  'skills/engineering/domain-modeling/GLOSSARY-FORMAT.md',
-  'skills/engineering/domain-modeling/ADR-FORMAT.md'
-];
-
-function emptyMeta() {
-  return {
-    repo: REPO,
-    ref: REF,
-    sha: null,
-    date: null,
-    checkedAt: null,
-    updated: false,
-    behind: false,
-    status: 'unknown',
-    files: [],
-    error: null
-  };
-}
-
-function readMeta(file) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object') return emptyMeta();
-    return {
-      ...emptyMeta(),
-      sha: typeof parsed.sha === 'string' ? parsed.sha : null,
-      date: typeof parsed.date === 'string' ? parsed.date : null,
-      checkedAt: typeof parsed.checkedAt === 'string' ? parsed.checkedAt : null,
-      updated: Boolean(parsed.updated),
-      behind: Boolean(parsed.behind),
-      status: typeof parsed.status === 'string' ? parsed.status : 'cached',
-      files: Array.isArray(parsed.files) ? parsed.files : [],
-      error: typeof parsed.error === 'string' ? parsed.error : null
-    };
-  } catch (_) {
-    return emptyMeta();
-  }
-}
-
+const REPO = 'mattpocock/skills', REF = 'main';
+const API = `https://api.github.com/repos/${REPO}`;
+const SKILL_FILES = ['skills/productivity/grill-me/SKILL.md', 'skills/productivity/grilling/SKILL.md', 'skills/engineering/grill-with-docs/SKILL.md', 'skills/engineering/domain-modeling/SKILL.md', 'skills/engineering/domain-modeling/GLOSSARY-FORMAT.md', 'skills/engineering/domain-modeling/ADR-FORMAT.md'];
+const emptyMeta = () => ({ repo: REPO, ref: REF, sha: null, date: null, installedAt: null, checkedAt: null, updated: false, behind: false, status: 'unknown', files: [], catalog: [], error: null });
 function writeAtomic(file, value) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const temporary = file + '.' + crypto.randomUUID() + '.tmp';
   fs.writeFileSync(temporary, typeof value === 'string' ? value : JSON.stringify(value, null, 2) + '\n', { encoding: 'utf8', flag: 'wx' });
   fs.renameSync(temporary, file);
 }
-
-async function fetchText(fetchImpl, url, timeoutMs) {
-  const ac = typeof AbortController === 'function' ? new AbortController() : null;
-  const timer = ac ? setTimeout(() => ac.abort(), timeoutMs) : null;
-  try {
-    const response = await fetchImpl(url, {
-      headers: { 'User-Agent': 'Planwharf', Accept: 'application/vnd.github+json' },
-      signal: ac ? ac.signal : undefined
-    });
-    const text = await response.text();
-    return { ok: response.ok, status: response.status, text };
-  } finally {
-    if (timer) clearTimeout(timer);
+function createSkillsCache(options = {}) {
+  if (!options.dir) throw new Error('skills cache directory required');
+  const dir = path.resolve(options.dir), metaFile = path.join(dir, 'meta.json');
+  const fetchImpl = options.fetchImpl || globalThis.fetch;
+  const now = options.now || (() => new Date().toISOString());
+  let meta = emptyMeta(), inflight = null, checking = false;
+  try { meta = { ...meta, ...JSON.parse(fs.readFileSync(metaFile, 'utf8')) }; } catch {}
+  function catalogComplete() {
+    if (!meta.revisionDir || !Array.isArray(meta.files) || !Array.isArray(meta.catalog)) return false;
+    const skills = meta.files.filter(file => typeof file === 'string' && file.endsWith('/SKILL.md'));
+    if (!skills.length || skills.length !== meta.catalog.length) return false;
+    if (!meta.files.every(relative => { try { const file = fileFor(relative); return Boolean(file && fs.statSync(file).isFile()); } catch { return false; } })) return false;
+    return skills.every(relative => meta.catalog.some(item => item && item.relative === relative) && (() => { try { const file = fileFor(relative); return Boolean(file && fs.statSync(file).size > 0); } catch { return false; } })());
   }
-}
-
-function createSkillsCache(options) {
-  const opts = options && typeof options === 'object' ? options : {};
-  if (typeof opts.dir !== 'string' || !opts.dir.trim()) throw new Error('skills cache directory required');
-  const dir = opts.dir;
-  const metaFile = path.join(dir, 'meta.json');
-  const fetchImpl = typeof opts.fetchImpl === 'function' ? opts.fetchImpl : globalThis.fetch;
-  const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
-  const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 4000;
-  let meta = readMeta(metaFile);
-  let inflight = null;
-
-  function snapshot() {
-    return { ...meta, repo: REPO, ref: REF, behind: Boolean(meta.behind) };
+  const snapshot = () => {
+    const complete = catalogComplete();
+    return { ...meta, status: meta.status === 'current' && !complete ? 'incomplete' : meta.status, checking, catalogComplete: complete, skillCount: Array.isArray(meta.catalog) ? meta.catalog.length : 0 };
+  };
+  const safePath = relative => typeof relative === 'string' && /^skills\/(?:[\w.-]+\/)*[\w.-]+$/.test(relative) && !relative.split('/').includes('..');
+  function fileFor(relative) {
+    if (!safePath(relative)) return null;
+    const target = path.resolve(dir, meta.revisionDir || '', relative);
+    return target.startsWith(dir + path.sep) ? target : null;
   }
-
-  function read(relative) {
-    if (typeof relative !== 'string' || !relative.trim()) return '';
-    const root = path.resolve(dir);
-    const target = path.resolve(dir, relative);
-    if (!target.startsWith(root)) return '';
-    try { return fs.readFileSync(target, 'utf8'); } catch (_) { return ''; }
+  function read(relative) { try { const file = fileFor(relative); return file ? fs.readFileSync(file, 'utf8') : ''; } catch { return ''; } }
+  async function get(url) {
+    const response = await fetchImpl(url, { headers: { 'User-Agent': 'Planwharf', Accept: 'application/vnd.github+json' }, signal: AbortSignal.timeout(options.timeoutMs || 8000) });
+    if (!response.ok) throw new Error(`GitHub returned HTTP ${response.status}`);
+    return response.text();
   }
-
   async function sync() {
-    if (typeof fetchImpl !== 'function') {
-      meta = { ...meta, status: 'offline', error: 'fetch unavailable', checkedAt: now() };
-      return snapshot();
-    }
+    checking = true;
     try {
-      const commit = await fetchText(fetchImpl, COMMIT_URL, timeoutMs);
-      if (!commit.ok) throw new Error(`github ${commit.status}`);
-      const body = JSON.parse(commit.text);
-      const sha = body && typeof body.sha === 'string' ? body.sha : '';
-      const date = body && body.commit && body.commit.committer && typeof body.commit.committer.date === 'string'
-        ? body.commit.committer.date
-        : (body && body.commit && body.commit.author && body.commit.author.date) || null;
-      if (!sha) throw new Error('github commit missing');
-      const same = meta.sha === sha && Array.isArray(meta.files) && SKILL_FILES.every(file => meta.files.includes(file));
+      const commit = JSON.parse(await get(`${API}/commits/${REF}`));
+      const sha = commit.sha;
+      if (typeof sha !== 'string' || !/^[a-f0-9]{12,40}$/i.test(sha)) throw new Error('GitHub commit missing or invalid');
+      const tree = JSON.parse(await get(`${API}/git/trees/${sha}?recursive=1`));
+      if (tree.truncated || !Array.isArray(tree.tree)) throw new Error('GitHub skill catalog incomplete');
+      const files = tree.tree.filter(item => item.type === 'blob' && safePath(item.path)).map(item => item.path);
+      if (!files.some(file => file.endsWith('/SKILL.md'))) throw new Error('No skills found at the latest revision');
+      const same = meta.sha === sha && catalogComplete() && files.length === meta.files.length && files.every(file => meta.files.includes(file) && fs.existsSync(fileFor(file)));
       if (!same) {
-        const files = [];
-        for (const relative of SKILL_FILES) {
-          const got = await fetchText(fetchImpl, RAW_BASE + relative, timeoutMs);
-          if (!got.ok) continue;
-          const target = path.join(dir, relative);
-          writeAtomic(target, got.text);
-          files.push(relative);
-        }
-        if (!files.length) throw new Error('no skill files downloaded');
-        meta = {
-          repo: REPO,
-          ref: REF,
-          sha,
-          date,
-          checkedAt: now(),
-          updated: true,
-          behind: false,
-          status: 'current',
-          files,
-          error: null
-        };
-      } else {
-        meta = {
-          ...meta,
-          repo: REPO,
-          ref: REF,
-          date: date || meta.date,
-          checkedAt: now(),
-          updated: false,
-          behind: false,
-          status: 'current',
-          error: null
-        };
-      }
+        // Each complete revision is immutable; a failed update keeps the previous cache intact.
+        const revisionDir = `revisions/${sha}-${crypto.randomUUID()}`;
+        const catalog = [];
+        let next = 0;
+        const downloads = await Promise.allSettled(Array.from({ length: Math.min(6, files.length) }, async () => {
+          while (next < files.length) {
+            const relative = files[next++];
+            const text = await get(`https://raw.githubusercontent.com/${REPO}/${sha}/${relative}`);
+            writeAtomic(path.join(dir, revisionDir, relative), text);
+            if (relative.endsWith('/SKILL.md')) {
+              const description = text.match(/^description:\s*(.+)$/m)?.[1] || '';
+              catalog.push({ name: relative.split('/').at(-2), relative, description });
+            }
+          }
+        }));
+        const failure = downloads.find(result => result.status === 'rejected');
+        if (failure) throw failure.reason;
+        catalog.sort((a, b) => a.relative.localeCompare(b.relative));
+        meta = { ...emptyMeta(), sha, revisionDir, files, catalog, installedAt: now(), updated: true };
+      } else meta.updated = false;
+      meta = { ...meta, date: commit.commit?.committer?.date || commit.commit?.author?.date || null, checkedAt: now(), status: 'current', behind: false, error: null };
       writeAtomic(metaFile, meta);
     } catch (error) {
-      const cached = Boolean(meta.sha);
-      meta = {
-        ...meta,
-        checkedAt: now(),
-        updated: false,
-        behind: cached,
-        status: cached ? 'cached' : 'offline',
-        error: error && error.message ? error.message : 'skills sync failed'
-      };
-      try { writeAtomic(metaFile, meta); } catch (_) {}
-    }
+      meta = { ...meta, checkedAt: now(), updated: false, status: meta.sha ? 'cached' : 'offline', behind: false, error: error.message };
+      try { writeAtomic(metaFile, meta); } catch {}
+    } finally { checking = false; }
     return snapshot();
   }
-
-  function ensure() {
-    if (!inflight) inflight = sync().finally(() => { inflight = null; });
-    return inflight;
+  function ensure() { if (!inflight) inflight = sync().finally(() => { inflight = null; }); return inflight; }
+  function prompt(role, context = '') {
+    if (!catalogComplete()) return '';
+    const selected = role === 'research' ? ['research'] : role === 'audit' ? ['code-review'] : /\b(bug|fix|error|fail|debug)\b/i.test(context) ? ['diagnosing-bugs', 'tdd'] : role === 'worker' ? ['implement', 'tdd'] : /grill|question|plan/i.test(context) ? ['grilling', 'domain-modeling'] : [];
+    return [
+      `MATT SKILLS: ${REPO}@${meta.sha} (${meta.status}). Enabled for every provider and model.`,
+      'Before doing the requested work, select, read and apply the relevant Matt skills from the catalog below. Follow their supporting references when relevant. Skills do not expand the user authorization or override your lead/worker role. Do not run setup, publish, push or create issues unless the user authorized that action.',
+      'CATALOG (read the exact local SKILL.md path; all supporting files share its revision folder):',
+      ...meta.catalog.map(item => `${item.name}: ${item.description}\n${fileFor(item.relative)}`),
+      ...meta.catalog.filter(item => selected.includes(item.name)).map(item => `APPLICABLE SKILL ${item.name}:\n${read(item.relative)}`)
+    ].join('\n\n');
   }
-
-  return { snapshot, sync, ensure, read };
+  return { snapshot, sync, ensure, read, prompt };
 }
-
 module.exports = { createSkillsCache, SKILL_FILES, REPO, REF };

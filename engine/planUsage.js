@@ -223,7 +223,7 @@ async function readGrok(home, fetchImpl, now) {
     if (res.status === 200 && res.json) return parseGrokCredits(res.json);
     return unreadPlan('Grok', res.status === 401 ? 'Grok login expired.' : `Grok usage HTTP ${res.status}.`);
   } catch (err) {
-    return unreadPlan('Grok', err && err.name === 'AbortError' ? 'Grok usage timed out.' : 'Grok usage unreachable.');
+    return unreadPlan('Grok', err && err.name === 'AbortError' ? 'Grok quota check timed out. CLI model access is checked separately.' : 'Grok quota service could not be reached. This does not mean the Grok CLI is unavailable.');
   }
 }
 

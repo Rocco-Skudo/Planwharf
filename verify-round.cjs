@@ -2,10 +2,11 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs/promises');
 const path = require('node:path');
-const crypto = require('node:crypto');
 const Plan = require('./plan.js');
 const { createServer, writePlan, readPlan } = require('./server.cjs');
-const file = path.join(__dirname, `.verify-round-${crypto.randomUUID()}.json`);
+const validationRoot = path.join(__dirname, 'validation');
+const workspace = require('node:fs').mkdtempSync(path.join(validationRoot, 'round-test-'));
+const file = path.join(workspace, 'notebook.json');
 const originalFile = path.join(__dirname, 'fixtures', 'notebook.json');
 const productionFile = path.join(__dirname, 'plan.json');
 const servers = [];
@@ -111,5 +112,7 @@ async function stop(server) { await new Promise(resolve => server.close(resolve)
   console.log('PASS: due progetti reali; manual immutabile; grill chiude e cambia direzione; riapertura esplicita nel diff; task da R1 storico; secondo running rifiutato; import valido/invalidi; persistenza al riavvio e errore disco.');
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   for (const server of servers) if (server.listening) await stop(server);
-  await fs.rm(file, { force: true });
+  const resolved = path.resolve(workspace);
+  assert.ok(resolved.startsWith(path.resolve(validationRoot) + path.sep) && path.basename(resolved).startsWith('round-test-'));
+  await fs.rm(resolved, { recursive: true, force: true });
 });
