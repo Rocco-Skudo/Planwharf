@@ -146,7 +146,7 @@
         for (let i = 0; i < store.attempts.length; i++) {
           const item = store.attempts[i];
           if (item.status !== 'active') continue;
-          if (item.projectId === projectId) {
+          if (item.projectId === projectId  && !(isId(input.megaTaskId) && item.megaTaskId === input.megaTaskId && isId(input.subTaskId) && item.subTaskId !== input.subTaskId)) {
             return { write: false, value: { ok: false, reason: 'project already assigned' } };
           }
         }
@@ -157,6 +157,11 @@
           modelId,
           status: 'active'
         };
+        if (isId(input.megaTaskId) && isId(input.subTaskId)) {
+          attempt.megaTaskId = input.megaTaskId;
+          attempt.subTaskId = input.subTaskId;
+          attempt.research = input.research === true;
+        }
         store.nextId += 1;
         store.attempts.push(attempt);
         return { write: true, value: { ok: true, attempt: clone(attempt) } };

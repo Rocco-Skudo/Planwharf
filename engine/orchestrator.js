@@ -7,6 +7,14 @@ const Plan = require('../plan.js');
 const { planExhausted, emptyPlans } = require('./planUsage.js');
 const { createRepositoryInspector } = require('./repository.cjs');
 const { modelRouteError } = require('./model-routing.cjs');
+const { createExecutionBridge } = require('./execution.cjs');
+const { executionNext } = require('./execution-next.cjs');
+const { loadCatalog, providerViews } = require('./provider-catalog.cjs');
+const { adapterFor } = require('./provider-adapters.cjs');
+const { createInvocationLedger } = require('./invocations.cjs');
+const { compactState, recentContext } = require('./briefing.cjs');
+const Quota = require('../quota.js');
+const { ROLE_IDS, withModelRoles, roleEligibility, permitsAssignment, assignmentRole } = require('./model-roles.cjs');
 
 const LABELS = {
   waiting_on_you: 'Waiting on you',
@@ -152,9 +160,10 @@ function normalizeModels(models) {
     // Legacy roster-only fixtures have no route. Real configured routes must be valid.
     const routeError = item.provider !== undefined || item.cli !== undefined ? modelRouteError(item) : null;
     return {
+      ...item,
       id: item.id,
       label: typeof item.label === 'string' && item.label.trim() ? item.label : item.id,
-      enabled: item.enabled === true && item.available !== false && !routeError,
+      enabled: item.enabled === true && (item.providerCatalog || item.available !== false && !routeError),
       available: item.available !== false && !routeError,
       unavailableReason: item.unavailableReason || routeError || null,
       availabilityVerified: item.availabilityVerified,
@@ -185,7 +194,7 @@ function usageOf(item) {
 }
 
 function canOrchestrate(item) {
-  return Boolean(item && item.enabled && (item.kind === 'premium' || item.kind === 'default'));
+  return Boolean(item && item.roles?.orchestrator !== false && item.enabled && item.available !== false && item.providerEnabled !== false && item.capabilities?.canUseTools !== false && item.capabilities?.canInspectFilesystem !== false && (item.orchestratorEligible ?? (item.kind === 'premium' || item.kind === 'default')));
 }
 
 function jobKind(job) {
@@ -201,25 +210,12 @@ function pickWorker(models, options) {
   const plans = Array.isArray(opts.plans) ? opts.plans : [];
   const kind = jobKind(opts.job);
   const skip = new Set(Array.isArray(opts.skip) ? opts.skip.filter(Boolean) : []);
-  const rank = {
-    inspect: { local: 3, default: 2, premium: 1 },
-    build: { default: 3, premium: 2, local: 1 },
-    hard: { premium: 3, default: 2, local: 1 }
-  };
   const pool = normalizeModels(models)
     .map((item, index) => ({ ...item, index }))
-    .filter(item => item.enabled && !skip.has(item.id) && usedOf(usage, item.id) + item.cost <= item.limit && !planExhausted(plans, item.plan));
+    .filter(item => item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && (item.providerCatalog || usedOf(usage, item.id) + item.cost <= item.limit) && !planExhausted(plans, item.quotaPoolId || item.plan));
   if (!pool.length) return null;
-  pool.sort((a, b) => {
-    const ra = (rank[kind] || {})[a.kind] || 0;
-    const rb = (rank[kind] || {})[b.kind] || 0;
-    if (rb !== ra) return rb - ra;
-    if (kind === 'hard' && a.kind === b.kind && b.cost !== a.cost) return b.cost - a.cost;
-    if (a.cost !== b.cost) return a.cost - b.cost;
-    return a.index - b.index;
-  });
   const chosen = pool[0];
-  chosen.why = `${kind} job · ${chosen.label} on ${chosen.plan}; ${usedOf(usage, chosen.id)}/${chosen.limit} used`;
+  chosen.why = `${kind} job · ${chosen.label} on ${chosen.plan}; user catalog order`;
   return chosen;
 }
 
@@ -239,7 +235,7 @@ function pickWorkers(models, options) {
   const skip = new Set(Array.isArray(opts.skip) ? opts.skip.filter(Boolean) : []);
   const baseUsage = opts.usage || {};
   const eligible = normalizeModels(models).filter(item => (
-    item.enabled && !skip.has(item.id) && usedOf(baseUsage, item.id) + item.cost <= item.limit && !planExhausted(opts.plans, item.plan)
+    item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && (item.providerCatalog || usedOf(baseUsage, item.id) + item.cost <= item.limit) && !planExhausted(opts.plans, item.quotaPoolId || item.plan)
   )).length;
   const want = Math.max(1, Number(opts.count) || sliceCount(opts.job, opts.facts, eligible));
   const workers = [];
@@ -259,7 +255,9 @@ function dispatchPlan(workers, job, facts) {
   const list = Array.isArray(workers) ? workers.filter(Boolean) : [];
   if (!list.length) return [];
   const dirty = facts && Array.isArray(facts.dirty) ? facts.dirty.length : 0;
-  const slices = list.length === 1
+  const slices = assignmentRole(job) === 'reviewer'
+    ? ['Review the approved scope and report findings.', 'Review correctness and edge cases; report findings.', 'Review tests and verification evidence; report findings.']
+    : list.length === 1
     ? ['Whole job']
     : list.length === 2
       ? [
@@ -418,6 +416,13 @@ function packState(snap, row) {
   return {
     orchestrator: (snap && snap.orchestratorLabel) || ORCH_NAME,
     orchestratorId: snap && snap.orchestratorId,
+    executionHandoff: row && snap?.execution ? {
+      megaTasks: snap.execution.megaTasks.filter(mega => mega.projectId === row.id),
+      subTasks: snap.execution.subTasks.filter(sub => snap.execution.megaTasks.some(mega => mega.projectId === row.id && mega.id === sub.megaTaskId)),
+      results: snap.execution.results.filter(result => snap.execution.megaTasks.some(mega => mega.projectId === row.id && mega.id === result.megaTaskId)),
+      checkpoints: snap.execution.checkpoints.filter(cp => cp.projectId === row.id),
+      repository: row.facts, notes: row.notes || []
+    } : null,
     researches: snap && Array.isArray(snap.researches) ? snap.researches : [],
     mode: snap && snap.mode,
     grill: {
@@ -468,6 +473,8 @@ function packState(snap, row) {
       plan: item.plan,
       exhausted: Boolean(item.exhausted),
       enabled: item.enabled,
+      roles: item.roles,
+      roleEligibility: item.roleEligibility,
       lead: Boolean(item.lead)
     })),
     plans: (snap && Array.isArray(snap.plans) ? snap.plans : []).map(item => ({
@@ -738,25 +745,36 @@ function fleetOf(models, projects, leadId, plans) {
       }
     });
     const working = assignments.some(job => job.status === 'watching');
-    const state = !item.enabled ? 'off' : working ? 'working' : assignments.length ? 'assigned' : 'idle';
-    const eligible = Boolean(item.enabled && (item.kind === 'premium' || item.kind === 'default') && !planExhausted(plans, item.plan));
+    const state = working ? 'working' : item.available === false ? 'unavailable' : item.providerEnabled === false ? 'provider-disabled' : !item.enabled ? 'restricted' : assignments.length ? 'assigned' : 'idle';
+    const eligible = canOrchestrate(item);
     const lead = Boolean(leadId && item.id === leadId);
     const exhausted = planExhausted(plans, item.plan);
     return {
       id: item.id,
       label: item.label,
       plan: item.plan || '',
+      providerId: item.providerId || item.provider,
+      quotaPoolId: item.quotaPoolId || item.plan,
+      orchestratorEligible: item.orchestratorEligible ?? (item.kind === 'premium' || item.kind === 'default'),
+      workerEligible: item.workerEligible !== false,
+      reviewerEligible: item.reviewerEligible !== false,
+      roles: item.roles || withModelRoles(item).roles,
+      roleEligibility: item.roleEligibility || roleEligibility(item),
+      providerEnabled: item.providerEnabled !== false,
       kind: item.kind,
       enabled: Boolean(item.enabled),
       available: item.available !== false,
       unavailableReason: item.unavailableReason || null,
+      availabilityVerified: item.availabilityVerified === true,
+      availabilityCheckedAt: item.availabilityCheckedAt || null,
+      availabilityWarning: item.availabilityWarning || null,
       provider: item.provider || null,
       cli: item.cli || null,
       exhausted,
-      role: lead ? 'Lead' : (eligible ? 'Eligible' : 'Worker'),
+      role: lead ? 'Lead' : item.roles ? ROLE_IDS.filter(role => item.roles[role]).map(role => role[0].toUpperCase() + role.slice(1)).join(' / ') || 'No allowed roles' : (eligible ? 'Eligible' : 'Worker'),
       eligible,
       lead,
-      state: exhausted && item.enabled ? 'exhausted' : state,
+      state: exhausted && !working ? 'exhausted' : state,
       busy: working,
       assignments
     };
@@ -795,6 +813,7 @@ function resultStatus(file) {
     const raw = fs.readFileSync(file, 'utf8');
     if (/(^|\n)\s*STATUS:\s*COMPLETE\b/i.test(raw)) return 'COMPLETE';
     if (/(^|\n)\s*STATUS:\s*FAILED\b/i.test(raw)) return 'FAILED';
+    if (/(^|\n)\s*STATUS:\s*BLOCKED\b/i.test(raw)) return 'BLOCKED';
     if (/(^|\n)\s*STATUS:\s*WATCHING\b/i.test(raw)) return 'WATCHING';
     return 'OTHER';
   } catch (_) {
@@ -825,14 +844,15 @@ function progressKey(facts, logPath, dispatch) {
 function runGit(folder, args) {
   try {
     const { spawnSync } = require('node:child_process');
-    const result = spawnSync('git', ['-C', folder, ...args], {
+    const result = spawnSync('git', ['--no-optional-locks', '-C', folder, ...args], {
       encoding: 'utf8',
       timeout: 4000,
       windowsHide: true,
       maxBuffer: 65536
     });
     if (result.error || result.status !== 0) return '';
-    return String(result.stdout || '').trim();
+    const output = String(result.stdout || '');
+    return args[0] === 'status' ? output.replace(/\r?\n$/, '') : output.trim();
   } catch (_) {
     return '';
   }
@@ -866,6 +886,7 @@ function defaultInspect(folder) {
       head,
       branch,
       lastCommit,
+      commitId: git ? runGit(folder, ['rev-parse', '--verify', 'HEAD']) || null : null,
       lastSubject,
       recent,
       dirty,
@@ -980,19 +1001,46 @@ function checkpointMatches(checkpoint, job) {
 }
 
 function createOrchestrator(options) {
-  const opts = options && typeof options === 'object' ? options : {};
+  const opts = options && typeof options === 'object' ? { ...options } : {};
   if (typeof opts.readPlan !== 'function') throw new Error('orchestrator requires readPlan');
   if (!opts.attempts) throw new Error('orchestrator requires attempts');
   const attempts = opts.attempts;
   const sentinel = opts.sentinel || null;
-  const models = Array.isArray(opts.models) ? opts.models : [];
+  const catalog = loadCatalog(opts.providers ? { schema: 3, providers: opts.providers } : opts.models || []);
+  const models = opts.providers ? opts.models || catalog.models : Array.isArray(opts.models) ? opts.models : catalog.models;
+  const providerDefinitions = opts.providers || catalog.providers;
   const sessionId = opts.sessionId || crypto.randomUUID();
   const inspect = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
   const readRepository = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
   const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
   const dir = typeof opts.dir === 'string' && opts.dir.trim() ? opts.dir : null;
   const stateFile = dir ? path.join(dir, 'orchestrator.json') : null;
-  let store = { mode: 'manual', grillPropose: true, grillKind: 'me', usage: {}, enabled: {}, projects: {}, asks: [], orchestratorId: null };
+  const ledger = dir ? createInvocationLedger(dir) : null;
+  const askProvider = opts.askModel, launchWorker = opts.spawnWorker, abortProvider = opts.abortAsk;
+  let activeLeadInvocation = null;
+  if (typeof abortProvider === 'function' && ledger) opts.abortAsk = () => {
+    if (activeLeadInvocation) ledger.finish(activeLeadInvocation, 'BLOCKED');
+    return abortProvider();
+  };
+  if (typeof askProvider === 'function' && ledger) opts.askModel = async info => {
+    const id = ledger.start({ role: 'orchestrator', projectId: info.projectId, megaTaskId: info.state?.executionHandoff?.megaTask?.id,
+      provider: info.model.providerId || info.model.provider, model: info.model.cli, modelId: info.model.id, reason: info.allowActions === false ? 'clarification' : 'user reasoning request' });
+    activeLeadInvocation = id;
+    try {
+      const result = await options.askModel(info);
+      ledger.finish(id, result?.failure ? 'FAILED' : 'COMPLETE', result?.processExit, result?.tokens);
+      return result;
+    } catch (error) { ledger.finish(id, 'FAILED'); throw error; }
+    finally { if (activeLeadInvocation === id) activeLeadInvocation = null; }
+  };
+  if (typeof launchWorker === 'function' && ledger) opts.spawnWorker = info => {
+    const id = ledger.start({ role: 'worker', projectId: info.projectId, megaTaskId: info.megaTaskId, subTaskId: info.subTaskId, attemptId: info.attemptId,
+      provider: info.worker.providerId || info.worker.provider, model: info.worker.cli, modelId: info.worker.id, reason: info.job?.kind === 'research' ? 'approved research' : 'approved work' });
+    try { const receipt = options.spawnWorker(info); ledger.update(id, { pid: receipt?.pid, exitPath: info.exitPath, resultPath: info.resultPath }); if (!receipt?.pid) ledger.finish(id, 'FAILED'); return receipt; }
+    catch (error) { ledger.finish(id, 'FAILED'); throw error; }
+  };
+
+  let store = { mode: 'manual', grillPropose: true, grillKind: 'me', usage: {}, enabled: {}, providerEnabled: {}, catalogVisibility: {}, projects: {}, asks: [], orchestratorId: null };
   let thinkingLive = null;
   let askToken = 0;
   let plansLive = emptyPlans();
@@ -1010,6 +1058,9 @@ function createOrchestrator(options) {
           grillKind: parsed.grillKind === 'docs' ? 'docs' : (parsed.grillPropose === false || parsed.grillKind === 'off' ? 'off' : 'me'),
           usage: parsed.usage && typeof parsed.usage === 'object' ? parsed.usage : {},
           enabled: parsed.enabled && typeof parsed.enabled === 'object' ? parsed.enabled : {},
+          providerEnabled: parsed.providerEnabled || {},
+          catalogVisibility: parsed.catalogVisibility || {},
+          modelRoles: parsed.modelRoles || {},
           projects: parsed.projects && typeof parsed.projects === 'object'
             ? Object.fromEntries(Object.entries(parsed.projects).map(([id, row]) => [
               id,
@@ -1020,12 +1071,17 @@ function createOrchestrator(options) {
           researches: Array.isArray(parsed.researches) ? parsed.researches : [],
           workerHistory: Array.isArray(parsed.workerHistory) ? parsed.workerHistory : [],
           archivedProjects: parsed.archivedProjects && typeof parsed.archivedProjects === 'object' ? parsed.archivedProjects : {},
+          execution: parsed.execution,
+          briefingBaselines: parsed.briefingBaselines || {},
+          selectedProjectId: parsed.selectedProjectId || null,
           sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
           orchestratorId: typeof parsed.orchestratorId === 'string' && parsed.orchestratorId.trim() ? parsed.orchestratorId : null
         };
       }
     } catch (_) {}
   }
+  store.modelRoles ||= {};
+  store.briefingBaselines ||= {};
   if (!Array.isArray(store.asks)) store.asks = [];
   if (!Array.isArray(store.researches)) store.researches = [];
   if (!Array.isArray(store.workerHistory)) store.workerHistory = [];
@@ -1047,6 +1103,10 @@ function createOrchestrator(options) {
     fs.writeFileSync(temporary, JSON.stringify(store) + '\n', { encoding: 'utf8', flag: 'wx' });
     fs.renameSync(temporary, stateFile);
   }
+
+  const bridge = createExecutionBridge({ store, attempts, dir, rowFor: (id, megaTaskId) => store.researches.find(record => record.megaTaskId === megaTaskId) || entry(id), inspect, spawnWorker: opts.spawnWorker,
+    isProcessAlive: opts.isProcessAlive, killWorker: opts.killWorker, models: roster, workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
+    now, persist, sessionId, leadId: () => leadModel()?.id || null });
 
   function entry(id) {
     if (!store.projects[id]) store.projects[id] = emptyEntry();
@@ -1275,6 +1335,11 @@ function createOrchestrator(options) {
   function launchAssigned(item, job, facts, chosen) {
     const id = item.project.id;
     const row = entry(id);
+    const assigned = row.dispatch?.length ? row.dispatch.map(part => roster().find(model => model.id === part.modelId)) : [chosen];
+    if (assigned.some(model => !model?.enabled || model.available === false || !permitsAssignment(model, job))) {
+      row.status = 'blocked_no_worker'; row.next = 'Review the assigned models: their enabled roles do not permit this work.';
+      return false;
+    }
     const claimed = attempts.claim({
       taskId: job.id,
       projectId: id,
@@ -1348,6 +1413,7 @@ function createOrchestrator(options) {
         for (let index = 0; index < row.dispatch.length; index++) {
           const part = row.dispatch[index];
           const launched = opts.spawnWorker({
+            projectId: item.project.id,
             folder: item.project.folder,
             resultPath: part.resultPath,
             job: {
@@ -1427,24 +1493,30 @@ function createOrchestrator(options) {
     const list = roster();
     if (store.orchestratorId) {
       const picked = list.find(item => item.id === store.orchestratorId);
-      if (picked && canOrchestrate(picked)) return picked;
+      if (picked && canOrchestrate(picked) && !planExhausted(plansLive, picked.quotaPoolId || picked.plan)) return picked;
     }
     return null;
   }
 
   function roster() {
     return normalizeModels(models).map(item => {
-      if (typeof store.enabled[item.id] === 'boolean') item.enabled = store.enabled[item.id] && item.available !== false;
+      const legacyEnabled = store.enabled[item.id] ?? item.enabled;
+      const permissions = store.modelRoles[item.id] || item.roles || (legacyEnabled ? {} : Object.fromEntries(ROLE_IDS.map(role => [role, false])));
+      const provider = providerDefinitions.find(p => p.id === (item.providerId || item.provider));
+      item.providerEnabled = provider ? (store.providerEnabled[provider.id] ?? provider.enabled) : true;
       const used = usedOf(store.usage, item.id);
-      return { ...item, used, remaining: Math.max(0, item.limit - used) };
+      const resolved = withModelRoles({ ...item, used, remaining: Math.max(0, item.limit - used) }, permissions);
+      resolved.enabled = ROLE_IDS.some(role => resolved.roles[role]);
+      return resolved;
     });
   }
 
   function researchModel(modelId) {
     const worker = roster().find(model => model.id === modelId);
     if (!worker) throw new Error('Requested research model is not in the roster: ' + modelId);
+    if (!permitsAssignment(worker, { kind: 'research' })) throw new Error('The requested model is not enabled for the Worker role: ' + modelId);
     if (!worker.enabled || worker.available === false) throw new Error('Requested research model is disabled or unavailable: ' + modelId);
-    if (worker.provider !== 'codex') throw new Error('Source-protected research supports the Codex workspace sandbox only; requested provider: ' + worker.provider);
+    if (!adapterFor(worker)?.sourceProtectedResearch) throw new Error('Source-protected research is not supported by the requested adapter: ' + worker.provider);
     const routeError = modelRouteError(worker);
     if (routeError) throw new Error(routeError);
     if (planExhausted(plansLive, worker.plan) || worker.remaining < worker.cost) throw new Error('Requested research model has no remaining usage: ' + modelId);
@@ -1460,6 +1532,16 @@ function createOrchestrator(options) {
 
   function refreshResearch() {
     for (const record of store.researches) {
+      if (record.executionVersion === 2) {
+        record.alive = (record.dispatch || []).some(part => part.alive);
+        const part = (record.dispatch || []).at(-1);
+        record.pid = part?.pid || null; record.folder = part?.folder || null; record.sessionId = part?.sessionId || record.sessionId;
+        record.logPath = part?.logPath || null; record.workerTail = part ? tailLog(part.logPath) : '';
+        const result = store.execution.results.filter(result => result.megaTaskId === record.megaTaskId).at(-1);
+        record.reportPath = result?.reportPath || null; record.reportAvailable = Boolean(record.reportPath && fs.existsSync(record.reportPath));
+        record.activity = result?.summary || record.doing || 'Awaiting MegaTask approval.';
+        continue;
+      }
       record.alive = Boolean(record.pid) && typeof opts.isProcessAlive === 'function' ? Boolean(opts.isProcessAlive(record.pid)) : Boolean(record.pid && record.status === 'watching');
       const tail = tailLog(record.logPath);
       if (tail !== record.workerTail) record.updatedAt = now();
@@ -1500,7 +1582,7 @@ function createOrchestrator(options) {
     record.cli = worker.cli;
     record.updatedAt = now();
     try {
-      const launched = opts.spawnWorker({ folder: record.folder, resultPath: record.resultPath, logPath: record.logPath, attemptId: record.attemptId, worker,
+      const launched = opts.spawnWorker({ projectId: record.projectId, folder: record.folder, resultPath: record.resultPath, logPath: record.logPath, attemptId: record.attemptId, worker,
         job: { kind: 'research', title: record.title, detail: [record.detail,
           record.sourceFolder ? 'Read-only source folder: ' + record.sourceFolder : '',
           record.github ? 'Source GitHub repository: ' + record.github : '',
@@ -1534,6 +1616,13 @@ function createOrchestrator(options) {
       const record = { id: 'research-' + crypto.randomUUID(), projectId: action.projectId, projectName: project.project.name, modelId: action.modelId,
         title: action.title, detail: action.detail, sourceFolder: project.project.folder || null, github: project.project.github || null, createdAt: now(), attempts: [] };
       store.researches.push(record);
+      if (opts.phase2) {
+        Object.assign(record, { executionVersion: 2, job: { id: record.id, title: record.title, detail: record.detail, revision_id: project.revisions.at(-1).id, kind: 'research', detached: true },
+          status: 'needs_approval', workerLabel: researchModel(action.modelId).label, provider: researchModel(action.modelId).provider, cli: researchModel(action.modelId).cli, sessionId, startedAt: null });
+        const mega = bridge.propose(project, record.job, [{ modelId: action.modelId, slice: action.title, detail: action.detail, type: 'RESEARCH', dependsOn: [] }]);
+        record.megaTaskId = mega.id; bridge.paint(mega); persist();
+        return { ok: true, proposal: true, research: clone(record), snapshot: snapshot(plan) };
+      }
       try { launchResearch(record); record.attempts.push({ attemptId: record.attemptId, folder: record.folder }); }
       catch (error) { finishResearch(record, 'failed', error.message); throw error; }
       finally { persist(); }
@@ -1541,9 +1630,16 @@ function createOrchestrator(options) {
     } catch (error) { return { ok: false, reason: error.message }; }
   }
 
-  async function stopResearch(id) {
+  async function stopResearch(id, request = {}) {
     const record = store.researches.find(item => item.id === id);
     if (!record) return { ok: false, reason: 'Research job not found.' };
+    if (record.executionVersion === 2) {
+      if (request.projectId !== record.projectId || request.megaTaskId !== record.megaTaskId) return { ok: false, reason: 'Research target project and MegaTask must be explicit.' };
+      const plan = await opts.readPlan(), item = notebookProjects(plan).find(item => item.project.id === request.projectId);
+      if (!item) return { ok: false, reason: 'Research project no longer exists.' };
+      try { bridge.stop(item, record.job, record.megaTaskId); return { ok: true, research: clone(record), snapshot: await tick() }; }
+      catch (error) { return { ok: false, reason: error.message }; }
+    }
     refreshResearch();
     if (record.status === 'watching') {
       if (record.alive && (typeof opts.killWorker !== 'function' || !opts.killWorker(record.pid))) return { ok: false, reason: 'Could not stop the research process.' };
@@ -1554,9 +1650,16 @@ function createOrchestrator(options) {
     return { ok: true, research: clone(record), snapshot: await tick() };
   }
 
-  async function resumeResearch(id) {
+  async function resumeResearch(id, request = {}) {
     const record = store.researches.find(item => item.id === id);
     if (!record) return { ok: false, reason: 'Research job not found.' };
+    if (record.executionVersion === 2) {
+      if (request.projectId !== record.projectId || request.megaTaskId !== record.megaTaskId) return { ok: false, reason: 'Research target project and MegaTask must be explicit.' };
+      const plan = await opts.readPlan(), item = notebookProjects(plan).find(item => item.project.id === request.projectId);
+      if (!item) return { ok: false, reason: 'Research project no longer exists.' };
+      try { const resumed = bridge.resume(item, record.job, request); return resumed.ok ? { ...resumed, research: clone(record), snapshot: await tick() } : resumed; }
+      catch (error) { return { ok: false, reason: error.message }; }
+    }
     refreshResearch();
     if (!['checkpointed', 'failed'].includes(record.status)) return { ok: false, reason: 'Only stopped or failed research can resume.' };
     try { launchResearch(record); record.attempts.push({ attemptId: record.attemptId, folder: record.folder }); persist(); return { ok: true, research: clone(record), snapshot: await tick() }; }
@@ -1567,7 +1670,7 @@ function createOrchestrator(options) {
     const record = store.researches.find(item => item.id === id);
     if (!record) return { ok: false, reason: 'Research job not found.' };
     refreshResearch();
-    const root = path.resolve(dir, 'research', record.id);
+    const root = path.resolve(dir, 'research', record.executionVersion === 2 ? record.megaTaskId : record.id);
     const reportPath = path.resolve(record.reportPath || root);
     if (!reportPath.startsWith(root + path.sep)) return { ok: false, reason: 'Invalid research report path.' };
     try {
@@ -1579,13 +1682,51 @@ function createOrchestrator(options) {
     catch (_) { return { ok: false, reason: 'Research report is not available yet.' }; }
   }
 
-  function snapshot(plan) {
+  function refreshPhase2Research(plan, schedule, projectId) {
+    for (const record of store.researches.filter(record => record.executionVersion === 2 && (!projectId || record.projectId === projectId))) {
+      const item = notebookProjects(plan).find(item => item.project.id === record.projectId);
+      if (item) bridge.advance(item, record.job, [], schedule);
+    }
+  }
+
+  async function approveResearch(id, request) {
+    const record = store.researches.find(record => record.id === id && record.projectId === request.projectId && record.megaTaskId === request.megaTaskId);
+    if (!record || record.executionVersion !== 2) return { ok: false, reason: 'Research proposal does not belong to this project and MegaTask.' };
+    const plan = await opts.readPlan();
+    if (!notebookProjects(plan).some(item => item.project.id === record.projectId)) return { ok: false, reason: 'Research project no longer exists.' };
+    try { bridge.approve(record.projectId, record.megaTaskId); return { ok: true, snapshot: await tick() }; }
+    catch (error) { return { ok: false, reason: error.message }; }
+  }
+
+  function snapshot(plan, projectId) {
     rememberStartup(plan);
     const projects = notebookProjects(plan);
+    for (const item of projects.filter(item => !projectId || item.project.id === projectId)) {
+      bridge.observe(item);
+      const legacy = entry(item.project.id);
+      if (opts.phase2 && !legacy.megaTaskId && legacy.status === 'watching' && (legacy.dispatch || []).some(part => part.pid)) {
+        const parts = legacy.dispatch;
+        for (const part of parts) part.alive = Boolean(part.pid && opts.isProcessAlive?.(part.pid));
+        if (!parts.some(part => part.alive)) {
+          const complete = parts.every(part => { try { const raw = fs.readFileSync(part.resultPath, 'utf8'); return resultStatus(part.resultPath) === 'COMPLETE' && /^EXIT:\s*0\s*$/m.test(raw); } catch { return false; } });
+          legacy.status = complete ? 'complete' : 'failed'; legacy.workerAlive = false; legacy.holdApproval = true;
+          legacy.doing = complete ? 'Historical completion and successful provider exit recorded.' : 'Historical worker ended without validated completion. Review the saved attempt before preparing new work.';
+          const active = legacy.attemptId && attempts.getResult(legacy.attemptId);
+          if (active?.status === 'active' && active.projectId === item.project.id) attempts.closeAttempt({ attemptId: active.id, reason: complete ? 'legacy completion' : 'technical failure: dead legacy worker without validated completion' });
+          persist();
+        }
+      }
+      const job = (item.tasks || []).find(task => task.executionVersion === 2 && task.status === 'running');
+      if (job && bridge.find(item.project.id, job.id)) bridge.advance(item, job, [], false);
+    }
     const lead = leadModel();
+    refreshPhase2Research(plan, false, projectId);
+    refreshResearch();
     const view = {
       updatedAt: now(),
       sessionId,
+      selectedProjectId: store.selectedProjectId || null,
+      execution: clone(store.execution),
       sessions: clone(store.sessions),
       workerHistory: clone(store.workerHistory),
       mode: store.mode === 'auto' ? 'auto' : 'manual',
@@ -1597,8 +1738,10 @@ function createOrchestrator(options) {
       thinking: thinkingLive ? clone(thinkingLive) : null,
       asking: Boolean(thinkingLive),
       orchestratorId: lead ? lead.id : null,
+      selectedOrchestratorId: store.orchestratorId || null,
+      orchestratorUnavailableReason: store.orchestratorId && !lead ? 'Selected orchestrator is disabled or unavailable. Choose an enabled eligible model; no substitute was selected.' : null,
       orchestratorLabel: lead ? lead.label : ORCH_NAME,
-      orchestrators: roster().filter(canOrchestrate).map(item => ({ id: item.id, label: item.label, kind: item.kind, plan: item.plan })),
+      orchestrators: roster().filter(canOrchestrate).map(item => ({ id: item.id, label: item.label, providerId: item.providerId || item.provider, plan: item.plan })),
       projects: projects.map(item => {
         const row = entry(item.project.id);
         const latest = item.revisions.at(-1);
@@ -1609,7 +1752,9 @@ function createOrchestrator(options) {
           if (!part) return part;
           const alive = Boolean(part.pid) && typeof opts.isProcessAlive === 'function'
             ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
-          return { ...part, alive: !terminal && !part.stoppedByUser && alive };
+          const sub = row.subTasks?.find(sub => sub.id === part.subTaskId);
+          const result = store.execution.results.find(result => result.attemptId === part.attemptId);
+          return { ...part, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
         });
         const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
           : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1621,20 +1766,26 @@ function createOrchestrator(options) {
           github: item.project.github || null,
           repository: row.repository && row.repository.folder === (item.project.folder || null) && row.repository.github === (item.project.github || null) ? clone(row.repository) : null,
           goal: latest && latest.direction ? latest.direction : '',
+          notes: clone(item.home?.notes || []),
           stateArt: latest && latest.state ? latest.state : '',
           open: clone((latest && latest.open) || []),
           status: row.status,
-          label: LABELS[row.status] || row.status,
-          doing: row.doing,
+          label: opts.phase2 && !row.megaTaskId && row.status === 'complete' ? 'Legacy completion recorded' : LABELS[row.status] || row.status,
+          doing: opts.phase2 && !row.megaTaskId && row.status === 'complete' ? 'Historical completion recorded. This run predates structured Phase 2 results.' : row.doing,
           plan: clone(row.plan || []),
           facts: row.facts ? clone(row.facts) : null,
           jobTitle: row.jobTitle,
           jobId: row.jobId,
           attemptId: row.attemptId,
+          megaTaskId: row.megaTaskId || null,
+          megaTask: row.megaTask || null,
+          subTasks: row.subTasks || [],
+          checkpointId: row.checkpoint?.id || null,
+          resumableCheckpoints: bridge.view(item.project.id).checkpoints.filter(cp => ['PAUSED', 'FAILED'].includes(bridge.target(item.project.id, cp.megaTaskId).status)),
           modelId: row.modelId,
           workerLabel: row.workerLabel || null,
           waitingFor: row.waitingFor || '',
-          next: row.next || '',
+          next: row.megaTaskId ? executionNext(store.execution.megaTasks.find(mega => mega.id === row.megaTaskId && mega.projectId === item.project.id), store.execution) : row.next || '',
           step: stepOf(row),
           pipeline: pipelineOf(row),
           crew: crewOf({ ...row, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME),
@@ -1675,10 +1826,13 @@ function createOrchestrator(options) {
       row.analysis = analysisOf(row);
     });
     view.plans = clone(plansLive);
+    view.providers = providerViews(providerDefinitions, view.models, plansLive, store);
     const researchRows = store.researches.map(record => ({ id: record.projectId, name: record.projectName, status: record.status,
       dispatch: [{ modelId: record.modelId, pid: record.pid, alive: record.alive, slice: 'Research: ' + record.title, activity: record.activity }] }));
     view.fleet = fleetOf(view.models, view.projects.concat(researchRows), view.orchestratorId, plansLive);
     view.interventions = collectInterventions(view.projects);
+    ledger?.reconcile(view, opts.isProcessAlive);
+    view.aiUsage = ledger?.view() || { orchestrator: [], workers: [], recent: [] };
     return view;
   }
 
@@ -1708,6 +1862,17 @@ function createOrchestrator(options) {
     const row = entry(id);
     const latest = item.revisions.at(-1);
     const job = (item.tasks || []).find(task => task.status === 'running') || null;
+    if (job?.executionVersion === 2 && (!(latest?.open || []).length || job.source === 'chat')) {
+      row.jobId = job.id; row.jobFingerprint = jobFingerprint(job); row.jobTitle = job.title; row.jobDetail = job.detail; row.jobRevisionId = job.revision_id;
+      try {
+        const existing = bridge.find(id, job.id);
+        // Unapproved or paused work has no reason to inspect its source on every poll.
+        const facts = existing && existing.status !== 'RUNNING' && row.facts ? row.facts : inspect(item.project.folder); row.facts = facts;
+        const parts = job.proposedSubTasks?.length ? job.proposedSubTasks.map(sub => ({ ...sub, modelId: sub.assignedModelId, slice: sub.title }))
+          : dispatchPlan(pickWorkers(roster(), { job, usage: store.usage, facts, plans: plansLive }), job, facts);
+        return bridge.advance(item, job, parts);
+      } catch (error) { row.status = 'blocked_no_worker'; row.doing = error.message; row.next = error.message; return row; }
+    }
     const recordedFiles = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
     if (!recordedFiles.length && row.resultPath) recordedFiles.push(row.resultPath);
     if (job && row.jobId === job.id && row.jobFingerprint === jobFingerprint(job)
@@ -1993,26 +2158,27 @@ function createOrchestrator(options) {
     if (active && active.id === row.attemptId) attempts.closeAttempt({ attemptId: active.id, reason: 'complete' });
   }
 
-  async function tick() {
+  async function tick(projectId) {
     await refreshPlans(false);
     let plan = await opts.readPlan();
     rememberStartup(plan);
-    if (!shuttingDown) for (const item of notebookProjects(plan)) decide(item);
+    if (!shuttingDown) for (const item of notebookProjects(plan).filter(item => !projectId || item.project.id === projectId)) decide(item);
+    refreshPhase2Research(plan, !shuttingDown, projectId);
     refreshResearch();
     if (typeof opts.completeTasks === 'function') {
-      const completed = notebookProjects(plan).flatMap(item => {
+      const completed = notebookProjects(plan).filter(item => !projectId || item.project.id === projectId).flatMap(item => {
         const row = entry(item.project.id);
         const job = (item.tasks || []).find(task => task.status === 'running' && task.id === row.jobId);
         const files = (row.dispatch || []).map(part => part && part.resultPath).filter(Boolean);
         if (!files.length && row.resultPath) files.push(row.resultPath);
         return row.status === 'complete' && job && row.jobFingerprint === jobFingerprint(job)
-          && files.length && files.every(file => resultStatus(file) === 'COMPLETE')
-          ? [{ projectId: item.project.id, taskId: job.id, fingerprint: row.jobFingerprint, attemptId: row.attemptId }] : [];
+          && (job.executionVersion === 2 ? bridge.find(item.project.id, job.id)?.status === 'COMPLETE' : files.length && files.every(file => resultStatus(file) === 'COMPLETE'))
+          ? [{ projectId: item.project.id, taskId: job.id, fingerprint: row.jobFingerprint, attemptId: row.attemptId, megaTaskId: row.megaTaskId || null }] : [];
       });
       if (completed.length) plan = await opts.completeTasks(completed);
     }
     persist();
-    return snapshot(plan);
+    return snapshot(plan, projectId);
   }
 
   async function setMode(mode) {
@@ -2049,6 +2215,8 @@ function createOrchestrator(options) {
 
   async function runOrder(order) {
     if (!order || !order.action) return { ok: false, reason: 'invalid order' };
+    if (order.action === 'quota') { await refreshPlans(); return { ok: true, snapshot: snapshot(await opts.readPlan()) }; }
+    if (order.action === 'state') return { ok: true, snapshot: snapshot(await opts.readPlan()) };
     if (order.action === 'model') return setModelEnabled(order.id, order.enabled);
     if (order.action === 'lead') return setOrchestrator(order.id);
     if (order.action === 'mode') {
@@ -2062,7 +2230,7 @@ function createOrchestrator(options) {
     if (!order.projectId) return { ok: false, reason: 'project not found' };
     if (order.action === 'stop') return stop(order.projectId);
     if (order.action === 'resume') return resume(order.projectId);
-    if (order.action === 'approve') return approve(order.projectId);
+    if (order.action === 'approve') return approve(order.projectId, order.megaTaskId);
     if (order.action === 'skip') {
       if (typeof opts.applySkip === 'function') return opts.applySkip(order.projectId);
       return skipGrill(order.projectId);
@@ -2121,17 +2289,26 @@ function createOrchestrator(options) {
     if (Buffer.byteLength(q, 'utf8') > 1024 * 1024) return { ok: false, reason: 'message too long (maximum 1 MiB)' };
     const token = ++askToken;
     const askedAt = Date.now();
-    let snap = snapshot(await opts.readPlan());
+    let snap = snapshot(await opts.readPlan(), projectId || store.selectedProjectId);
+    if (projectId === undefined && store.selectedProjectId) projectId = store.selectedProjectId;
     if (projectId !== undefined && !(snap.projects || []).some(row => row.id === projectId)) return { ok: false, reason: 'Selected project no longer exists. Select a project before sending.' };
     const mentionedProjects = (snap.projects || []).filter(row => [row.id, row.name].some(name => name && q.toLowerCase().includes(name.toLowerCase())));
+    const explicitlyNamedCommand = mentionedProjects.find(row => [row.id, row.name].some(name => {
+      const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp(`^(?:start|stop|resume|approve(?: run)?|avvia|ferma|riprendi|approva)\\s+${escaped}[.!?]*$`, 'i').test(q);
+    }));
+    if (opts.phase2 && explicitlyNamedCommand) projectId = explicitlyNamedCommand.id;
     if (projectId && mentionedProjects.some(row => row.id !== projectId)) return { ok: false, reason: 'Message names a different project from the selected recipient. Select the intended project before sending.' };
     if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
     const conversation = chatSessionId ? store.asks.filter(item => item.chatSessionId === chatSessionId && item.projectId === projectId) : store.asks;
     const researchRequested = researchIntent(q, conversation);
     if (researchRequested && !pickAskedProject(snap, projectId, q)) return { ok: false, reason: 'Select a project or name it explicitly before dispatching research.' };
-    const order = researchRequested ? null : parseOrder(q, snap, projectId);
+    const statusKind = /^(?:quota(?: remaining)?|remaining quota|how much quota is left\??|provider status|model status)$/i.test(q) ? 'quota'
+      : /^(?:status|current (?:process )?state|current checkpoint(?: identity)?|selected project)$/i.test(q) ? 'state' : null;
+    const order = researchRequested ? null : statusKind ? { action: statusKind, projectId } : parseOrder(q, snap, projectId);
     if (order && ['start', 'stop', 'resume', 'approve', 'skip', 'watching'].includes(order.action) && !order.projectId) return { ok: false, reason: 'Select a project or name it explicitly before issuing a command.' };
+    if (order?.action === 'approve') order.megaTaskId = snap.projects.find(row => row.id === order.projectId)?.megaTaskId;
     let currentTask = null;
     if (!order && !researchRequested && freshTaskIntent(q) && typeof opts.prepareTask === 'function') {
       const target = pickAskedProject(snap, projectId, q);
@@ -2147,9 +2324,14 @@ function createOrchestrator(options) {
     const actionResults = [];
     if (order) {
       const acted = await runOrder(order);
-      snap = acted.snapshot || await tick();
+      snap = acted.snapshot || await tick(order.projectId);
       const who = (snap && snap.orchestratorLabel) || ORCH_NAME;
-      if (acted.ok && order.action === 'model') {
+      if (acted.ok && order.action === 'quota') {
+        answer = (snap.plans || []).map(pool => `${pool.label || pool.id}: ${Quota.describe(pool).text}${(pool.resetAt || pool.windows?.find(win => win.leftPct === pool.leftPct)?.resetAt) ? '; resets ' + (pool.resetAt || pool.windows.find(win => win.leftPct === pool.leftPct).resetAt) : ''}`).join('\n') || 'REMAINING UNREAD';
+      } else if (acted.ok && order.action === 'state') {
+        const selected = snap.projects.find(row => row.id === order.projectId);
+        answer = selected ? `${selected.name}: ${selected.status}. ${selected.next || ''}${selected.checkpoint ? ' Checkpoint: ' + (selected.checkpoint.id || selected.checkpoint.path || 'saved') : ''}` : 'No project selected.';
+      } else if (acted.ok && order.action === 'model') {
         answer = `${who}: ${order.label || order.id} is now ${order.enabled ? 'on' : 'off'}.`;
       } else if (acted.ok && order.action === 'lead') {
         answer = `${who}: orchestrator lead is now ${order.label || order.id}.`;
@@ -2194,10 +2376,7 @@ function createOrchestrator(options) {
       }
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
-      const history = (conversation || []).slice().reverse().map(turn => ({
-        user: turn.question,
-        orchestrator: turn.answer
-      }));
+      const history = recentContext(conversation || []);
       if (typeof opts.askModel === 'function' && !lead) {
         answer = 'Pick an orchestrator model first (GPT-6 Astra, Grok 4.7, …). I coordinate workers; I do not do the job.';
       } else if (typeof opts.askModel === 'function' && lead) {
@@ -2218,7 +2397,7 @@ function createOrchestrator(options) {
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, packState(snap, row), { history, currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null } }),
+            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
@@ -2242,6 +2421,7 @@ function createOrchestrator(options) {
               thinking: '',
               ms: Date.now() - started
             };
+          if (row) store.briefingBaselines[row.id] = { head: row.facts?.lastCommit || '', dirty: (row.facts?.dirty || []).slice(0, 12) };
           thinking = unpacked.thinking;
           ms = unpacked.ms;
           const envelope = leadEnvelope(unpacked.answer, spoken && typeof spoken === 'object' ? spoken.actions : undefined);
@@ -2265,7 +2445,7 @@ function createOrchestrator(options) {
                   : await dispatchResearch(action, () => token === askToken);
               actionResults.push(receipt);
               answer += receipt.ok
-                ? `\n\nNotebook: ${receipt.duplicate ? 'already running' : 'started'} ${receipt.research.workerLabel} (${receipt.research.provider}/${receipt.research.cli}), process ${receipt.research.pid}, for research "${receipt.research.title}". Source files are protected; findings will be saved to report.md.`
+                ? receipt.proposal ? `\n\nResearch MegaTask ${receipt.research.megaTaskId} proposed for ${receipt.research.projectName}. Review the objective and approve this MegaTask before any worker starts.` : `\n\nNotebook: ${receipt.duplicate ? 'already running' : 'started'} ${receipt.research.workerLabel} (${receipt.research.provider}/${receipt.research.cli}), process ${receipt.research.pid}, for research "${receipt.research.title}". Source files are protected; findings will be saved to report.md.`
                 : '\n\nResearch was not dispatched: ' + receipt.reason;
             }
           }
@@ -2301,7 +2481,7 @@ function createOrchestrator(options) {
     store.asks = [item, ...(Array.isArray(store.asks) ? store.asks : [])];
     persist();
     refreshResearch();
-    snap = snapshot(await opts.readPlan());
+    snap = snapshot(await opts.readPlan(), projectId);
     return {
       ok: true,
       question: q,
@@ -2336,13 +2516,38 @@ function createOrchestrator(options) {
     if (typeof id !== 'string' || !id.trim()) return { ok: false, reason: 'invalid data' };
     const model = roster().find(item => item.id === id);
     if (!model) return { ok: false, reason: 'model not present' };
-    if (enabled && !model.available) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
+    if (enabled && !model.available && !model.providerCatalog) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
     store.enabled[id] = Boolean(enabled);
+    store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role])]));
     persist();
     return { ok: true, snapshot: await tick() };
   }
 
-  async function approve(projectId) {
+  async function setModelRoles(id, roles) {
+    const model = roster().find(model => model.id === id);
+    if (!model) return { ok: false, reason: 'Model not present.' };
+    if (!roles || typeof roles !== 'object' || Array.isArray(roles) || !Object.keys(roles).length || Object.entries(roles).some(([role, enabled]) => !ROLE_IDS.includes(role) || typeof enabled !== 'boolean')) return { ok: false, reason: 'Roles must contain Orchestrator, Worker or Reviewer boolean flags.' };
+    const eligibility = roleEligibility(model);
+    for (const [role, enabled] of Object.entries(roles)) if (enabled && !eligibility[role]) return { ok: false, reason: `This model is not compatible with the ${role} role.` };
+    store.modelRoles[id] = { ...model.roles, ...roles };
+    if (store.orchestratorId === id && !withModelRoles(model, store.modelRoles[id]).roles.orchestrator) store.orchestratorId = null;
+    persist();
+    return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+  }
+
+  async function setCatalogSettings(input) {
+    const provider = providerDefinitions.find(p => p.id === input.providerId);
+    if (!provider) return { ok: false, reason: 'Provider not present.' };
+    if (typeof input.enabled === 'boolean') store.providerEnabled[provider.id] = input.enabled;
+    if (typeof input.showAll === 'boolean') store.catalogVisibility[provider.id] = input.showAll;
+    if (typeof input.allModelsEnabled === 'boolean') for (const model of models.filter(m => (m.providerId || m.provider) === provider.id)) {
+      store.enabled[model.id] = input.allModelsEnabled;
+      store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role])]));
+    }
+    persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+  }
+
+  async function approve(projectId, megaTaskId) {
     if (typeof projectId !== 'string' || !projectId.trim()) return { ok: false, reason: 'invalid data' };
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(row => row.project.id === projectId);
@@ -2352,12 +2557,24 @@ function createOrchestrator(options) {
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
     if (!item.project.folder) return { ok: false, reason: 'no folder' };
     const row = entry(projectId);
+    const job = item.tasks.find(task => task.status === 'running');
+    if (megaTaskId && job.executionVersion !== 2) return { ok: false, reason: 'The legacy job has no matching MegaTask approval target.' };
+    if (job.executionVersion === 2) {
+      decide(item);
+      const mega = bridge.find(projectId, job.id);
+      if (!mega) return { ok: false, reason: 'No MegaTask proposal is available.' };
+      if (typeof megaTaskId !== 'string') return { ok: false, reason: 'Approve requires the explicit proposed MegaTask ID.' };
+      if (megaTaskId && megaTaskId !== mega.id) return { ok: false, reason: 'Approval targets a different MegaTask from the current proposal.' };
+      try { bridge.approve(projectId, megaTaskId); } catch (error) { return { ok: false, reason: error.message }; }
+      row.authorizedSessionId = sessionId;
+      return { ok: true, megaTaskId: mega.id, snapshot: await tick(projectId) };
+    }
     row.approved = true;
     row.authorizedSessionId = sessionId;
     row.holdApproval = false;
     note(projectId, 'User approved the execution plan. Passing the job to the worker.');
     persist();
-    const view = await tick();
+    const view = await tick(projectId);
     return { ok: true, snapshot: view };
   }
 
@@ -2409,6 +2626,13 @@ function createOrchestrator(options) {
     const job = (item.tasks || []).find(task => task.status === 'running');
     if (!job) return false;
     const row = entry(id);
+    if (job.executionVersion === 2) {
+      const mega = bridge.find(id, job.id);
+      if (mega?.status === 'RUNNING') bridge.stop(item, job, mega.id);
+      if (mega && mega.status !== 'COMPLETE') { mega.status = 'CANCELLED'; bridge.event(id, 'MEGATASK_CANCELLED', `Replaced ${mega.title} with a new Start request.`, { megaTaskId: mega.id }); }
+      Object.assign(row, { jobId: null, attemptId: null, megaTaskId: null, megaTask: null, subTasks: [], dispatch: [], approved: false });
+      persist(); return true;
+    }
     const livePids = Array.isArray(row.dispatch) && row.dispatch.some(part => part && part.pid);
     if (row.status === 'watching' || livePids) {
       writeCheckpoint(id, item, job, facts && !facts.error ? facts : row.facts, 'stop');
@@ -2456,7 +2680,7 @@ function createOrchestrator(options) {
     if (liveOpen) {
       note(projectId, 'Auto start: waiting on Matt grilling answers.');
       persist();
-      await tick();
+      await tick(projectId);
       return { ok: true, phase: 'grill', job: null, facts, clearJob };
     }
     if (sessionGrill && !row.grillAsked) {
@@ -2468,7 +2692,7 @@ function createOrchestrator(options) {
       row.grillAsked = true;
       note(projectId, opts.mattSkillsEnabled?.() === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
       persist();
-      await tick();
+      await tick(projectId);
       return {
         ok: true,
         phase: 'grill',
@@ -2493,13 +2717,22 @@ function createOrchestrator(options) {
     return { ok: true, phase: 'plan', job: payload, facts, clearJob };
   }
 
-  async function resume(projectId) {
+  async function resume(projectId, request = {}) {
     if (typeof projectId !== 'string' || !projectId.trim()) return { ok: false, reason: 'invalid data' };
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(row => row.project.id === projectId);
     if (!item) return { ok: false, reason: 'project not found' };
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
     const row = entry(projectId);
+    const job = item.tasks.find(task => task.status === 'running');
+    if ((request.megaTaskId || request.checkpointId) && job.executionVersion !== 2) return { ok: false, reason: 'The explicit checkpoint does not belong to this legacy job.' };
+    if (job.executionVersion === 2) {
+      try {
+        const resumed = bridge.resume(item, job, request);
+        if (!resumed.ok) return resumed;
+        return { ...resumed, snapshot: await tick(projectId) };
+      } catch (error) { return { ok: false, reason: error.message }; }
+    }
     if (!row.checkpoint) {
       const disk = readCheckpointFile(projectId);
       if (disk) row.checkpoint = disk;
@@ -2519,11 +2752,15 @@ function createOrchestrator(options) {
     row.holdApproval = false;
     note(projectId, 'Resuming from checkpoint.');
     persist();
-    return { ok: true, snapshot: await tick() };
+    return { ok: true, snapshot: await tick(projectId) };
   }
 
   function prepareForNewTask(projectId) {
     const row = entry(projectId);
+    if (row.megaTaskId) {
+      const mega = bridge.target(projectId, row.megaTaskId);
+      if (mega.status !== 'COMPLETE') { mega.status = 'CANCELLED'; bridge.event(projectId, 'MEGATASK_CANCELLED', `Superseded ${mega.title} with a new work request.`, { megaTaskId: mega.id }); }
+    }
     if (row.checkpoint?.path && fs.existsSync(row.checkpoint.path)) {
       const archive = path.join(path.dirname(row.checkpoint.path), 'history', `${projectId}-${crypto.randomUUID()}.json`);
       fs.mkdirSync(path.dirname(archive), { recursive: true });
@@ -2543,6 +2780,11 @@ function createOrchestrator(options) {
     const item = notebookProjects(plan).find(item => item.project.id === projectId);
     if (!item) return { ok: false, reason: 'project not found' };
     const row = entry(projectId);
+    const job = item.tasks.find(task => task.status === 'running');
+    if (job?.executionVersion === 2) {
+      try { bridge.stopWorker(item, job, row.megaTaskId, pid); return { ok: true, snapshot: await tick(projectId) }; }
+      catch (error) { return { ok: false, reason: error.message }; }
+    }
     const part = (row.dispatch || []).find(part => part && part.pid === pid && !part.stoppedByUser);
     if (!part || row.status !== 'watching') return { ok: false, reason: 'Worker is no longer active on this project.' };
     if (typeof opts.killWorker !== 'function' || !opts.killWorker(pid)) return { ok: false, reason: 'Could not stop the worker process.' };
@@ -2551,10 +2793,10 @@ function createOrchestrator(options) {
     part.activity = 'Stopped by you. Resume the project to continue this slice.';
     note(projectId, `Stopped worker ${part.modelId}, process ${pid}. Other slices continue; automatic replacement is suspended.`);
     persist();
-    return { ok: true, snapshot: await tick() };
+    return { ok: true, snapshot: await tick(projectId) };
   }
 
-  async function stop(projectId) {
+  async function stop(projectId, megaTaskId) {
     if (typeof projectId !== 'string' || !projectId.trim()) return { ok: false, reason: 'invalid data' };
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(row => row.project.id === projectId);
@@ -2562,11 +2804,16 @@ function createOrchestrator(options) {
     const job = (item.tasks || []).find(task => task.status === 'running') || null;
     if (!job) return { ok: false, reason: 'no running job' };
     const row = entry(projectId);
+    if (megaTaskId && job.executionVersion !== 2) return { ok: false, reason: 'The legacy job has no matching MegaTask stop target.' };
+    if (job.executionVersion === 2) {
+      try { bridge.stop(item, job, megaTaskId || row.megaTaskId); return { ok: true, snapshot: await tick(projectId) }; }
+      catch (error) { return { ok: false, reason: error.message }; }
+    }
     if (row.status !== 'watching') return { ok: false, reason: 'nothing to stop' };
     const facts = item.project.folder ? inspect(item.project.folder) : (row.facts || {});
     applyCheckpoint(projectId, item, job, facts && !facts.error ? facts : row.facts, 'stop');
     persist();
-    return { ok: true, snapshot: await tick() };
+    return { ok: true, snapshot: await tick(projectId) };
   }
 
   async function shutdown() {
@@ -2576,6 +2823,10 @@ function createOrchestrator(options) {
     if (typeof opts.abortAsk === 'function') opts.abortAsk();
     refreshResearch();
     for (const record of store.researches.filter(item => item.status === 'watching')) {
+      if (record.executionVersion === 2) {
+        const item = { project: { id: record.projectId, name: record.projectName, folder: record.sourceFolder } };
+        bridge.stop(item, record.job, record.megaTaskId); continue;
+      }
       const stopped = !record.alive || (typeof opts.killWorker === 'function' && opts.killWorker(record.pid));
       if (stopped) { record.alive = false; finishResearch(record, 'checkpointed', 'Notebook shutdown; research evidence preserved.'); }
       else record.reason = 'Notebook shutdown could not stop the research process; inspect its PID before resuming.';
@@ -2594,7 +2845,10 @@ function createOrchestrator(options) {
     for (const item of notebookProjects(plan)) {
       const row = entry(item.project.id);
       const job = (item.tasks || []).find(task => task.status === 'running');
-      if (job && row.status === 'watching') applyCheckpoint(item.project.id, item, job, row.facts, 'shutdown');
+      if (job && row.status === 'watching') {
+        if (job.executionVersion === 2) bridge.stop(item, job, row.megaTaskId);
+        else applyCheckpoint(item.project.id, item, job, row.facts, 'shutdown');
+      }
     }
     persist();
   }
@@ -2621,10 +2875,22 @@ function createOrchestrator(options) {
     row.repository = repository;
     if (item.project.folder) row.facts = inspect(item.project.folder);
     persist();
-    return { ok: true, repository, snapshot: snapshot(plan) };
+    return { ok: true, repository, snapshot: snapshot(plan, projectId) };
   }
 
-  return { tick, shutdown, approve, startAutoTask, resume, stop, stopWorker, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setOrchestrator, ask, abortAsk, dispatchResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async () => { refreshResearch(); return snapshot(await opts.readPlan()); } };
+  async function setFocus(projectId) {
+    const plan = await opts.readPlan();
+    if (!notebookProjects(plan).some(item => item.project.id === projectId)) return { ok: false, reason: 'Selected project no longer exists.' };
+    store.selectedProjectId = projectId; persist(); return { ok: true, selectedProjectId: projectId };
+  }
+  async function pauseAfterCurrent(projectId, megaTaskId) {
+    const plan = await opts.readPlan(), item = notebookProjects(plan).find(item => item.project.id === projectId);
+    const job = item?.tasks.find(task => task.status === 'running' && task.executionVersion === 2);
+    if (!job) return { ok: false, reason: 'No running MegaTask on this project.' };
+    try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
+    catch (error) { return { ok: false, reason: error.message }; }
+  }
+  return { tick, shutdown, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

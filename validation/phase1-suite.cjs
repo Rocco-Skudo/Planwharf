@@ -9,7 +9,7 @@ const output = path.join(__dirname, 'phase1-suite-' + Date.now());
 fs.mkdirSync(output);
 const hash = () => crypto.createHash('sha256').update(fs.readFileSync(path.join(root, 'plan.json'))).digest('hex');
 const before = hash();
-const tests = [...fs.readdirSync(path.join(root, 'engine')).filter(f => f.endsWith('.test.cjs')).map(f => 'engine/' + f), ...fs.readdirSync(root).filter(f => /^verify.*\.cjs$/.test(f)), 'validation/project-folder-ui.cjs', 'validation/worker-board-browser.cjs', 'validation/project-recipient-browser.cjs', 'validation/phase1-browser.cjs'];
+const tests = [...fs.readdirSync(path.join(root, 'engine')).filter(f => f.endsWith('.test.cjs')).map(f => 'engine/' + f), ...fs.readdirSync(root).filter(f => /^verify.*\.cjs$/.test(f)), 'validation/project-folder-ui.cjs', 'validation/worker-board-browser.cjs', 'validation/project-recipient-browser.cjs', 'validation/phase1-browser.cjs', 'validation/phase2-browser.cjs'];
 const results = [];
 for (const file of tests) {
   const evidence = path.join(output, path.basename(file, '.cjs'));

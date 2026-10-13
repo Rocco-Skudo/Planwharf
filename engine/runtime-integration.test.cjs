@@ -1,3 +1,4 @@
+// Legacy provider and transport fixtures; Phase 2 approval/result contracts are covered by phase2 tests.
 'use strict';
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -31,8 +32,8 @@ const models = [
 ];
 let grokIds = ['grok-fixture'], nextPid = 1000;
 const launches = [], calls = [], alive = new Set();
-const options = { planFile, attemptsDir, models, skills, syncSkills: true, refreshModels: true,
-  discoverModels: async () => ({ ok: true, ids: grokIds }), fetchPlans: async () => [],
+const options = { phase2: false, planFile, attemptsDir, models, skills, syncSkills: true, refreshModels: true,
+  discoverModels: async provider => ({ ok: true, ids: provider.adapter === 'grok' ? grokIds : models.filter(model => model.provider === provider.id).map(model => model.cli) }), fetchPlans: async () => [],
   inspectFolder: folder => ({ folder, fileCount: 1, names: [], git: false }),
   spawnWorker: info => { launches.push(info); alive.add(++nextPid); return { pid: nextPid }; },
   isProcessAlive: pid => alive.has(pid), killWorker: pid => alive.delete(pid),

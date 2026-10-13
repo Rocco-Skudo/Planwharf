@@ -2,18 +2,15 @@
 
 // These are CLI adapters, not a list of every model sold by their vendors.
 // Explicitly configured routes let compatible CLIs accept new exact model IDs.
-const ADAPTERS = Object.freeze({
-  codex: { nativeModel: /^gpt-/ },
-  grok: { nativeModel: /^grok-/ },
-  antigravity: { nativeModel: /^(gemini-|claude-|gpt-oss-)/ }
-});
+const { adapters: ADAPTERS } = require('./provider-adapters.cjs');
 
 function modelRouteError(model) {
   if (!model || typeof model !== 'object') return 'Model configuration is required';
   if (model.available === false) return model.unavailableReason || 'Model unavailable';
-  const provider = model.provider;
+  const provider = model.adapter || model.provider;
   const adapter = Object.hasOwn(ADAPTERS, provider) ? ADAPTERS[provider] : null;
   if (!adapter) return 'Provider/model mismatch: unsupported provider adapter ' + String(provider);
+  if (adapter.executionSupported === false) return adapter.unavailableReason;
   const cli = model.cli;
   if (typeof cli !== 'string' || !cli.trim() || cli !== cli.trim() || /[\x00-\x1f\x7f]/.test(cli)) {
     return 'Provider/model mismatch: an exact nonempty CLI model ID is required for ' + provider;

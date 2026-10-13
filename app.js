@@ -465,7 +465,7 @@
       const plan = plans.find(row => row.id === item.plan);
       const exhausted = Boolean(plan && plan.exhausted);
       const role = isLead ? 'Lead' : (exhausted ? 'Exhausted' : (item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Eligible' : 'Worker'));
-      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')} ${PlanwharfQuota.html(plan)}</td><td class="role">${escape(role)}</td><td><button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></td></tr>`;
+      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')} ${PlanwharfQuota.html(plan)}</td><td class="role">${escape(role)}</td><td>${escape(item.available === false ? 'Unavailable' : exhausted ? 'Exhausted' : item.enabled ? 'Available' : 'No roles assigned')}</td></tr>`;
     }).join('')}</tbody></table>` : '<p class="muted">No models match.</p>';
     const open = el.open;
     el.innerHTML = `<summary>Workers and plans <span class="badge">${onCount} on</span></summary>
@@ -696,8 +696,9 @@
     const grillStuck = simpleKind(row, openCount || 0) === 'needs_you';
     const grillMe = grillStuck ? `<button type="button" class="primary" data-grill-me="${escape(id)}">Answer</button>` : '';
     const grillSkip = grillStuck ? `<button type="button" class="secondary" data-grill-skip="${escape(id)}">Skip</button>` : '';
-    const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">Go</button>` : '';
-    const resume = row.canResume && row.status === 'checkpointed' ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
+    const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">${row.megaTaskId ? 'Approve MegaTask' : 'Go'}</button>` : '';
+    const resume = row.canResume && ['checkpointed', 'failed'].includes(row.status) ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
+    const pause = row.canStop && row.megaTaskId ? `<button type="button" class="secondary" data-pause="${escape(id)}">Pause after current tasks</button>` : '';
     const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
     const propose = orchestra.grillPropose !== false;
     const kind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
@@ -705,7 +706,7 @@
     const grillTriggers = grillStuck || approve || resume || stop
       ? ''
       : `<button type="button" class="${kind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me" data-grill-start="${escape(id)}">Grill me</button><button type="button" class="${kind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs" data-grill-start="${escape(id)}"${docsOk ? '' : ' disabled'}>Grill with the docs</button>`;
-    return `${grillMe}${grillSkip}${approve}${grillTriggers}${resume}${stop}`;
+    return `${grillMe}${grillSkip}${approve}${grillTriggers}${resume}${stop}${pause}`;
   }
 
   function renderDashboard() {
@@ -727,11 +728,10 @@
     }).join('') || '<p class="muted">Provider usage loads from the local logins.</p>'}</div></section>`;
     const models = `<section class="dash-section dash-zone-models"><h3>Models</h3><div class="dash-models">${fleet.map(item => {
       const jobs = item.assignments || [];
-      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.enabled ? 'Idle' : 'Off');
+      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
       const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
-      const leadBtn = item.eligible && !item.lead ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>` : '';
       const badge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planList.find(p => p.id === item.plan))}<p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planList.find(p => p.id === item.plan))}<p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}</article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -1190,11 +1190,17 @@
       }
       return;
     }
+    const pauseId = event.target && event.target.getAttribute && event.target.getAttribute('data-pause');
+    if (pauseId) {
+      event.stopPropagation();
+      try { const response = await window.PlanwharfRunExecution('pause', (orchestra.projects || []).find(row => row.id === pauseId)); const body = await response.json(); if (!response.ok) throw new Error(body.error || body.reason); orchestra = body; renderOrchestra(); fillYard(); } catch (error) { notice(error.message); }
+      return;
+    }
     const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
     if (stopId) {
       event.stopPropagation();
       try {
-        const response = await fetch('/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: stopId }) });
+        const response = await (window.PlanwharfRunExecution ? window.PlanwharfRunExecution('stop', (orchestra.projects || []).find(row => row.id === stopId)) : fetch('/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: stopId }) }));
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
         orchestra = body;
@@ -1212,7 +1218,7 @@
     if (resumeId) {
       event.stopPropagation();
       try {
-        const response = await fetch('/api/orchestrator/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: resumeId }) });
+        const response = await (window.PlanwharfRunExecution ? window.PlanwharfRunExecution('resume', (orchestra.projects || []).find(row => row.id === resumeId)) : fetch('/api/orchestrator/resume', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: resumeId }) }));
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Save failed.');
         orchestra = body;
@@ -1233,7 +1239,7 @@
     }
     event.stopPropagation();
     try {
-      const response = await fetch('/api/orchestrator/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: id }) });
+      const response = await (window.PlanwharfRunExecution ? window.PlanwharfRunExecution('approve', (orchestra.projects || []).find(row => row.id === id)) : fetch('/api/orchestrator/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: id }) }));
       const body = await response.json();
       if (!response.ok) throw new Error(body.error || 'Save failed.');
       orchestra = body;
@@ -1248,8 +1254,12 @@
       notice(translateError(error.message));
     }
   });
-  $('revision-select').addEventListener('change', event => { selected = Number(event.target.value); render(); });
-  $('history-list').addEventListener('click', event => { const button = event.target.closest('[data-revision]'); if (button) { selected = Number(button.dataset.revision); render(); } });
+  function selectRevision(id) {
+    if (!data || !project().revisions.some(revision => revision.id === Number(id))) return;
+    selected = Number(id); render();
+  }
+  $('revision-select').addEventListener('change', event => selectRevision(event.target.value));
+  $('history-list').addEventListener('click', event => { const button = event.target.closest('[data-revision]'); if (button) selectRevision(button.dataset.revision); });
 
   const modelsListEl = $('models-list');
   if (modelsListEl) {
@@ -1621,7 +1631,9 @@
         submit.textContent = 'Asking…';
       }
       try {
-        const response = await fetch('/api/orchestrator/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, projectId, ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }) });
+        const submittedRecipient = projectId;
+        await window.PlanwharfFocusReady;
+        const response = await fetch('/api/orchestrator/ask', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question, projectId: submittedRecipient, ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }) });
         const body = await response.json();
         if (!response.ok) throw new Error(body.error || 'Ask failed.');
         if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);

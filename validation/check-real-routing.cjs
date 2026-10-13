@@ -9,7 +9,7 @@ const { launchSpec } = require('../engine/providers.cjs');
 const dir = path.join(__dirname, 'provider-check');
 const folder = path.join(dir, 'worker-project');
 fs.mkdirSync(folder, { recursive: true });
-const models = require('../models.json').filter(m => ['gpt-6-astra', 'gpt-6-luna'].includes(m.id));
+const models = require("../engine/provider-catalog.cjs").loadCatalog(require("../models.json")).models.filter(m => ['gpt-6-astra', 'gpt-6-luna'].includes(m.id));
 const evidence = { at: new Date().toISOString(), launches: [] };
 const job = { id: 'routing-check', projectId: 'routing-check', revision_id: 1, title: 'Verify real worker routing', detail: 'Create routing-proof.json in this folder containing {"marker":"CODEX_WORKER_OK"}. This is a tiny dispatch verification. No other implementation. Do not inspect parent or sibling directories.', status: 'running' };
 const notebook = { schema: 1, project: { id: 'routing-check', name: 'Isolated provider check', folder }, revisions: [{ id: 1, mode: 'manual', title: 'Routing', createdAt: new Date().toISOString(), direction: 'Verify real provider dispatch', state: 'Ready', closed: [], open: [] }], tasks: [job] };

@@ -14,9 +14,6 @@
       }
     } catch (e) {}
   </script>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
   <script src="plan.js" defer></script>
   <script src="models.js" defer></script>
@@ -24,6 +21,7 @@
   <script src="engine/sentinel.js" defer></script>
   <script src="quota.js" defer></script>
   <script src="home-ui.js" defer></script>
+  <script src="notifications.js" defer></script>
   <script src="window-ui.js" defer></script>
   <script src="app.js" defer></script>
   <script src="orch.js" defer></script>
@@ -70,7 +68,7 @@
         <small class="muted">Applies to new model requests and worker launches.</small>
         <p id="matt-skills-status" class="muted" role="status">Checking Matt skills at startup...</p>
         <button type="button" id="matt-skills-refresh" class="secondary compact">Check skills updates</button>
-        <button type="button" id="provider-models-refresh" class="secondary compact">Refresh Grok models</button>
+        <button type="button" id="provider-models-refresh" class="secondary compact">Refresh models</button>
         <p id="provider-models-status" class="muted" role="status"></p>
       </section>
       <main id="project-view">

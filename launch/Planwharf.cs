@@ -6,8 +6,25 @@ using System.Windows.Forms;
 
 internal static class Planwharf
 {
+    static string logFile;
+    static readonly object logGate = new object();
     [STAThread]
     static int Main(string[] args)
+    {
+        try
+        {
+            string logDir = Environment.GetEnvironmentVariable("PLANWHARF_LAUNCH_LOG_DIR");
+            if (string.IsNullOrWhiteSpace(logDir)) logDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Planwharf", "logs");
+            Directory.CreateDirectory(logDir);
+            logFile = Path.Combine(logDir, "launch-" + DateTime.UtcNow.ToString("yyyyMMdd-HHmmss-fff") + "-" + Process.GetCurrentProcess().Id + ".log");
+            Record("Launcher started.");
+        }
+        catch { logFile = null; }
+        try { return Launch(args); }
+        catch (Exception ex) { Fail("Could not launch Planwharf.\n" + ex.Message); return 1; }
+    }
+
+    static int Launch(string[] args)
     {
         string root = AppDomain.CurrentDomain.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         string script = Path.Combine(root, "planwharf.cjs");
@@ -24,6 +41,8 @@ internal static class Planwharf
         }
 
         var psi = new ProcessStartInfo();
+        Record("Node.js: " + node);
+        Record("Application: " + script);
         psi.FileName = node;
         psi.Arguments = Quote(script) + JoinArgs(args);
         psi.WorkingDirectory = root;
@@ -52,15 +71,16 @@ internal static class Planwharf
         }
         child.OutputDataReceived += delegate(object sender, DataReceivedEventArgs e)
         {
-            if (e.Data != null) lock (log) log.AppendLine(e.Data);
+            if (e.Data != null) { Record(e.Data); lock (log) { log.AppendLine(e.Data); if (log.Length > 65536) log.Remove(0, log.Length - 65536); } }
         };
         child.ErrorDataReceived += delegate(object sender, DataReceivedEventArgs e)
         {
-            if (e.Data != null) lock (log) log.AppendLine(e.Data);
+            if (e.Data != null) { Record(e.Data); lock (log) { log.AppendLine(e.Data); if (log.Length > 65536) log.Remove(0, log.Length - 65536); } }
         };
         child.BeginOutputReadLine();
         child.BeginErrorReadLine();
         child.WaitForExit();
+        Record("Node.js exited with code " + child.ExitCode + ".");
         if (child.ExitCode != 0)
         {
             string text;
@@ -107,11 +127,32 @@ internal static class Planwharf
     static string Quote(string value)
     {
         if (value == null) return "\"\"";
-        return "\"" + value.Replace("\"", "\\\"") + "\"";
+        // Windows doubles backslashes before quotes, including the closing quote.
+        var text = new StringBuilder("\"");
+        int slashes = 0;
+        foreach (char c in value)
+        {
+            if (c == '\\') { slashes++; continue; }
+            text.Append('\\', c == '"' ? slashes * 2 + 1 : slashes);
+            text.Append(c);
+            slashes = 0;
+        }
+        text.Append('\\', slashes * 2);
+        text.Append('"');
+        return text.ToString();
+    }
+
+    static void Record(string message)
+    {
+        if (logFile == null) return;
+        try { lock (logGate) File.AppendAllText(logFile, DateTime.UtcNow.ToString("o") + " " + message + Environment.NewLine, Encoding.UTF8); }
+        catch { /* Diagnostics must not prevent application startup. */ }
     }
 
     static void Fail(string message)
     {
+        Record(message);
+        if (logFile != null) message += "\n\nStartup log: " + logFile;
         MessageBox.Show(message, "Planwharf", MessageBoxButtons.OK, MessageBoxIcon.Error);
     }
 }

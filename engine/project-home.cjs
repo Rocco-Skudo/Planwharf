@@ -4,6 +4,9 @@ const crypto = require('node:crypto');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { activityMessages, workerReport } = require('./activity.cjs');
+const { summarizeTimeline, checkpointDiff } = require('./project-history.cjs');
+const { repoState } = require('./execution.cjs');
+const { executionNext } = require('./execution-next.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function git(folder, args) {
   return new Promise(resolve => execFile('git', ['--no-optional-locks', '-C', folder, ...args], { windowsHide: true, timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : args.includes('-z') ? stdout : stdout.trim())));
@@ -142,6 +145,8 @@ async function compare(previous, current) {
       if (!before || before.status !== research.status || before.attemptId !== research.attemptId || before.reportAvailable !== research.reportAvailable) changes.push(`Research ${research.status === 'complete' ? 'completed' : 'changed'}`);
     }
   } else if (now && !old) unavailable.push('No comparable execution baseline.');
+  const notes = (current.noteIds || []).filter(id => !(previous.noteIds || []).includes(id)).length;
+  if (notes) changes.push(`${notes} new user note(s)`);
   return { firstVisit: false, changes, unavailable, details };
 }
 async function projectHome(project, snapshot, baseline, options) {
@@ -150,14 +155,35 @@ async function projectHome(project, snapshot, baseline, options) {
   const researches = (snapshot.researches || []).filter(r => r.projectId === project.project.id);
   const local = await localGit(project.project.folder, options);
   const evidence = await execution(row, researches);
+  const durable = snapshot.execution || {};
+  const megaTasks = (durable.megaTasks || []).filter(mega => mega.projectId === project.project.id);
+  const mega = megaTasks.at(-1);
+  const subTasks = (durable.subTasks || []).filter(sub => sub.megaTaskId === mega?.id);
+  const results = (durable.results || []).filter(result => megaTasks.some(mega => mega.id === result.megaTaskId));
+  const technicalTimeline = (durable.timeline || []).filter(event => event.projectId === project.project.id);
+  const timeline = summarizeTimeline(technicalTimeline, durable);
+  const resumeTargets = (durable.checkpoints || []).filter(cp => cp.projectId === project.project.id && ['PAUSED', 'FAILED'].includes(megaTasks.find(mega => mega.id === cp.megaTaskId)?.status)).map(cp => ({ ...cp, researchId: snapshot.researches.find(record => record.megaTaskId === cp.megaTaskId)?.id }));
   const { reports = [], ...executionBaseline } = evidence || {};
-  const current = { viewedAt: new Date().toISOString(), revisionIds: project.revisions.map(r => r.id), revisions: [{ id: revision.id, title: revision.title, state: revision.state, direction: revision.direction, closed: revision.closed }], git: local, execution: evidence ? { ...executionBaseline, reportFingerprint: hash(JSON.stringify(reports)) } : null };
+  const current = { viewedAt: new Date().toISOString(), timelineEventIds: technicalTimeline.map(event => event.id), noteIds: (project.home?.notes || []).map(note => note.id), revisionIds: project.revisions.map(r => r.id), revisions: [{ id: revision.id, title: revision.title, state: revision.state, direction: revision.direction, closed: revision.closed }], git: local, execution: evidence ? { ...executionBaseline, reportFingerprint: hash(JSON.stringify(reports)) } : null };
   const running = (row?.dispatch || []).filter(p => p.alive).length + researches.filter(r => r.alive && r.status === 'watching').length;
   const labels = { watching: running ? 'Workers running' : 'Waiting for worker progress', needs_approval: 'Waiting for approval', waiting_on_you: 'Waiting for your answer', propose_grill: 'Waiting for your answer', checkpointed: 'Paused — checkpoint saved', complete: 'Completed', failed: 'Blocked', blocked_no_worker: 'Blocked', blocked_no_folder: 'Blocked', idle: 'Idle' };
-  const next = row?.status === 'needs_approval' ? 'Approve the prepared job' : row?.canResume ? 'Resume from checkpoint' : revision.open.length ? `Answer the current Grill question: ${revision.open[0]}` : row?.next || 'No next action defined';
-  const action = row?.status === 'needs_approval' ? 'approve' : row?.canResume ? 'resume' : revision.open.length ? 'grill' : null;
-  return { projectId: project.project.id, goal: revision.direction, progress: revision.state || 'No progress summary recorded.', progressDetails: { jobTitle: row?.jobTitle || '', status: row?.status || 'idle', actions: current.execution?.actions || [], reports, files: local.files || [] }, local, now: running ? 'Workers running' : labels[row?.status] || 'Idle', running, jobTitle: row?.jobTitle || '', next, action,
+  const next = mega ? executionNext(mega, durable) : row?.status === 'needs_approval' ? 'Approve the prepared job' : row?.canResume ? 'Resume from checkpoint' : revision.open.length ? `Answer the current Grill question: ${revision.open[0]}` : row?.next || 'No next action defined';
+  const action = mega ? mega.status === 'READY_FOR_APPROVAL' ? 'approve' : ['PAUSED', 'FAILED'].includes(mega.status) && resumeTargets.length ? 'resume' : null
+    : row?.status === 'needs_approval' ? 'approve' : row?.canResume ? 'resume' : revision.open.length ? 'grill' : null;
+  const completed = results.filter(result => result.status === 'COMPLETE');
+  const workers = results.filter(result => result.megaTaskId === mega?.id && result.pid).map(result => ({ modelId: result.assignedModelId, provider: result.provider, cli: result.cli, subTaskId: result.subTaskId, attemptId: result.attemptId, status: result.status }));
+  for (const sub of subTasks.filter(sub => sub.status === 'RUNNING')) workers.push({ modelId: sub.assignedModelId, provider: sub.provider, cli: sub.cli, subTaskId: sub.id, attemptId: sub.attemptIds.at(-1), status: sub.status });
+  const since = await compare(baseline === undefined ? project.home?.lastVisit : baseline, current);
+  const previousIds = new Set((baseline === undefined ? project.home?.lastVisit : baseline)?.timelineEventIds || []);
+  const delta = summarizeTimeline(technicalTimeline.filter(event => !previousIds.has(event.id)), durable);
+  if (delta.length && !since.firstVisit) { since.changes.push(`${delta.length} project milestone${delta.length === 1 ? '' : 's'} recorded`); since.details.push(...delta.slice(-8).map(event => event.summary)); }
+  return { projectId: project.project.id, goal: revision.direction, progress: completed.length ? completed.slice(-3).map(result => result.summary).join(' ') : revision.state || 'No progress summary recorded.',
+    progressDetails: { jobTitle: row?.jobTitle || '', status: row?.status || 'idle', actions: mega ? [] : current.execution?.actions || [], reports: mega ? [] : reports, files: local.files || [], megaTask: mega || null, subTasks, results,
+      completed: completed.map(result => result.summary), pending: subTasks.filter(sub => sub.status !== 'COMPLETE'), tests: results.flatMap(result => result.tests), blockers: [...(mega?.blockers || []), ...results.filter(result => subTasks.some(sub => ['FAILED', 'BLOCKED'].includes(sub.status) && sub.resultId === result.resultId)).flatMap(result => result.blockers)],
+      workers, gitProgress: mega?.repoAfter || mega?.repoBefore || null },
+    timeline: technicalTimeline, timelineSummary: timeline, technicalTimeline, checkpointDiffs: resumeTargets.map(cp => ({ checkpointId: cp.id, ...checkpointDiff(cp, repoState(project.project.folder, require('./orchestrator.js').defaultInspect(project.project.folder)), revision.id, subTasks.filter(sub => sub.status === 'COMPLETE').map(sub => sub.id)) })), resumeTargets, actionTarget: { projectId: project.project.id, ...(mega ? { megaTaskId: mega.id } : {}), ...(action === 'resume' && resumeTargets.length === 1 ? { checkpointId: resumeTargets[0].id, megaTaskId: resumeTargets[0].megaTaskId, researchId: resumeTargets[0].researchId } : mega?.detached ? { researchId: snapshot.researches.find(record => record.megaTaskId === mega.id)?.id } : {}) },
+    local, now: running ? 'Workers running' : mega && ['PAUSED', 'FAILED'].includes(mega.status) ? `${mega.status === 'FAILED' ? 'Failed' : 'Paused'} — checkpoint saved (${subTasks.filter(sub => sub.status !== 'COMPLETE').length} slices remaining)` : mega?.status === 'COMPLETE' ? 'Completed' : mega?.status === 'READY_FOR_APPROVAL' ? 'Waiting for approval' : labels[row?.status] || 'Idle', running, jobTitle: mega?.title || row?.jobTitle || '', next, action,
     notes: project.home?.notes || [], baseline: baseline === undefined ? project.home?.lastVisit || null : baseline, current,
-    since: await compare(baseline === undefined ? project.home?.lastVisit : baseline, current) };
+    since };
 }
 module.exports = { projectHome, compare, localGit };

@@ -21,7 +21,7 @@ if (!fs.existsSync(file)) {
   fs.writeFileSync(file, JSON.stringify(notebook, null, 2));
 }
 const attempts = createAttemptEngine({ dir: attemptsDir });
-const models = require('../models.json').filter(m => m.id === 'gemini').map(m => ({ ...m, enabled: true, kind: 'default' }));
+const models = require("../engine/provider-catalog.cjs").loadCatalog(require("../models.json")).models.filter(m => m.id === 'gemini').map(m => ({ ...m, enabled: true, kind: 'default' }));
 let orchestra;
 const events = path.join(dir, 'chain.jsonl');
 function record(event, data) { fs.appendFileSync(events, JSON.stringify({ at: new Date().toISOString(), event, ...data }) + '\n'); }

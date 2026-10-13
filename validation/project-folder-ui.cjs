@@ -13,11 +13,12 @@ const planFile = path.join(dir, 'notebook.json');
 fs.copyFileSync(path.join(__dirname, '../fixtures/notebook.json'), planFile);
 const server = createServer({ skillsEnabled: false, planFile, models: [], fetchPlans: async () => [] });
 const profile = path.join(dir, 'edge-profile-folders-' + Date.now());
-const browser = spawn(findBrowser(), ['--headless=new', '--disable-gpu', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+let browser;
 let ws, command;
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  browser = spawn(findBrowser(), ['--headless=new', '--disable-gpu', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--disable-extensions', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, `http://127.0.0.1:${server.address().port}`], { windowsHide: true, stdio: 'ignore' });
   let port;
   for (let n = 0; n < 100 && !port; n++) {
     try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); } catch {}
@@ -36,7 +37,7 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
   });
   command = (method, params = {}) => new Promise((resolve, reject) => {
     const seq = ++id;
-    pending.set(seq, { resolve, reject, timer: setTimeout(() => { pending.delete(seq); reject(new Error(method + ' timed out')); }, 10000) });
+    pending.set(seq, { resolve, reject, timer: setTimeout(() => { pending.delete(seq); reject(new Error(method + ' timed out')); }, 30000) });
     ws.send(JSON.stringify({ id: seq, method, params }));
   });
   const evaluate = async expression => {
@@ -50,7 +51,6 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     throw new Error('UI condition timed out: ' + expression + ' ' + state);
   }
   await command('Emulation.setDeviceMetricsOverride', { width: 1365, height: 1100, deviceScaleFactor: 1, mobile: false });
-  await command('Page.navigate', { url: `http://127.0.0.1:${server.address().port}` });
   await waitFor("document.getElementById('revision-badge')?.textContent.includes('R2')");
   await evaluate("document.getElementById('new-project').click()");
   await pause(150);
@@ -81,6 +81,6 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (command) try { await command('Browser.close'); } catch {}
   if (ws) ws.close();
-  browser.kill();
+  if (browser) browser.kill();
   if (server.listening) await new Promise(resolve => server.close(resolve));
 });

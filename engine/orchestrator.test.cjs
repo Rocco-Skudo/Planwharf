@@ -123,7 +123,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(parseOrder('Continue Demo', { models: [], projects: [{ id: 'demo', name: 'Demo', status: 'watching' }] }), null);
   assert.equal(parseOrder('Implement the parser on Demo', { models: [], projects: [{ id: 'demo', name: 'Demo', status: 'checkpointed' }] }), null);
   assert.equal(pickWorker(models, { job: { title: 'Check the repo', detail: 'Inspect.' } }).id, 'gemini');
-  const full = require('../models.json');
+  const full = require("./provider-catalog.cjs").loadCatalog(require("../models.json")).models;
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).plan, 'Gemini');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).id, 'gemini-flash');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' } }).id, 'luna');
@@ -139,15 +139,15 @@ function make(plan, inspectFolder, extra) {
   assert.equal(planSnap.plans.find(item => item.id === 'ChatGPT').exhausted, true);
   assert.equal(planSnap.fleet.find(item => item.id === 'luna').exhausted, true);
   assert.equal(planSnap.fleet.find(item => item.id === 'grok-fast').exhausted, false);
-  assert.equal(pickWorker(full, { job: { title: 'Implement the parser', detail: 'Write code.' } }).kind, 'default');
-  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' } }).kind, 'premium');
-  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' } }).id, 'gpt-6-astra');
-  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex' }, usage: { 'gpt-6-astra': { used: 20 } } }).id, 'gpt-5.5');
+  assert.equal(pickWorker(full, { job: { title: 'Implement the parser', detail: 'Write code.' } }).id, 'luna');
+  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' } }).id, 'luna');
+  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex premium fix' }, skip: ['luna'] }).id, 'gpt-5.5');
+  assert.equal(pickWorker(full, { job: { title: 'Hard escalation', detail: 'complex' }, usage: { 'gpt-6-astra': { used: 20 } } }).id, 'luna');
   assert.ok(full.some(item => item.id === 'gpt-6-astra' && item.kind === 'premium' && item.available === true));
   assert.equal(canOrchestrate(full.find(item => item.id === 'gpt-6-astra')), true);
   const crew = pickWorkers(full, { job: { title: 'Implement the parser', detail: 'Write code.' }, facts: { dirty: ['a', 'b', 'c', 'd'] } });
   assert.equal(crew.length, 3);
-  assert.equal(crew[0].id, 'gemini');
+  assert.equal(crew[0].id, 'luna');
   assert.ok(full.filter(item => item.plan === 'ChatGPT').length > 1);
   assert.ok(full.filter(item => item.plan === 'Grok').length > 1);
   assert.ok(full.filter(item => item.plan === 'Gemini').every(item => item.enabled === true));
@@ -692,7 +692,7 @@ function make(plan, inspectFolder, extra) {
   fs.mkdirSync(httpFolder);
   fs.writeFileSync(path.join(httpFolder, 'README.md'), 'demo\n');
   fs.writeFileSync(httpPlan, JSON.stringify(notebook({ folder: httpFolder, open: [] })) + '\n');
-  const httpServer = createServer({ skillsEnabled: false, planFile: httpPlan, attemptsDir: path.join(httpDir, 'attempts') });
+  const httpServer = createServer({ phase2: false, skillsEnabled: false, planFile: httpPlan, attemptsDir: path.join(httpDir, 'attempts') });
   await new Promise(resolve => httpServer.listen(0, '127.0.0.1', resolve));
   const base = `http://127.0.0.1:${httpServer.address().port}`;
   try {
@@ -711,7 +711,7 @@ function make(plan, inspectFolder, extra) {
     assert.equal(after.projects[0].status, 'watching');
     assert.equal(after.projects[0].modelId, 'grok-4-6');
     assert.ok(after.models.some(item => item.id === 'grok-4-6' && item.used >= 1 && item.remaining < item.limit));
-    const autoHttp = createServer({ skillsEnabled: false, planFile: httpPlan, attemptsDir: path.join(httpDir, 'attempts-auto') });
+    const autoHttp = createServer({ phase2: false, skillsEnabled: false, planFile: httpPlan, attemptsDir: path.join(httpDir, 'attempts-auto') });
     await new Promise(resolve => autoHttp.listen(0, '127.0.0.1', resolve));
     const autoBase = `http://127.0.0.1:${autoHttp.address().port}`;
     try {
@@ -750,7 +750,7 @@ function make(plan, inspectFolder, extra) {
   git(['commit', '-m', 'Add README']);
   const startPlanFile = path.join(gitHttpDir, 'plan.json');
   fs.writeFileSync(startPlanFile, JSON.stringify(notebook({ folder: gitRepo, open: [], tasks: [] })) + '\n');
-  const startServer = createServer({ skillsEnabled: false, planFile: startPlanFile, attemptsDir: path.join(gitHttpDir, 'attempts') });
+  const startServer = createServer({ phase2: false, skillsEnabled: false, planFile: startPlanFile, attemptsDir: path.join(gitHttpDir, 'attempts') });
   await new Promise(resolve => startServer.listen(0, '127.0.0.1', resolve));
   const startBase = `http://127.0.0.1:${startServer.address().port}`;
   try {
@@ -794,7 +794,7 @@ function make(plan, inspectFolder, extra) {
   fs.writeFileSync(path.join(chatRepo, 'README.md'), 'demo\n');
   const chatPlanFile = path.join(chatDir, 'plan.json');
   fs.writeFileSync(chatPlanFile, JSON.stringify(notebook({ folder: chatRepo, open: [], tasks: [] })) + '\n');
-  const chatServer = createServer({ skillsEnabled: false, planFile: chatPlanFile, attemptsDir: path.join(chatDir, 'attempts') });
+  const chatServer = createServer({ phase2: false, skillsEnabled: false, planFile: chatPlanFile, attemptsDir: path.join(chatDir, 'attempts') });
   await new Promise(resolve => chatServer.listen(0, '127.0.0.1', resolve));
   const chatBase = `http://127.0.0.1:${chatServer.address().port}`;
   try {
@@ -826,7 +826,7 @@ function make(plan, inspectFolder, extra) {
   fs.writeFileSync(abortPlanFile, JSON.stringify(notebook({ folder: abortRepo, open: [], tasks: [] })) + '\n');
   let httpAbort = 0;
   let resolveHttpAsk;
-  const abortServer = createServer({ skillsEnabled: false,
+  const abortServer = createServer({ phase2: false, skillsEnabled: false,
     planFile: abortPlanFile,
     attemptsDir: path.join(abortDir, 'attempts'),
     askModel: () => new Promise(resolve => { resolveHttpAsk = resolve; }),
@@ -868,7 +868,7 @@ function make(plan, inspectFolder, extra) {
   fs.writeFileSync(path.join(grillRepo, 'README.md'), '# Demo\n');
   const grillPlanFile = path.join(grillDir, 'plan.json');
   fs.writeFileSync(grillPlanFile, JSON.stringify(notebook({ folder: grillRepo, open: [], tasks: [], fresh: true })) + '\n');
-  const grillServer = createServer({ skillsEnabled: false, planFile: grillPlanFile, attemptsDir: path.join(grillDir, 'attempts') });
+  const grillServer = createServer({ phase2: false, skillsEnabled: false, planFile: grillPlanFile, attemptsDir: path.join(grillDir, 'attempts') });
   await new Promise(resolve => grillServer.listen(0, '127.0.0.1', resolve));
   const grillBase = `http://127.0.0.1:${grillServer.address().port}`;
   try {
@@ -900,7 +900,7 @@ function make(plan, inspectFolder, extra) {
   fs.mkdirSync(skipRepo);
   const skipPlanFile = path.join(skipDir, 'plan.json');
   fs.writeFileSync(skipPlanFile, JSON.stringify(notebook({ folder: skipRepo, open: [], tasks: [], fresh: true })) + '\n');
-  const skipServer = createServer({ skillsEnabled: false, planFile: skipPlanFile, attemptsDir: path.join(skipDir, 'attempts') });
+  const skipServer = createServer({ phase2: false, skillsEnabled: false, planFile: skipPlanFile, attemptsDir: path.join(skipDir, 'attempts') });
   await new Promise(resolve => skipServer.listen(0, '127.0.0.1', resolve));
   const skipBase = `http://127.0.0.1:${skipServer.address().port}`;
   try {
@@ -927,7 +927,7 @@ function make(plan, inspectFolder, extra) {
   fs.mkdirSync(openSkipRepo);
   const openSkipPlanFile = path.join(openSkipDir, 'plan.json');
   fs.writeFileSync(openSkipPlanFile, JSON.stringify(notebook({ folder: openSkipRepo, open: ['What is in scope?'], tasks: [] })) + '\n');
-  const openSkipServer = createServer({ skillsEnabled: false, planFile: openSkipPlanFile, attemptsDir: path.join(openSkipDir, 'attempts') });
+  const openSkipServer = createServer({ phase2: false, skillsEnabled: false, planFile: openSkipPlanFile, attemptsDir: path.join(openSkipDir, 'attempts') });
   await new Promise(resolve => openSkipServer.listen(0, '127.0.0.1', resolve));
   const openSkipBase = `http://127.0.0.1:${openSkipServer.address().port}`;
   try {
@@ -948,7 +948,7 @@ function make(plan, inspectFolder, extra) {
   fs.writeFileSync(path.join(pipelineRepo, 'README.md'), '# Demo\n');
   const pipelinePlanFile = path.join(pipelineDir, 'plan.json');
   fs.writeFileSync(pipelinePlanFile, JSON.stringify(notebook({ folder: pipelineRepo, open: [], tasks: [], fresh: true })) + '\n');
-  const pipelineServer = createServer({ skillsEnabled: false, planFile: pipelinePlanFile, attemptsDir: path.join(pipelineDir, 'attempts') });
+  const pipelineServer = createServer({ phase2: false, skillsEnabled: false, planFile: pipelinePlanFile, attemptsDir: path.join(pipelineDir, 'attempts') });
   await new Promise(resolve => pipelineServer.listen(0, '127.0.0.1', resolve));
   const pipelineBase = `http://127.0.0.1:${pipelineServer.address().port}`;
   try {
@@ -1059,7 +1059,7 @@ function make(plan, inspectFolder, extra) {
   const httpKilled = [];
   let httpPid = 9001;
   const openedWindows = [];
-  const stopHttpServer = createServer({ skillsEnabled: false,
+  const stopHttpServer = createServer({ phase2: false, skillsEnabled: false,
     planFile: stopHttpPlanFile,
     attemptsDir: path.join(stopHttpDir, 'attempts'),
     inspectFolder: () => ({ folder: stopHttpRepo, fileCount: 1, names: ['README.md'], git: false, head: '' }),
@@ -1161,6 +1161,7 @@ function make(plan, inspectFolder, extra) {
   const keepAttemptsDir = path.join(keepHttpDir, 'attempts');
   let keepHttpPid = 9100;
   const keepHttpOpts = {
+    phase2: false,
     planFile: keepHttpPlan,
     models,
     attemptsDir: keepAttemptsDir,

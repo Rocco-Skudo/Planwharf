@@ -167,5 +167,5 @@ async function until(command, expression) {
   if (server.listening) await new Promise(resolve => server.close(resolve));
   const resolved = path.resolve(dir);
   assert.ok(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep) && path.basename(resolved).startsWith('pw-recipient-browser-'));
-  fs.rmSync(resolved, { recursive: true, force: true });
+  fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 15, retryDelay: 100 });
 });

@@ -44,6 +44,24 @@ test('one application window opens, switches views, focuses and reopens without 
   clock += 16000; assert.deepEqual(windows.status(), { planwharf: false, orchestrator: false });
 });
 
+test('desktop launcher configures a single shared window by default', async () => {
+  const { listen } = require('../planwharf.cjs');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-single-window-'));
+  const planFile = path.join(dir, 'notebook.json');
+  fs.copyFileSync(path.join(__dirname, '../fixtures/notebook.json'), planFile);
+  let server;
+  try {
+    ({ server } = await listen({ planFile, attemptsDir: path.join(dir, 'attempts'), port: 0, models: [], fetchPlans: async () => [], skillsEnabled: false, syncSkills: false }));
+    const heartbeat = server.windows.heartbeat({ id: 'shared', view: 'orchestrator' });
+    assert.deepEqual(heartbeat.views, { planwharf: true, orchestrator: true });
+    assert.equal(heartbeat.requestedView, 'planwharf', 'Both views use the same desktop window');
+    assert.match(heartbeat.title, /^Planwharf/);
+  } finally {
+    if (server) { await server.shutdown(); await new Promise(resolve => server.close(resolve)); }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('project notes and visits persist, are isolated, and do not conflict with revisions', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-phase1-'));
   const planFile = path.join(dir, 'notebook.json');
@@ -65,12 +83,12 @@ test('project notes and visits persist, are isolated, and do not conflict with r
     assert.equal((await (await fetch(url + '/api/plan')).json()).version, before.version);
     await stop(); await start();
     const restored = await post('/api/project-home', { projectId: id });
-    assert.equal(restored.notes[0].pinned, true); assert.equal(restored.notes[0].text, note.text); assert.deepEqual(restored.since.changes, []);
+    assert.equal(restored.notes[0].pinned, true); assert.equal(restored.notes[0].text, note.text); assert.ok(restored.since.details.includes(note.text)); assert.ok(restored.timeline.some(event => event.type === 'USER_NOTE')); assert.equal(restored.timeline.filter(event => event.type === 'MEGATASK_PROPOSED').length, 0, 'Notes never become work');
     const other = await post('/api/project-home', { projectId: b.project.id }); assert.equal(other.since.firstVisit, true); assert.deepEqual(other.notes, []);
     const latest = a.revisions.at(-1);
     const draft = { title: 'Validation change', direction: latest.direction, state: latest.state, closed: latest.closed, open: latest.open };
     await post('/api/revisions', { projectId: id, version: before.version, draft });
-    const changed = await post('/api/project-home', { projectId: id }); assert.deepEqual(changed.since.changes, ['1 new Living Plan revision']);
+    const changed = await post('/api/project-home', { projectId: id }); assert.ok(changed.since.changes.includes('1 new Living Plan revision')); assert.ok(changed.timeline.some(event => event.type === 'PLAN_REVISION' && event.reference.planRevisionId === 3));
     await post('/api/notes', { projectId: id, action: 'delete', id: note.id });
     assert.deepEqual((await post('/api/project-home', { projectId: id })).notes, []);
     assert.equal((await post('/api/project-home', { projectId: b.project.id })).since.firstVisit, true);

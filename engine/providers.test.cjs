@@ -3,7 +3,34 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { launchSpec, executable } = require('./providers.cjs');
+const { launchSpec, executable, providerEnvironment } = require('./providers.cjs');
+const inherited = { PATH: 'preserved-path', CODEX_THREAD_ID: 'parent-session' };
+const windowsEnv = providerEnvironment('codex', inherited, 'win32');
+assert.deepEqual(inherited, { PATH: 'preserved-path', CODEX_THREAD_ID: 'parent-session' }, 'Do not mutate the host environment');
+assert.equal(windowsEnv.PATH, inherited.PATH);
+assert.equal(windowsEnv.CODEX_THREAD_ID, inherited.CODEX_THREAD_ID);
+const certificates = fs.readFileSync(windowsEnv.CODEX_CA_CERTIFICATE, 'utf8').match(/-----BEGIN CERTIFICATE-----[\s\S]+?-----END CERTIFICATE-----/g);
+assert.ok(certificates.length > 0);
+for (const certificate of certificates) assert.ok(new (require('node:crypto').X509Certificate)(certificate).ca, 'Only trust CA certificates');
+assert.equal(windowsEnv.NODE_TLS_REJECT_UNAUTHORIZED, undefined);
+assert.equal(providerEnvironment('codex', inherited, 'win32').CODEX_CA_CERTIFICATE, windowsEnv.CODEX_CA_CERTIFICATE);
+for (const key of ['CODEX_CA_CERTIFICATE', 'SSL_CERT_FILE']) {
+  const explicit = { ...inherited, [key]: 'configured-custom-ca.pem' };
+  assert.deepEqual(providerEnvironment('codex', explicit, 'win32'), explicit, 'Respect the operator CA configuration');
+}
+for (const provider of ['antigravity', 'grok']) assert.deepEqual(providerEnvironment(provider, inherited, 'win32'), inherited);
+assert.deepEqual(providerEnvironment('codex', inherited, 'linux'), inherited);
+if (process.platform === 'win32') {
+  const actual = { PATH: process.env.PATH, CODEX_CA_CERTIFICATE: 'operator-ca.pem' };
+  const effective = providerEnvironment('codex', actual);
+  assert.equal(effective.CODEX_CA_CERTIFICATE, actual.CODEX_CA_CERTIFICATE);
+  for (const directory of actual.PATH.split(';')) {
+    const shell = path.join(directory, 'pwsh.exe');
+    let present = false; try { fs.lstatSync(shell); present = true; } catch {}
+    const denied = /WindowsApps/i.test(directory) && present && require('node:child_process').spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'], { windowsHide: true, stdio: 'ignore', timeout: 2000 }).status !== 0;
+    assert.equal(effective.PATH.split(';').includes(directory), !denied, 'Exclude only Store shell paths denied to the current account');
+  }
+}
 const { parseUsage, readAntigravity } = require('./antigravity.cjs');
 const { createAskStream } = require('./runner.cjs');
 const { pickWorker } = require('./orchestrator.js');

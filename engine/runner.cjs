@@ -4,8 +4,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
-const { launchSpec } = require('./providers.cjs');
+const { launchSpec, providerEnvironment } = require('./providers.cjs');
 const { resolveCliModel } = require('./model-routing.cjs');
+const { readJSON, validateResult, resultContract, reportExists } = require('./worker-result.cjs');
 
 function which(cmd) {
   const pathEnv = process.env.PATH || '';
@@ -43,7 +44,7 @@ function parseArgs(argv) {
     if (args.length !== 2 || !args[1]) throw new Error('--job-file requires one input file');
     const job = JSON.parse(fs.readFileSync(args[1], 'utf8'));
     if (!job || typeof job !== 'object' || Array.isArray(job)) throw new Error('Worker job input must be an object');
-    const fields = ['folder', 'result', 'title', 'detail', 'worker', 'attempt', 'slice', 'kind'];
+    const fields = ['folder', 'result', 'title', 'detail', 'worker', 'attempt', 'slice', 'kind', 'structuredResultPath', 'exitPath', 'megaTaskId', 'subTaskId', 'resultId'];
     for (const key of fields) {
       if (job[key] != null && typeof job[key] !== 'string') throw new Error('Worker job ' + key + ' must be a string');
       opts[key] = job[key] || '';
@@ -72,7 +73,7 @@ function parseArgs(argv) {
   return opts;
 }
 
-function promptFor(opts) {
+function basePromptFor(opts) {
   if (opts.kind === 'audit') return [
     'You are the Planwharf audit worker. Inspect only the requested project and assess the current request.',
     'Do not implement or modify project source, user data, notebooks or branches. Do not push, merge or dispatch other workers. Save findings as an audit report beside the assigned result file.',
@@ -125,6 +126,10 @@ function optsLine(key, value) {
   return value ? `${key}: ${value}` : '';
 }
 
+function promptFor(opts) {
+  return [basePromptFor(opts), resultContract(opts)].filter(Boolean).join('\n\n');
+}
+
 function isProcessAlive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
   try {
@@ -140,7 +145,11 @@ function killWorker(pid) {
   if (!isProcessAlive(pid)) return false;
   if (process.platform === 'win32') {
     const { spawnSync } = require('node:child_process');
-    spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true, timeout: 8000 });
+    const killed = spawnSync('taskkill', ['/F', '/T', '/PID', String(pid)], { windowsHide: true, timeout: 8000 });
+    if (killed.status !== 0 && isProcessAlive(pid)) {
+      const native = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', path.join(__dirname, 'terminate-tree.ps1'), '-RootProcessId', String(pid)], { windowsHide: true, timeout: 15000 });
+      if (native.status !== 0) return false;
+    }
     return !isProcessAlive(pid);
   }
   try { process.kill(-pid, 'SIGTERM'); } catch (_) {
@@ -167,7 +176,7 @@ function askPrompt(info) {
     'Fetching git objects and updating inspection refs is allowed. Do not implement the job yourself. Do not push, merge, reset, checkout or overwrite work unless that specific action is requested. Report authentication or access failures precisely; do not claim a linked repo is unreadable without checking.',
     folder ? `Project folder: ${folder}. Inspect the complete project, including nested files and git worktrees.` : 'No accessible local folder is linked. GitHub inspection can still use the linked repository.',
     github ? `GitHub repository: ${github}. Use authenticated access, including when it is private.` : 'No GitHub repository is linked.',
-    'The briefing includes every registered project folder and GitHub URL. You may inspect those linked locations for coordination. Local uncommitted changes are separate from commits ahead/behind GitHub. Compare the stated branch and refreshed remote SHA; never use old tracking refs as proof of current GitHub state.',
+    'The briefing names registered projects for recipient selection. Inspect only the selected project unless the current request explicitly names another project. Local uncommitted changes are separate from commits ahead/behind GitHub. Compare the stated branch and refreshed remote SHA; never use old tracking refs as proof of current GitHub state.',
     focus ? `They are asking about ${focus}.` : '',
     'CURRENT REQUEST is authoritative for this turn: use its explicit project ID and exact text. If it contains a new task ID, that is a fresh task awaiting approval. Do not describe a previous job or checkpoint as if it performed the current request; verify task IDs and dispatch receipts. Resume applies only to an explicit resume command for the same job.',
     'LIVE STATE is a briefing of what the notebook already thinks. Do not recite STATUS labels, file counts, or waiting-for lines as the answer.',
@@ -178,11 +187,12 @@ function askPrompt(info) {
     info && info.allowActions === false ? 'This request is an internal planning/Grill query: actions are disabled. Follow the requested answer format exactly; do not wrap it in a dispatch envelope.' : '',
     info && info.skillsPrompt ? info.skillsPrompt : '',
     'Do not invent workers that are not in the briefing.',
+    'Respect each model allowed roles in the briefing. Orchestrator-only models coordinate; Worker permission is required for implementation or research; Reviewer permission is required for audits. Technical suitability never overrides the user role permissions.',
     'Explicit project commands are executed before you speak. Ordinary work requests and mentions of start/resume inside discussion do not automatically dispatch implementation workers.',
     'BRIEFING:',
-    JSON.stringify(briefing, null, 2),
+    JSON.stringify(briefing),
     'RECENT CHAT:',
-    JSON.stringify(history, null, 2),
+    JSON.stringify(history),
     'USER:',
     info && info.question ? String(info.question).trim() : ''
   ].filter(item => item !== '').join('\n\n');
@@ -218,6 +228,7 @@ function dropThinkingPrefix(answer, thinking) {
 function parseAskLine(acc, row) {
   if (!acc || typeof acc !== 'object') return acc;
   if (!row || typeof row !== 'object') return acc;
+  if (row.type === 'turn.completed' && row.usage && Number.isSafeInteger(row.usage.input_tokens) && Number.isSafeInteger(row.usage.output_tokens)) acc.tokens = { input: row.usage.input_tokens, output: row.usage.output_tokens, ...(Number.isSafeInteger(row.usage.cached_input_tokens) ? { cachedInput: row.usage.cached_input_tokens } : {}) };
   if (row.event === 'step_update' && row.step_update) {
     const step = row.step_update;
     if (step.step_type === 'agent_response' && typeof step.text_delta === 'string') acc.answer += step.text_delta;
@@ -289,7 +300,7 @@ function createAskStream() {
     }
     const thinking = String(acc.thinking || '').trim();
     const answer = dropThinkingPrefix(acc.answer, thinking);
-    return { thinking, answer, ms: acc.ms, ...(acc.failure ? { failure: acc.failure, error: acc.error } : {}) };
+    return { thinking, answer, ms: acc.ms, ...(acc.tokens ? { tokens: acc.tokens } : {}), ...(acc.failure ? { failure: acc.failure, error: acc.error } : {}) };
   }
   return { push, finish, acc };
 }
@@ -331,12 +342,12 @@ function askOrchestrator(info) {
   const work = cwd || fs.mkdtempSync(path.join(os.tmpdir(), 'pw-ask-'));
   let spec;
   try { spec = launchSpec(info.model, work, askPrompt(info), true); }
-  catch (error) { return Promise.resolve({ answer: error.message, thinking: '', ms: 0 }); }
+  catch (error) { return Promise.resolve({ answer: error.message, thinking: '', ms: 0, failure: 'launch' }); }
   const onProgress = typeof info.onProgress === 'function' ? info.onProgress : null;
   const started = Date.now();
   return new Promise(resolve => {
     abortAsk();
-    const child = spawn(spec.command, spec.args, { cwd: work, windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+    const child = spawn(spec.command, spec.args, { cwd: work, env: providerEnvironment(spec.adapter || spec.provider), windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
     askChild = child;
     const stream = createAskStream();
     let settled = false;
@@ -368,10 +379,12 @@ function askOrchestrator(info) {
       if (out.failure) out.answer = `${spec.provider} CLI failed (${out.failure}): ${out.error}${out.answer ? '\n\nPartial response:\n' + out.answer : ''}`;
       if (!out.answer && (errorOrCode || stderr)) out.answer = `${spec.provider} CLI failed: ${stderr.trim() || String(errorOrCode)}`;
       if (!Number.isFinite(out.ms)) out.ms = Date.now() - started;
+      out.processExit = Number.isInteger(errorOrCode) ? errorOrCode : null;
+      if (errorOrCode || out.failure) out.failure ||= 'process';
       resolve(out);
     };
     child.on('error', done);
-    child.on('close', done);
+    child.on('close', (code, signal) => done(code === null ? new Error(signal || 'Provider process terminated') : code));
     writePrompt(child, spec, done);
   });
 }
@@ -387,7 +400,9 @@ function spawnWorker(info) {
     title: (info.job && info.job.title) || '', detail: (info.job && info.job.detail) || '',
     worker: (info.worker && (info.worker.label || info.worker.id)) || 'worker',
     attempt: info.attemptId || '', slice: info.slice || (info.job && info.job.slice) || '',
-    kind: (info.job && info.job.kind) || '', model: info.worker
+    kind: (info.job && info.job.kind) || '', model: info.worker,
+    structuredResultPath: info.structuredResultPath || '', exitPath: info.exitPath || '',
+    megaTaskId: info.megaTaskId || '', subTaskId: info.subTaskId || '', resultId: info.resultId || ''
   }), { encoding: 'utf8', flag: 'wx' });
   const logFd = fs.openSync(logPath, 'a');
   try {
@@ -408,6 +423,7 @@ function run(argv = process.argv) {
     process.exitCode = 1;
     return;
   }
+  if (opts.structuredResultPath) fs.writeFileSync(opts.exitPath + '.process.json', JSON.stringify({ pid: process.pid, attemptId: opts.attempt, createdAt: new Date().toISOString() }) + '\n');
   let spec;
   try { spec = launchSpec(opts.model, opts.folder, promptFor(opts), false, opts.kind === 'research'); }
   catch (error) {
@@ -419,10 +435,10 @@ function run(argv = process.argv) {
   let finalStatus = null;
   let settled = false;
   let pending = '';
-  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'inherit'] });
+  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: providerEnvironment(spec.adapter || spec.provider), windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'inherit'] });
   child.stdout.on('data', chunk => {
     process.stdout.write(chunk);
-    if (spec.provider !== 'antigravity') return;
+    if ((spec.adapter || spec.provider) !== 'antigravity') return;
     pending += String(chunk);
     const lines = pending.split(/\r?\n/); pending = lines.pop() || '';
     for (const line of lines) {
@@ -440,8 +456,18 @@ function run(argv = process.argv) {
     if (settled) return;
     settled = true;
     if (pending.trim()) { try { const row = JSON.parse(pending); if (row.event === 'result' && row.result) finalStatus = row.result.status; } catch (_) {} }
-    const reportedFailure = spec.provider === 'antigravity' && finalStatus !== 'SUCCESS';
+    const reportedFailure = (spec.adapter || spec.provider) === 'antigravity' && finalStatus !== 'SUCCESS';
     const exitCode = code == null || (code === 0 && reportedFailure) ? 1 : code;
+    if (opts.structuredResultPath) {
+      const result = readJSON(opts.structuredResultPath);
+      const identity = { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId };
+      const valid = validateResult(result, identity) && (opts.kind !== 'research' || result.status !== 'COMPLETE' || reportExists(result, opts.folder));
+      fs.writeFileSync(opts.exitPath, JSON.stringify({ attemptId: opts.attempt, exitCode, signal, provider: spec.provider, model: spec.model, createdAt: new Date().toISOString() }) + '\n');
+      const status = valid && (result.status !== 'COMPLETE' || exitCode === 0) ? result.status : 'FAILED';
+      patchStatus(opts.result, status, { worker: opts.worker, attempt: opts.attempt, exitCode, reason: valid ? 'Structured result and provider exit recorded.' : 'Missing or invalid structured worker result.' });
+      process.exitCode = status === 'COMPLETE' ? 0 : 1;
+      return;
+    }
     if (exitCode === 0) {
       patchStatus(opts.result, 'COMPLETE', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : 'worker exit 0' });
       process.exitCode = 0;

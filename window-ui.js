@@ -1,8 +1,31 @@
 'use strict';
 (() => {
-  const view = 'planwharf';
+  const nativeWindow = new URLSearchParams(location.search).get('window');
+  const view = nativeWindow === 'orchestrator' ? 'orchestrator' : 'planwharf';
   const id = crypto.randomUUID();
   window.PlanwharfChatSessionId = crypto.randomUUID();
+  window.PlanwharfRunExecution = async (action, row) => {
+    if (!row?.id) throw new Error('Select the target project.');
+    await window.PlanwharfFocusReady;
+    const target = { projectId: row.id, ...(row.megaTaskId ? { megaTaskId: row.megaTaskId } : {}) };
+    if (action === 'resume' && row.megaTaskId) {
+      const choices = row.resumableCheckpoints || [];
+      let cp = choices[0];
+      if (choices.length > 1) {
+        const chosen = window.prompt('Choose checkpoint number:\n' + choices.map((item, index) => `${index + 1}. ${item.summary} (${item.createdAt})`).join('\n'));
+        cp = choices[Number(chosen) - 1];
+      }
+      if (!cp) throw new Error('Choose an explicit checkpoint to resume.');
+      target.megaTaskId = cp.megaTaskId; target.checkpointId = cp.id;
+    }
+    const send = value => fetch(`/api/orchestrator/${action}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+    let response = await send(target);
+    if (response.status === 409) {
+      const result = await response.clone().json();
+      if (result.requiresConfirmation && window.confirm(`${result.reason}\n${(result.diff?.changes || ['Repository changes require review.']).join('\n')}\nContinue remaining work?`)) response = await send({ ...target, confirmChanges: true });
+    }
+    return response;
+  };
   const control = document.getElementById('watch-window');
   const projectView = document.getElementById('project-view');
   const orchestratorView = document.getElementById('orchestrator-view');
@@ -18,7 +41,7 @@
     const intro = document.getElementById('project-lede');
     if (intro) intro.textContent = activeView === 'orchestrator' ? 'Orchestrator chat, workers, and provider usage.' : 'Goal, progress, current work, next action, and your notes.';
     if (control) {
-      control.textContent = activeView === 'planwharf' ? 'Show Orchestrator' : 'Show Planwharf';
+      control.textContent = nativeWindow ? (view === 'planwharf' ? 'Open Orchestrator' : 'Open Planwharf') : activeView === 'planwharf' ? 'Show Orchestrator' : 'Show Planwharf';
       control.setAttribute('aria-pressed', String(activeView === 'orchestrator'));
     }
     if (!initial) {
@@ -27,7 +50,7 @@
     }
     window.dispatchEvent(new CustomEvent('planwharf-view', { detail: activeView }));
   }
-  control?.addEventListener('click', () => showView(activeView === 'planwharf' ? 'orchestrator' : 'planwharf'));
+  control?.addEventListener('click', async () => { if (nativeWindow) { try { await post(view === 'planwharf' ? '/api/orchestrator/window' : '/api/planwharf/window', {}); } catch (error) { document.getElementById('toast').textContent = error.message; } } else showView(activeView === 'planwharf' ? 'orchestrator' : 'planwharf'); });
   window.addEventListener('hashchange', () => showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true));
   showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true);
   const header = document.querySelector('.topbar');
@@ -39,9 +62,44 @@
     observer.observe(header);
     if (controls) observer.observe(controls);
   }
+  const notificationsKey = 'planwharf_local_notifications';
+  let notificationEventsPrimed = false;
+  const notificationButton = document.createElement('button');
+  notificationButton.type = 'button'; notificationButton.className = 'secondary compact';
+  const notificationEnabled = () => localStorage.getItem(notificationsKey) === 'true';
+  const labelNotifications = () => { notificationButton.textContent = `Notifications: ${notificationEnabled() ? 'On' : 'Off'}`; };
+  if ('Notification' in window) {
+    document.getElementById('app-quit')?.before(notificationButton); labelNotifications();
+    notificationButton.addEventListener('click', async () => {
+      const enabled = !notificationEnabled();
+      const permission = enabled ? await Notification.requestPermission() : Notification.permission;
+      localStorage.setItem(notificationsKey, String(enabled && permission === 'granted')); labelNotifications();
+    });
+    window.addEventListener('storage', labelNotifications);
+    window.addEventListener('planwharf-evidence', event => {
+      const seen = JSON.parse(localStorage.getItem('planwharf_notification_events') || '[]');
+      for (const milestone of window.PlanwharfNotifications.important(event.detail || [])) {
+        if (seen.includes(milestone.id)) continue;
+        seen.push(milestone.id);
+        if (notificationEventsPrimed && notificationEnabled() && Notification.permission === 'granted') {
+          try { new Notification('Planwharf', { body: milestone.summary.slice(0, 250), tag: milestone.id }); } catch { /* Platform may not allow native notifications in app windows. */ }
+        }
+      }
+      localStorage.setItem('planwharf_notification_events', JSON.stringify(seen.slice(-200)));
+      notificationEventsPrimed = true;
+    });
+  }
   let focusSeen = 0;
   window.addEventListener('planwharf-project', event => {
     try { localStorage.setItem('planwharf_chat_project', event.detail); } catch { /* The recipient can also be selected in chat. */ }
+    const projectId = event.detail;
+    if (window.PlanwharfFocusedProjectId === projectId) return;
+    window.PlanwharfFocusedProjectId = projectId;
+    window.PlanwharfFocusReady = (window.PlanwharfFocusReady || Promise.resolve()).catch(() => {}).then(async () => {
+      const response = await fetch('/api/focus', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId }) });
+      if (!response.ok) throw new Error('The selected project could not be synchronized with the backend.');
+    });
+    window.PlanwharfFocusReady.catch(() => {});
   });
   document.addEventListener('click', async event => {
     const button = event.target.closest('[data-copy-output], [data-copy-conversation]');
@@ -92,6 +150,20 @@
     const version = skillsVersion;
     try { const response = await fetch('/api/skills'); const data = response.ok ? await response.json() : null; if (data && !skillsSaving && version === skillsVersion) displaySkills(data); } catch {}
   }
+  function displayProviderStatus(data) {
+    const status = document.getElementById('provider-models-status');
+    if (!status) return;
+    if (data.checking) { status.textContent = 'Checking provider model catalogs for the current login...'; return; }
+    const providers = data.providers || [data];
+    status.textContent = providers.map(provider => {
+      const name = provider.label || provider.providerId || 'Provider';
+      if (provider.status === 'disabled') return `${name}: provider disabled.`;
+      const checked = provider.checkedAt ? ` Last checked: ${skillsDate(provider.checkedAt)}.` : '';
+      return provider.status === 'current'
+        ? `${name}: ${(provider.ids || []).length} exact models listed for the current login.${checked}`
+        : `${name}: availability unread. ${provider.reason || 'No current catalog check recorded.'}${checked} Previous availability is retained.`;
+    }).join(' ');
+  }
   async function refreshProviderStatus() {
     const status = document.getElementById('provider-models-status');
     if (!status || document.getElementById('provider-models-refresh')?.disabled) return;
@@ -99,7 +171,7 @@
       const response = await fetch('/api/models/status');
       if (!response.ok) return;
       const data = await response.json();
-      status.textContent = data.checking ? 'Checking Grok models for the active CLI login...' : data.status === 'current' ? `Grok exact models verified for the active CLI login: ${data.ids.join(', ')}.` : data.reason || 'Grok model availability has not been verified yet.';
+      displayProviderStatus(data);
     } catch {}
   }
   document.getElementById('matt-skills-enabled')?.addEventListener('change', async event => {
@@ -119,10 +191,10 @@
   document.getElementById('provider-models-refresh')?.addEventListener('click', async event => {
     event.target.disabled = true;
     const status = document.getElementById('provider-models-status');
-    status.textContent = 'Checking exact Grok models for the active CLI login...';
+    status.textContent = 'Checking provider model catalogs for the current login...';
     try {
       const data = await post('/api/models/refresh', {});
-      status.textContent = data.providerModels.status === 'current' ? `Grok model list refreshed: ${data.providerModels.ids.join(', ')}. Availability and model enablement are separate.` : data.providerModels.reason;
+      displayProviderStatus(data.providerModels);
       window.dispatchEvent(new CustomEvent('planwharf-view', { detail: activeView }));
     } catch (error) { status.textContent = error.message; }
     finally { event.target.disabled = false; }

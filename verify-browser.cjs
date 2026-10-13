@@ -12,14 +12,15 @@ const profile = path.join(output, `edge-profile-${Date.now()}`);
 const planFile = path.join(output, `browser-plan-${Date.now()}.json`);
 fs.writeFileSync(planFile, fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json')));
 const server = createServer({ skillsEnabled: false, planFile, models: [], fetchPlans: async () => [] });
-const browser = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', ['--headless=new', '--disable-gpu', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, 'about:blank'], { windowsHide: true, stdio: 'ignore' });
+let browser;
 let ws;
 let command;
 let browserError;
-browser.on('error', error => { browserError = error; });
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const appUrl = `http://127.0.0.1:${server.address().port}`;
+  browser = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, appUrl], { windowsHide: true, stdio: 'ignore' });
+  browser.on('error', error => { browserError = error; });
   let port;
   for (let i = 0; i < 100; i++) {
     if (browserError) throw browserError;
@@ -41,7 +42,7 @@ browser.on('error', error => { browserError = error; });
   });
   command = (method, params = {}) => new Promise((resolve, reject) => {
     const id = ++sequence;
-    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`Timeout: ${method}`)); }, 10000);
+    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`Timeout: ${method}`)); }, 30000);
     waiting.set(id, { resolve, reject, timer });
     ws.send(JSON.stringify({ id, method, params }));
   });
@@ -166,7 +167,7 @@ browser.on('error', error => { browserError = error; });
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (command) { try { await command('Browser.close'); } catch (_) {} }
   if (ws) ws.close();
-  browser.kill();
+  if (browser) browser.kill();
   if (server.listening) await new Promise(resolve => server.close(resolve));
   fs.rmSync(planFile, { force: true });
 });

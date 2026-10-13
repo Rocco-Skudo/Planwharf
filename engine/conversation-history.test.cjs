@@ -51,7 +51,7 @@ async function main() {
   orchestra = make();
   const asked = await orchestra.ask('A conversation followup.');
   assert.equal(asked.ok, true);
-  assert.deepEqual(captured[0].state.history, chronological.map(turn => ({ user: turn.question, orchestrator: turn.answer })), 'All 45 previous exchanges reach the lead chronologically');
+  assert.deepEqual(captured[0].state.history, chronological.slice(-6).map(turn => ({ user: turn.question, orchestrator: turn.answer })), 'Latest six exchanges reach the lead chronologically; the archive remains complete');
   let saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   assert.equal(saved.asks.length, 46, 'A new answer preserves every exchange beyond 40');
   assert.deepEqual(saved.asks.slice(1), chronological.slice().reverse());
@@ -59,7 +59,7 @@ async function main() {
   blocked = true;
   const pending = orchestra.ask('A pending conversation followup.');
   await providerEntered;
-  assert.equal(captured[1].state.history.length, 46);
+  assert.equal(captured[1].state.history.length, 6);
   const stopped = await orchestra.abortAsk();
   assert.equal(stopped.aborted, true);
   assert.equal((await pending).cancelled, true);
@@ -73,13 +73,13 @@ async function main() {
   blocked = false;
   orchestra = make();
   await orchestra.ask('A conversation followup after reload.');
-  assert.equal(captured[2].state.history.length, 47, 'Full history survives reloading persisted state');
-  assert.equal(captured[2].state.history[0].user, chronological[0].question);
+  assert.equal(captured[2].state.history.length, 6, 'Bounded context survives reload while full history remains archived');
+  assert.equal(captured[2].state.history[0].user, chronological[41].question);
   assert.equal(captured[2].state.history.at(-1).orchestrator, 'Stopped.');
   saved = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
   assert.equal(saved.asks.length, 48);
   assert.deepEqual(saved.asks.slice(3), chronological.slice().reverse());
-  console.log('OK: all 45+ conversation exchanges preserved and sent chronologically across answer, cancellation, and reload.');
+  console.log('OK: all 45+ conversation exchanges preserved, with six recent turns sent chronologically across answer, cancellation, and reload.');
 }
 
 main().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {

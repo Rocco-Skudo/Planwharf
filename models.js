@@ -66,8 +66,8 @@
   /**
    * Checks whether a worker can claim the selected model.
    * If no model is enabled (or the list is empty), returns reason 'no model enabled'.
-   * Se il modello non è presente nella lista, restituisce reason 'model not present'.
-   * Se il modello è disabilitato (spento), restituisce reason 'model disabled'.
+   * If the model is disabled, returns reason 'model disabled'.
+   * If the model is disabled, returns reason 'model disabled'.
    * If the model is enabled, returns { ok: true, reason: null }.
    *
    * @param {Array<{id: string, label: string, enabled: boolean}>} models

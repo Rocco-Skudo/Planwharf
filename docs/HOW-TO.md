@@ -1,177 +1,163 @@
-# Planwharf: a practical guide for beginners and vibe coders
+# Planwharf: from installation to your first result
 
-Planwharf turns an idea into a project notebook, asks questions to clarify it, prepares work for coding workers, and shows their progress. Workers write files in the project's linked folder. The lead coordinates assignments and reviews results.
+See also the [quick start](QUICKSTART.md) and [complete user guide](USER-GUIDE.md), including model role permissions.
 
-This guide describes the version checked on 10 October 2026. The [verification report](VERIFICATION-REPORT-2026-10-10.md) includes successes, failures, logs, and the limits of those checks.
+This guide describes the completed current product scope, including durable execution, checkpoint recovery, usage, project history and export. Start with the steps below; use the later sections when you need more detail.
 
-## What you can do
+Planwharf is a local project notebook and coordinator for coding workers. You keep a goal and its decisions, clarify the work, review a proposed assignment, approve it, and follow the workers' results. The lead coordinates; workers implement jobs in the linked project folder.
 
-- Keep several projects and a history of decisions in one notebook.
-- Refine an idea with Grill, approve a plan, and dispatch actual coding workers.
-- Choose supported models from different providers and watch their processes and logs.
-- Stop work, keep a checkpoint on disk, and resume later.
-- Read provider quotas when the installed CLI and account return usable data.
+## First run: installation → project → approval → result
 
-Project selection and task splitting use local rules. Planwharf does not guarantee that a generated application works. **Evidence complete** means the execution produced completion evidence; test the resulting product yourself.
+1. **Download and install.** Clone the repository or download its ZIP from GitHub and extract the entire folder somewhere you can write to. Install Node.js and a Chromium browser such as Edge or Chrome separately. No `npm install` is needed. Keep `Planwharf.exe` with the rest of the application files.
+2. **Open Planwharf.** Double-click `Planwharf.exe`. You can open the notebook without a coding CLI. To generate answers or execute coding jobs, install and sign in to at least one supported CLI, then enable available models for the lead and workers.
+3. **Create a project.** Choose **Add project**, enter a name and a concrete goal, set **Projects folder** to an existing absolute directory such as `C:\Projects`, and click **Save projects folder**. Leave **Create a new subfolder using the project name** selected for a new project. Saving the project creates its folder, without starting workers.
+4. **Clarify the goal.** Use **Grill me** or **Grill with the docs** and save your answers. Include acceptance criteria, technology constraints, files to preserve, and how the result should be tested.
+5. **Prepare the work.** Use **Auto start**, or send a new work request for the selected project in the orchestrator chat. Review the proposed MegaTask: its goal, workers, smaller SubTasks, dependencies, and order. If enabled Matt skills have no complete cache yet, wait for the skills check, retry **Check skills updates**, or explicitly turn off **Use Matt skills for all models** before model requests.
+6. **Approve that assignment.** Choose **Approve MegaTask** or the approval action shown in **Next**. Some controls describe this as **Approve run**. New MegaTasks require approval in both Manual and Automatic modes. A proposal or chat reply alone does not mean a worker has started.
+7. **Check the result.** Follow **Now**, **Progress**, **Next**, and **Workers**. When the assignment completes, read the reported changes, tests, blockers, and next action, then open the output in the linked project folder and test it. Completion does not automatically create a commit, push to GitHub, or publish the product.
 
-## Requirements and installation
+For a small first goal, try: “Build a local HTML counter with increment and reset buttons. Keep it dependency-free, explain how to open it, and verify both buttons.” Use a new project folder for this experiment.
 
-On Windows, install Node.js and a Chromium browser such as Edge. There is no `npm install` step for Planwharf. Rebuilding `Planwharf.exe` requires the .NET Framework compiler used by `launch/build-exe.cmd`.
+## What Planwharf can do
 
-1. Clone or copy this repository into a folder you can write to.
-2. Open PowerShell there and run `node --version`.
-3. Install and sign in to at least one supported coding CLI.
-4. Check its available models and try a small request before using it for a project.
+| Capability | What you get |
+| --- | --- |
+| Project notebook | Several projects, Living Plan revisions, decisions, questions, and personal notes. |
+| Grill | Questions to clarify an idea, optionally using linked project documentation. |
+| Orchestration | A lead, explicit provider/model IDs, and an assignment you review before execution. |
+| Durable execution | A MegaTask split into SubTasks, with dependencies, attempts, structured results, and timeline milestones. |
+| Monitoring | Recorded processes, readable activity, raw output, completion evidence, and provider quota readings when available. |
+| Recovery | Stop, pause after current tasks, saved checkpoints, and explicit Resume using existing files and completed work. |
+| Repository inspection | Local folder checks and GitHub comparison using your existing GitHub CLI authentication. |
+| Research | A separately approved research assignment with a retained report and source protection for supported routes. |
 
-Commands checked on this PC:
+A **MegaTask** is the approved overall assignment. A **SubTask** is one piece of it. An **Attempt** is one actual worker execution; retrying a SubTask creates another Attempt while retaining the original evidence. A **Checkpoint** records where to continue.
 
-```powershell
-& "$env:USERPROFILE\.grok\bin\grok.exe" --help
-& "$env:USERPROFILE\.grok\bin\grok.exe" models
-& "$env:USERPROFILE\.gemini\bin\agy.exe" --help
-& "$env:USERPROFILE\.gemini\bin\agy.exe" models
-& "$env:USERPROFILE\.gemini\bin\agy.exe" -p /usage --output-format json
-codex exec --help
-```
+## Installation and startup
 
-Use each CLI's sign-in procedure. Planwharf does not create accounts or buy credits. It checks `%USERPROFILE%\.grok\bin\grok.exe` and `%USERPROFILE%\.gemini\bin\agy.exe`. For Codex, it resolves the actual native executable, including the Windows npm package binary, rather than using a batch or shell wrapper. You can override these locations with `PLANWHARF_GROK`, `PLANWHARF_ANTIGRAVITY`, and `PLANWHARF_CODEX`.
-
-## Launch and your first project
-
-Double-click `Planwharf.exe` or `planwharf.cmd`, or run:
+Windows is the verified platform. Node.js v22.23.3 was used in the latest launcher checks. On Windows you can also open PowerShell in the application folder and run:
 
 ```powershell
+node --version
 node .\planwharf.cjs
 ```
 
-The launcher opens one local window. Use **Show Orchestrator** / **Show Planwharf** to switch views on the same page while keeping the project selection, chat, and unsent draft. If a supported browser is missing, open the printed local address, usually `http://127.0.0.1:4173`. Opening `index.html` directly does not start the server that saves your work.
+The executable checks for Node.js before starting. If it cannot find it, it shows **“Node.js was not found. Install Node.js, then double-click Planwharf.exe again.”** Startup logs are saved per invocation under `%LOCALAPPDATA%\Planwharf\logs`; error dialogs include the log path. `PLANWHARF_LAUNCH_LOG_DIR` can select another log directory.
 
-Select **Add project**. Enter a name and a concrete goal. In **Projects folder**, enter an existing absolute base directory, for example `D:\benit\Desktop\Projects`, and click **Save projects folder**. The choice is kept on disk for this notebook and survives restarts.
+The server uses `127.0.0.1`, normally port 4173, and searches for another port if the default is occupied. An explicitly requested port must be free. A failed application-window launch attempts the default browser; the local address is also recorded in the startup log. Opening `index.html` directly does not start the server or file persistence.
 
-Leave **Create a new subfolder using the project name** checked to create the project's folder under that directory. For example, a project called `Weather app` gets `D:\benit\Desktop\Projects\Weather app`. If that name already exists, Planwharf creates `Weather app-2` and preserves the existing folder. Characters Windows cannot use in folder names are replaced. Saving the project creates and links the folder; it does not start workers.
+The launcher opens one window. **Show Orchestrator** / **Show Planwharf** switches views while preserving selection and draft. Both views share one backend. Closing the desktop window follows the same checkpoint and shutdown path as **Quit application**. Relaunching the same notebook reuses that backend. Use **Quit application** or Ctrl+C to save checkpoints and shut down. After updating the code, quit and relaunch to load the new backend.
 
-To use an existing project instead, uncheck that option and fill in **Existing project folder**. **Set place** changes the folder or GitHub link for an existing notebook project. Changing the base directory affects future projects; it does not move existing ones. To clear the saved default, empty **Projects folder** and save it. The settings live in `plan.json.settings.json`, or `<your-notebook-file>.settings.json` for a separate notebook.
+To rebuild the Windows launcher, run `launch\build-exe.cmd`; it requires the .NET Framework compiler. On Linux/macOS, use `node planwharf.cjs` or `sh planwharf.sh`.
 
-A useful goal describes both the product and acceptance criteria: “A Windows calculator with buttons, keyboard input, decimal arithmetic, division-by-zero handling, and a standalone executable.” Include technology constraints, files to preserve, and tests to run.
+## Project folders and a separate practice notebook
 
-Your `plan.json` may already contain personal projects. To inspect the calculator's isolated notebook instead:
+With **Create a new subfolder using the project name** enabled, an existing project name receives a numbered sibling such as `Counter-2`; its existing folder is preserved. To work on an existing repository, uncheck that option and enter **Existing project folder**. **Set place** updates a project's folder or GitHub URL. Changing **Projects folder** affects future projects and does not move existing ones. Removing a project removes its notebook entry and keeps its source folder.
+
+The default `plan.json` is personal local data and is excluded from Git. On first launch, Planwharf creates it from `fixtures/starter-notebook.json` only when it is absent. Explicit notebook paths must already contain valid data.
+
+For an isolated practice notebook, run the following in the application folder. Choose another name if `demo-notebook.json` already exists:
 
 ```powershell
-node .\planwharf.cjs --plan .\validation\calculator-run\notebook.json --attempts-dir .\validation\calculator-run\attempts --port 4180
+if (Test-Path -LiteralPath .\demo-notebook.json) { throw 'Choose a new notebook filename.' }
+Copy-Item -LiteralPath .\fixtures\starter-notebook.json -Destination .\demo-notebook.json
+node .\planwharf.cjs --plan .\demo-notebook.json --attempts-dir .\.attempts-demo --port 4180
 ```
 
-That notebook points to the relocated calculator. **Auto start** prepares a new job; do not press it if you only want to read existing evidence.
+Create a new project folder inside that notebook for your experiment. Keep tests separate from personal projects. You do not need the historical calculator notebook or its removed executable to try Planwharf.
 
-## Planning, Grill, and approval
+## Planning, approval, and chat
 
-**The plan** stores direction, current state, closed decisions, and open questions. Each saved revision preserves a snapshot. **What changed** shows the difference between revisions.
+**The plan** stores direction, current state, decisions, and open questions. Saving an edit appends a revision; previous revisions remain in history. **What changed** compares revisions. Personal notes can be added, pinned, and deleted independently of jobs. AI relevance is off by default; enable it only for notes you want included in the AI briefing. Home groups project milestones, shows what changed since your last visit and offers Export project for a readable JSON metadata backup. Export does not include source contents, raw logs or credentials, and automatic import is not supported.
 
-**Grill me** asks questions to define the project. **Grill with the docs** also uses documents from its linked folder. In **For you**, answer questions and decide whether to keep them open, close them with a decision, or change direction. Save your answers to create a revision.
+**Grill me** clarifies the idea; **Grill with the docs** also uses project documentation. In **For you**, answer questions and choose whether to keep them open, close them with a decision, or change direction. Saved answers are planning records. **Skip grill** is available when you are ready to proceed.
 
-The notebook and answer round work locally. Auto start can ask the lead to formulate questions, with local fallback behavior if the lead cannot respond. Saved answers are planning records, rather than technical verification of your code.
+A new work request prepares a fresh assignment using that request. It preserves older inactive tasks and checkpoints as history. Stop active work before replacing it with a different objective. **Resume** continues the same checkpointed assignment; it does not mean “start my new request.”
 
-**Auto start** inspects the folder, proposes Grill when required, and prepares a job. Review the proposed plan and workers, then choose **Approve run**. Jobs prepared by Auto start require that approval even in Automatic mode. Use **Skip grill** for a project or change the Grill settings in Functions when appropriate.
+The selected project and chat **Project recipient** stay synchronized. Check that selection before issuing a command. Questions about progress do not create jobs. Use explicit actions such as **Start**, **Stop**, **Approve**, **Resume**, or **Skip grill** for project operations. Approval belongs to the specific proposed MegaTask; an old approval cannot authorize a different assignment. Automatic mode does not bypass it, and backend restart does not silently launch unfinished jobs.
 
-**Manual** waits for job approval. **Automatic** can dispatch a manually added task without that wait. Approval of the plan in Planwharf is separate from permission prompts inside coding CLIs: workers run without interactive confirmations.
+The usual inspect/implement/test slices run in dependency order. Explicit independent slices may run in parallel, subject to the three-worker limit. Waiting dependencies do not launch workers. Saved results and completed SubTasks remain available when work is resumed.
 
-## Lead, providers, and workers
+## Leads, providers, models, and skills
 
-Choose the lead in Functions or the Orchestrator view. It receives a coordination prompt and full local/network tool access, without interactive permission prompts. Worker processes receive their own implementation prompts. The lead coordinates; its role no longer imposes a CLI plan/read-only restriction.
+Choose the lead in **Functions** or the Orchestrator view. The lead receives project and repository context plus coordination instructions. Its CLI has local/network tool access; workers receive implementation assignments. CLI implementation jobs run without repeated interactive permission prompts. Review the linked folder and proposed work before approval.
 
-Matt skills are enabled for every lead and worker by default. The visible startup status shows the checked `main` revision, update result and skill count. Use **Check skills updates** to retry a failed check, or turn off **Use Matt skills for all models** for subsequent model requests. The setting persists for this notebook. A complete cached revision remains available if an update fails; without one, enabled skills block model execution until checked successfully or explicitly disabled.
+`models.json` uses **schema 3** with a `providers` array. Each provider declares its ID, adapter, quota pool, and model entries. Each model's `cli` field is the exact model ID sent to that adapter. The installed execution adapters are:
 
-After switching Grok accounts, use **Refresh Grok models**. Planwharf queries the active CLI login and checks exact configured IDs. It displays authentication or policy failures and does not substitute models. A verified available model still needs to be enabled.
-
-A new work request such as “Audit Sayaku” prepares a new task using that exact message and waits for approval. Previous inactive tasks and checkpoints remain in history. Stop an active job before replacing it; use **Resume** only to deliberately continue the same checkpointed job. The Workers section starts clean when the page opens. Filters select project, session and state; its legend counts active processes across all sessions, including ones hidden by the filters. **Copy output** appears beneath each generated answer.
-
-Every entry in `models.json` declares an exact `provider` and `cli` model ID. The runner launches the corresponding CLI with that ID. It rejects incompatible combinations and never silently replaces a GPT or Gemini model with Grok.
-
-Current configuration on this PC:
-
-| Provider | Verified models and status |
-| --- | --- |
-| Codex / ChatGPT | GPT-6 Astra, GPT-6 Luna, GPT-6 Sol, GPT-6.1 Sol, GPT-5.6 Luna, and GPT-5.5 completed small inference checks and are enabled. A real isolated orchestrator job used Astra as lead and Luna as worker. |
-| Antigravity / Gemini | Gemini 3.1 Pro High created and corrected the calculator; Gemini 3.8 Flash High participated in its review. Both are enabled. |
-| Grok | Grok 4.6 is listed by the CLI, but the calculator attempt received HTTP 403 for credits/spending limits. It is switched off by default. |
-| Unsupported older entries | GPT-5 and GPT-5 mini were explicitly rejected by Codex with this ChatGPT account. Other old Grok names were absent from its model listing. These entries show **Unavailable**. |
-
-“Verified” describes requests made with this account on that date. It is not a promise of future quota or entitlement. A catalog alone cannot prove model access: [official OpenAI documentation](https://developers.openai.com/siwc/token-sharing-open-source/codex-app-server) distinguishes a model catalog from a completed inference check. Probe logs are in `validation/provider-check`.
-
-Enabled models are eligible choices, rather than a requirement to run every model on every job. Selection considers task type, local assignment counters, provider quotas, and previous failed attempts. Simple inspection favors local models; implementation favors default models; difficult work favors premium models. Existing saved on/off choices override defaults. Use Functions to change those choices or select Astra as the lead.
-
-CLI options checked locally:
-
-| CLI | Worker | Lead |
+| Adapter | Coding CLI | Optional executable override |
 | --- | --- | --- |
-| Grok | `--always-approve --permission-mode auto --no-subagents -m MODEL` | Same permissions; coordination prompt and streamed response |
-| Antigravity | `--dangerously-skip-permissions --mode accept-edits --model MODEL` | Same permissions; coordination prompt |
-| Codex | `exec --dangerously-bypass-approvals-and-sandbox -m MODEL` | Same permissions; coordination prompt and JSON response |
+| `codex` | Codex | `PLANWHARF_CODEX` |
+| `antigravity` | Antigravity (`agy`) | `PLANWHARF_ANTIGRAVITY` |
+| `grok` | Grok | `PLANWHARF_GROK` |
 
-These flags have different effects. The Codex worker flag disables the sandbox as well as approvals. A worker prompt saying “stay inside this folder” does not create filesystem isolation. Link the intended project folder before approving a job.
+Install and authenticate the CLIs you intend to use. On Windows, executable overrides must point to native executables. Planwharf also checks the usual Grok and Antigravity locations under `%USERPROFILE%\.grok\bin` and `%USERPROFILE%\.gemini\bin`, and resolves Codex's native binary, including npm package installations.
 
-## Monitoring and chat
+A model label does not select a provider or grant account access. Enabled, available, eligible, and quota remaining are separate conditions. Planwharf rejects incompatible routes and reports account or launch failures without silently substituting another provider. Provider catalogs can refresh from the installed adapter; the current interface includes **Refresh Grok models**. A listed model is not proof of a successful inference with your account. Historical verification reports describe the account and date tested, rather than what every new user can access.
 
-### Check local and GitHub access
+An enabled model is a candidate, not a promise that every model will run on every job. Selection uses eligibility, available quota, task needs, and failure history. Legacy model `cost`, `limit`, and `used` values are local assignment counters. The current provider catalog is kept separately from provider quota readings; those counters are not subscription percentages or token billing.
 
-Use **Check repository** next to the project's folder/GitHub links. It checks the local directory and the linked GitHub repository using the existing GitHub CLI login. Private repositories work when that account has access. Run `gh auth status` to check the login, or `gh auth login` to authenticate.
+Matt skills are enabled by default for leads and workers. Startup checks the upstream revision and installs a complete catalog before activating it. A failed update retains a prior complete cache. If no complete cache exists, model execution waits for a successful check or an explicit opt-out. **Use Matt skills for all models** persists per notebook and applies to subsequent requests and launches.
 
-The status shows filesystem read/write access, GitHub visibility and account permissions, commits ahead/behind, and uncommitted paths. An uncommitted change is not a commit ahead of GitHub. The comparison fetches current objects into `refs/planwharf/inspection/*` without merging, pushing, checking out branches, or changing source files. If the local branch has never been published, the default GitHub branch is the explicitly labelled baseline. Offline/authentication failures, unrelated histories, and insufficient shallow history remain unknown rather than becoming false “in sync” results.
+## Progress, results, and quotas
 
-Before answering, the lead receives updated repository facts for the selected project and paths/URLs for all registered projects. It can inspect nested files, private GitHub contents, diffs, and remote metadata through its tools. The coordinator role remains separate from job implementation; it does not imply restricted filesystem access. Checks are cached for about one minute; the button forces a refresh. [Git's comparison documentation](https://git-scm.com/docs/git-rev-list) explains the commit counts. [GitHub CLI credential documentation](https://cli.github.com/manual/gh_auth_setup-git) describes authenticated Git access.
+Project Home shows **Goal**, **Progress**, changes **Since your last visit**, **Now**, **Next**, and your notes. Goal comes from the current Living Plan. While work runs, Next identifies active or pending work; while paused, it reflects the checkpoint; after completion, it uses the recorded result's next action.
 
-The dashboard shows assignments, PIDs, log paths, interpreted activity, quotas, and interventions. Ask the lead about progress. Explicit **Stop**, **Resume**, and **Approve** buttons make actions clear; the chat also recognizes commands through keyword rules.
+**Workers** initially filters to the selected project and current view session. Use the project, session, and state filters to see other attempts. The legend counts active workers even when filters hide them. A process ID, activity description, and validated completion result are separate evidence. Raw logs remain available unchanged. **Copy output** copies an answer; the conversation selector exposes retained earlier exchanges.
 
-Activity descriptions are inferred from logs and can be inaccurate. Some CLIs stay quiet until they finish. Check the actual process, log, and output files when a status looks doubtful. Dashboard monitoring currently depends on page polling; there is no independent always-running monitoring service.
+Phase 2 completion requires a valid structured result with matching execution identities and successful provider exit evidence. A bare exit code 0 or a free-form “done” message is insufficient. Results record changes, reported tests, blockers, and the next action. You should still test the resulting product against your acceptance criteria. Worker completion does not imply a Git commit, push, or deployment.
 
-**Worker discretion** leaves duration to the worker. **Finish by** sets a deadline. The next monitoring tick checks it and saves a checkpoint if work is incomplete. It is not a guaranteed timer while the server or monitoring is off.
+The backend monitors active work on a periodic timer while it remains running, including when the application window is closed. The interface also polls for updates. At the first scheduling check at or after **Finish by**, Phase 2 blocks new slices, stops active worker process trees, retains completed results and partial evidence, and saves a checkpoint. The check is periodic, not an exact-time guarantee; the usual background interval is four seconds and termination can take additional time. If all slices already have valid completion evidence, the assignment completes instead. A failed termination stays visible and is retried without launching more work.
 
-## Stop, Resume, and persistent checkpoints
+Provider cards report **REMAINING**, shared by models using the same quota pool. **REMAINING UNREAD** means no usable reading is available, not 0% or 100%. Exhausting one shared pool affects its models together. Account authentication, credits, model access, and quota readings can fail independently; consult the displayed reason.
 
-**Stop** terminates the worker process tree and saves the job, plan, and assignment in `checkpoints/ID.json`, alongside `orchestrator.json` in the attempts directory. Failure with no usable alternatives, inactivity, a deadline, and normal server shutdown also save checkpoints.
+## Stop, pause, Resume, and backups
 
-The UI shows **Paused**, **Checkpoint saved**, and **Resume**. Saved checkpoints have no expiry. Tests simulate decades, repeated ticks, and server restarts. Keep the disk files: deleting the attempts directory or losing the linked project folder removes information needed for recovery.
+| Action | Effect |
+| --- | --- |
+| **Stop** | Stops active project worker process trees and saves a checkpoint for remaining work. A failed termination is reported. |
+| **Stop worker** | Stops that implementation worker. Other active slices can finish; automatic replacement is suspended until explicit recovery. |
+| **Pause after current tasks** | Stops scheduling more slices, lets current workers finish, then saves a checkpoint. |
+| **Resume** | Continues a selected checkpoint with fresh attempts for remaining work; completed slices stay recorded. |
+| **Quit application** | Requests worker shutdown/checkpoint saving and closes the backend. |
 
-**Resume** checks that the checkpoint belongs to the current job, creates a fresh assignment using eligible models, and passes the saved plan. It resumes from existing files and instructions; it does not restore the interrupted CLI's internal memory or cursor. A missing model or exhausted quota can prevent progress.
+Resume verifies the assignment and checkpoint identity, originating plan revision, repository HEAD, and dirty-file evidence. Changed or uncomparable repository state can require explicit confirmation. If multiple checkpoints are available, select the one to resume. Another eligible lead can use the durable state without recovering the previous model's internal conversation.
 
-Closing the application window keeps the server and workers running. Relaunch Planwharf to reopen the same notebook and backend. **Quit application** or Ctrl+C saves checkpoints and shuts down. A power failure or forced process kill cannot execute normal shutdown; recovery can only use information already available on disk.
+Checkpoints have no expiry. Notebook settings live in `<notebook>.settings.json`; the default attempts directory is `.attempts-<notebook-name>` next to the notebook, unless overridden. Back up the notebook, settings, attempts directory, and linked project folders together. Forced termination or power loss can only recover information already saved to disk.
 
-Back up the notebook, its `.settings.json` file, the attempts directory, and the project folder together. A checkpoint already saved does not require an open browser.
+After a deadline checkpoint, explicit **Resume** authorizes remaining work beyond the original deadline; it does not immediately stop again at that expired time. Completed slices are retained and remaining slices receive fresh attempts. To set another Finish by time, prepare a new assignment with that deadline.
 
-## Real quotas and local counters
+## Local repositories, GitHub, and research
 
-**Provider usage** comes from provider responses. ChatGPT uses the local Codex login's usage windows; Grok reads billing through its local login; Gemini runs `agy -p /usage --output-format json` and reads numeric buckets from the Gemini Models group. The checked usage request reported `num_turns: 0` and no token use.
+**Check repository** verifies the linked local folder and compares it with the linked GitHub repository using your existing `gh` login. Private repositories require that account to have access. The check shows dirty paths and compared branches/commits; it fetches into dedicated inspection refs without merging, pushing, switching branches, or overwriting source files. Authentication failures and unrelated histories remain unknown instead of appearing “in sync.”
 
-Gemini displays weekly and five-hour windows and their reset times. Its headline quota uses the more restrictive window. Displayed percentages are rounded; exhaustion checks use the original numeric fraction. Antigravity's Claude/GPT-OSS group is separate from Gemini and is not treated as Gemini quota.
-
-**Unread / Not readable** means no verifiable reading is available. It does not mean 0% or 100%. Login problems, timeouts, or a changed response format can cause it. Usage is refreshed with a cache of roughly 45 seconds during updates.
-
-Model `cost`, `limit`, and `used` fields are local assignment counters, not money, tokens, or subscription percentages. A readable quota does not guarantee that a request will be accepted; the Grok 403 demonstrated that limitation.
-
-## Historical calculator example
-
-Workers created a Windows calculator through `createOrchestrator → spawnWorker → runner → agy`. It passed 15 independent GUI checks and five engine self-tests. Failed Grok attempts and the successful Gemini chain remain in the local `validation/calculator-run` evidence directory.
-
-The owner subsequently removed both calculator project folders. The executable is no longer installed. The preserved GUI harness requires restoring the calculator to the folder recorded in its isolated notebook before it can run again. Historical results do not imply a current executable download.
+A conversational research request proposes a separate research MegaTask. Review it and choose **Approve research MegaTask**. A completed research assignment requires its report artifact and successful execution evidence. Use **Read research report**, **Stop**, and **Resume** on its card. Source-protected research currently supports Codex's isolated workspace sandbox; other adapters are rejected for this workflow until equivalent protection exists.
 
 ## Troubleshooting
 
-| Symptom | What to check |
+| Symptom | Next step |
 | --- | --- |
-| Planwharf will not launch | Check `node --version`; start it from PowerShell to read the error. |
-| Port occupied | The launcher searches for a free port; you can request `--port 4180`. |
-| Cannot save projects folder | Use an existing absolute directory accessible to this Windows user. |
-| A project name already exists | A numbered sibling folder is created; existing content is preserved. |
-| Needs a folder | Link an existing absolute path with Set place, or create a new project subfolder. |
-| Waiting on you | Answer and save Grill, or use Skip grill. |
-| Plan ready | Review the plan and choose Approve run. |
-| No eligible worker | Enable an available model; check provider quotas and local counters. |
-| Unavailable | Inspect the stated reason. GPT-5 and GPT-5 mini are rejected with this account; enabling a label cannot grant access. |
-| Codex ENOENT / InvalidBatchScriptArg | Use the actual native Codex binary, not an npm shell script or batch proxy. Set `PLANWHARF_CODEX` if automatic discovery misses your installation. |
-| Grok HTTP 403 | Resolve account credits or spending limits before switching Grok on again. |
-| Gemini unread | Run `agy -p /usage --output-format json`; check login and CLI version. |
-| Paused after an error | Read attempts logs, fix the cause, then Resume. |
-| Resume rejected | Use the original notebook, project, and matching job; do not reuse a checkpoint for a different task. |
-| Worker appears idle | Check its log, process, and files; print-mode silence is not proof of a hang. |
-| Evidence complete but product broken | Run tests and try the product. Create a correction job with the observed failure. |
+| Node.js was not found | Install Node.js, then relaunch. Check `node --version` in PowerShell. |
+| Missing `planwharf.cjs` | Extract or clone the complete repository; keep the executable beside the application files. |
+| No application window | Read the latest startup log in `%LOCALAPPDATA%\Planwharf\logs` and try its local address. Quit an older backend before relaunching updated code. |
+| Notebook owner is not responding | Quit that instance and retry. A live owner is retained; avoid deleting its lock or killing unrelated processes. |
+| Explicit port occupied | Choose another port, or omit `--port` to allow default-port fallback. |
+| Cannot save projects folder | Use an existing absolute directory accessible to your Windows account. |
+| Waiting for Grill | Answer and save the questions, or choose **Skip grill**. |
+| Proposed MegaTask has not started | Review and approve that exact MegaTask, including in Automatic mode. |
+| Skills block model execution | Retry **Check skills updates**, or explicitly disable **Use Matt skills for all models**. |
+| No eligible worker / Unavailable | Check the model's exact route, CLI login, availability, enabled state, eligibility, and shared quota. |
+| Native CLI executable not found | Install the CLI or set its executable override to the native binary. |
+| Paused or failed | Read results and attempt logs, resolve the cause, then choose the matching checkpoint to **Resume**. |
+| Deadline reached | Review the saved partial results and checkpoint. Explicit **Resume** continues beyond the original deadline. |
+| Deadline termination failed | Check the reported live process and termination error. Scheduling stays paused while the backend retries. |
+| Resume requests confirmation | Review the changed plan/repository facts before continuing that checkpoint. |
+| Worker appears idle | Inspect its PID, raw log, and files; a quiet CLI is not proof that it has stalled. |
+| Completed assignment produces a broken product | Record the observed failure and prepare a new correction assignment with concrete acceptance tests. |
 
-When asking for help, provide the error, CLI/model, and attempts directory. Keep login tokens and authentication files private.
+When asking for help, include the startup error or attempt log, exact provider/model ID, and relevant notebook/attempts paths. Keep login tokens and authentication files private.
+
+## Technical details and verification
+
+Read the [Phase 2 execution contract](PLANWHARF-PHASE-2.md) for schemas, APIs, approval binding, and reconciliation. The [Phase 2.1 report](PLANWHARF-PHASE-2.1-ACCEPTANCE.md) records real provider acceptance; the [Phase 2.2 report](PLANWHARF-PHASE-2.2-ACCEPTANCE.md) covers the corrected Next state. The [startup verification report](STARTUP-VERIFICATION-2026-10-13.md) records executable and browser checks. The [10 October report](VERIFICATION-REPORT-2026-10-10.md) retains earlier historical evidence.
+
+Run `node validation/phase1-suite.cjs` for the repository's isolated engine and browser checks, and `node validation/launcher-smoke.cjs` for the Windows executable checks. These fixtures do not establish access to your provider accounts. Contributors should follow [AGENTS.md](../AGENTS.md), preserve personal data and raw execution evidence, and use isolated notebooks and attempts.

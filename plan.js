@@ -54,7 +54,7 @@
   function validateProject(data) {
     if (data?.home !== undefined) {
       const h = data.home;
-      if (!h || !Array.isArray(h.notes) || h.notes.length > 1000 || !h.notes.every(n => n && typeof n.id === 'string' && n.id && typeof n.text === 'string' && n.text.trim() && n.text.length <= 10000 && typeof n.createdAt === 'string' && Number.isFinite(Date.parse(n.createdAt)) && (n.pinned === undefined || typeof n.pinned === 'boolean')) || new Set(h.notes.map(n => n.id)).size !== h.notes.length) return false;
+      if (!h || !Array.isArray(h.notes) || h.notes.length > 1000 || !h.notes.every(n => n && typeof n.id === 'string' && n.id && typeof n.text === 'string' && n.text.trim() && n.text.length <= 10000 && typeof n.createdAt === 'string' && Number.isFinite(Date.parse(n.createdAt)) && (n.pinned === undefined || typeof n.pinned === 'boolean') && (n.aiRelevant === undefined || typeof n.aiRelevant === 'boolean')) || new Set(h.notes.map(n => n.id)).size !== h.notes.length) return false;
       if (h.lastVisit != null && (typeof h.lastVisit.viewedAt !== 'string' || !Number.isFinite(Date.parse(h.lastVisit.viewedAt)) || !Array.isArray(h.lastVisit.revisionIds) || !h.lastVisit.revisionIds.every(Number.isSafeInteger))) return false;
     }
     if (!data || data.schema !== 1 || typeof data.project?.id !== 'string' || !data.project.id.trim() || typeof data.project.name !== 'string' || !data.project.name.trim() || Object.keys(data.project).some(key => !['id', 'name', 'folder', 'github'].includes(key)) || ('folder' in data.project && !isFolderPath(data.project.folder)) || ('github' in data.project && !isGithubUrl(data.project.github)) || !Array.isArray(data.revisions) || !data.revisions.length || !Array.isArray(data.tasks)) return false;
@@ -279,9 +279,9 @@
   }
   function taskTiming(input) {
     if (!input || input.timing === undefined || input.timing === null || input.timing === '') return {};
-    if (input.timing !== 'deadline' && input.timing !== 'discretion') throw new Error('Scegli un termine o il tempo a discrezione del worker.');
+    if (input.timing !== 'deadline' && input.timing !== 'discretion') throw new Error('Choose a deadline or leave timing to the worker.');
     if (input.timing === 'discretion') return { timing: 'discretion' };
-    if (typeof input.deadlineAt !== 'string' || !Number.isFinite(Date.parse(input.deadlineAt))) throw new Error('Imposta l’orario di termine del task.');
+    if (typeof input.deadlineAt !== 'string' || !Number.isFinite(Date.parse(input.deadlineAt))) throw new Error('Set the task deadline.');
     return { timing: 'deadline', deadlineAt: new Date(input.deadlineAt).toISOString() };
   }
   function createTask(data, input) {

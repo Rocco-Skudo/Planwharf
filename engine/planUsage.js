@@ -101,7 +101,7 @@ function parseChatGptUsage(body) {
 
 function planExhausted(plans, name) {
   const row = (Array.isArray(plans) ? plans : []).find(item => item && item.id === name);
-  return Boolean(row && row.readable && row.exhausted);
+  return Boolean(row && row.readable && (row.exhausted || row.leftPct === 0 || row.pct === 100));
 }
 
 function readJson(file) {
@@ -282,5 +282,7 @@ module.exports = {
   unreadPlan,
   fetchPlanUsage,
   emptyPlans,
-  windowOf
+  windowOf,
+  readChatGpt,
+  readGrok
 };

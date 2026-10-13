@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
 const Plan = require('./plan.js');
 const { createAppWindows } = require('./engine/app-windows.cjs');
 const { createServer, readPlan } = require('./server.cjs');
@@ -36,8 +37,11 @@ function parseArgs(argv) {
       break;
     }
     else if (token === '--no-window') opts.noWindow = true;
-    else if (token === '--plan') opts.planFile = path.resolve(args[++i] || '');
-    else if (token === '--attempts-dir') opts.attemptsDir = path.resolve(args[++i] || '');
+    else if (token === '--plan' || token === '--attempts-dir') {
+      const value = args[++i];
+      if (!value || value.startsWith('--')) throw new Error(`${token} needs a path.`);
+      opts[token === '--plan' ? 'planFile' : 'attemptsDir'] = path.resolve(value);
+    }
     else if (token === '--port') {
       opts.port = Number(args[++i]);
       opts.portExplicit = true;
@@ -123,7 +127,7 @@ function findBrowser() {
 function findEdge() { return findBrowser(); }
 
 function listen(opts) {
-  const windows = opts.windows || createAppWindows({ open: (url, view) => openWindow(url, path.join(opts.attemptsDir, 'windows', view)) });
+  const windows = opts.windows || createAppWindows({ onWindowClosed: () => server.quitApp && server.quitApp(), open: (url, view) => openWindow(url, path.join(opts.attemptsDir, 'windows', view)) });
   const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, models: opts.models, fetchPlans: opts.fetchPlans, syncSkills: opts.syncSkills !== false, skillsEnabled: opts.skillsEnabled !== false, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk,
     appWindows: windows, quitApp: () => server.quitApp && server.quitApp(),
     openWatchWindow: url => windows.openView('orchestrator', url), openPlanWindow: url => windows.openView('planwharf', url) });
@@ -154,22 +158,34 @@ function listen(opts) {
   });
 }
 
-function openWindow(url, profileDir) {
-  const browser = findBrowser();
+function openDefaultBrowser(url) {
+  const child = process.platform === 'win32'
+    ? spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true })
+    : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' });
+  child.on('error', error => console.error('Open this view in your browser:', url, error.message));
+  child.planwharfExternalBrowser = true;
+  child.unref();
+  return child;
+}
+function openWindow(url, profileDir, { browser = findBrowser(), start = spawn, fallbackBrowser = openDefaultBrowser } = {}) {
   if (!browser) {
-    const child = process.platform === 'win32'
-      ? spawn('cmd.exe', ['/c', 'start', '', url], { detached: true, stdio: 'ignore', windowsHide: true })
-      : spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { detached: true, stdio: 'ignore' });
-    child.on('error', error => console.error('Open this view in your browser:', url, error.message));
-    child.unref();
-    return child;
+    return fallbackBrowser(url);
   }
   fs.mkdirSync(profileDir, { recursive: true });
   const opts = { stdio: 'ignore' };
   if (process.platform === 'win32') opts.windowsHide = false;
-  const child = spawn(browser, ['--app=' + url, `--user-data-dir=${profileDir}`], opts);
+  const testArgs = process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : [];
+  const child = start(browser, [...testArgs, '--no-first-run', '--no-default-browser-check', '--start-fullscreen', '--disable-background-mode', '--app=' + url, `--user-data-dir=${profileDir}`], opts);
   child.profileDir = profileDir;
-  child.on('error', error => console.error('Browser launch failed:', error.message));
+  let fallback = false;
+  const recover = reason => {
+    if (fallback || child.planwharfClosing) return;
+    fallback = true;
+    console.error(`Application window failed (${reason}). Opening your default browser: ${url}`);
+    fallbackBrowser(url);
+  };
+  child.on('error', error => recover(error.message));
+  child.on('exit', code => { if (code !== null && code !== 0) recover(`browser exit ${code}`); });
   return child;
 }
 
@@ -197,27 +213,55 @@ async function runCli(opts) {
 async function acquireApp(opts) {
   fs.mkdirSync(opts.attemptsDir, { recursive: true });
   const lockFile = path.join(opts.attemptsDir, 'app-instance.json');
-  for (let attempt = 0; attempt < 100; attempt++) {
+  const timeout = opts.ownerTimeoutMs || 10000;
+  const deadline = Date.now() + timeout;
+  const ownerId = randomUUID();
+  const removeUnchanged = raw => {
+    try { if (fs.readFileSync(lockFile, 'utf8') === raw) fs.unlinkSync(lockFile); }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  };
+  while (Date.now() < deadline) {
     try {
       const fd = fs.openSync(lockFile, 'wx');
-      fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, planFile: path.resolve(opts.planFile) }));
-      fs.closeSync(fd);
-      return { lockFile };
+      try { fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, ownerId, planFile: path.resolve(opts.planFile) })); }
+      finally { fs.closeSync(fd); }
+      return { lockFile, ownerId };
     } catch (error) { if (error.code !== 'EEXIST') throw error; }
-    let existing;
-    try { existing = JSON.parse(fs.readFileSync(lockFile, 'utf8')); } catch { await new Promise(resolve => setTimeout(resolve, 100)); continue; }
+    let existing, raw;
+    try {
+      raw = fs.readFileSync(lockFile, 'utf8');
+      existing = JSON.parse(raw);
+      if (!existing || !Number.isInteger(existing.pid) || existing.pid <= 0 || typeof existing.planFile !== 'string') throw new Error('Invalid application lock.');
+    } catch (error) {
+      if (error.code === 'ENOENT') continue;
+      if (raw !== undefined) {
+        try {
+          if (Date.now() - fs.statSync(lockFile).mtimeMs > Math.min(1000, timeout / 2)) {
+            // Keep broken startup evidence before removing only the unchanged lock.
+            fs.writeFileSync(`${lockFile}.invalid-${randomUUID()}`, raw, { flag: 'wx' });
+            removeUnchanged(raw);
+            continue;
+          }
+        } catch (failure) { if (failure.code !== 'ENOENT') throw failure; }
+      } else throw error;
+      await new Promise(resolve => setTimeout(resolve, 100)); continue;
+    }
     let alive = true;
     try { process.kill(existing.pid, 0); } catch (error) { alive = error.code !== 'ESRCH'; }
-    if (!alive) { fs.unlinkSync(lockFile); continue; }
+    if (!alive) { removeUnchanged(raw); continue; }
     if (existing.planFile !== path.resolve(opts.planFile)) throw new Error('This attempts directory belongs to another running notebook.');
     if (existing.url) {
-      const response = await fetch(existing.url + '/api/app', { signal: AbortSignal.timeout(2000) }).catch(() => null);
-      const app = response && response.ok ? await response.json() : null;
+      const app = await (async () => {
+        try {
+          const response = await fetch(existing.url + '/api/app', { signal: AbortSignal.timeout(Math.max(1, Math.min(1000, deadline - Date.now()))) });
+          return response.ok ? await response.json() : null;
+        } catch { return null; }
+      })();
       if (app && app.pid === existing.pid && app.planFile === path.resolve(opts.planFile) && app.attemptsDir === path.resolve(opts.attemptsDir)) return { existing };
     }
     await new Promise(resolve => setTimeout(resolve, 100));
   }
-  throw new Error('A Planwharf instance owns this notebook but is not responding.');
+  throw new Error(`A Planwharf instance owns this notebook but is not responding. Lock: ${lockFile}. Quit that instance and try again.`);
 }
 async function runApp(opts) {
   await readPlan(opts.planFile);
@@ -233,12 +277,19 @@ async function runApp(opts) {
   }
   let server, url;
   const release = () => {
-    try { if (JSON.parse(fs.readFileSync(ownership.lockFile, 'utf8')).pid === process.pid) fs.unlinkSync(ownership.lockFile); } catch {}
+    try { if (JSON.parse(fs.readFileSync(ownership.lockFile, 'utf8')).ownerId === ownership.ownerId) fs.unlinkSync(ownership.lockFile); } catch {}
   };
   try {
     ({ server, url } = await listen(opts));
-    fs.writeFileSync(ownership.lockFile, JSON.stringify({ pid: process.pid, planFile: path.resolve(opts.planFile), url }));
-  } catch (error) { release(); throw error; }
+    const temporary = `${ownership.lockFile}.${ownership.ownerId}.tmp`;
+    try {
+      fs.writeFileSync(temporary, JSON.stringify({ pid: process.pid, ownerId: ownership.ownerId, planFile: path.resolve(opts.planFile), url }), { flag: 'wx' });
+      fs.renameSync(temporary, ownership.lockFile);
+    } finally { try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; } }
+  } catch (error) {
+    if (server) await new Promise(resolve => server.close(resolve));
+    release(); throw error;
+  }
   let closing = false;
   const shutdown = async () => {
     if (closing) return;
@@ -253,7 +304,7 @@ async function runApp(opts) {
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
   if (!opts.noWindow) server.windows.openApp(url);
-  console.log(`Planwharf\n${url}\nOrchestrator: ${url}/#orchestrator\nPlan: ${opts.planFile}\nSwitch views with Show Orchestrator / Show Planwharf. Close the window to keep work running. Quit application or Ctrl+C to shut down.`);
+  console.log(`Planwharf\n${url}\nOrchestrator: ${url}/#orchestrator\nPlan: ${opts.planFile}\nDesktop launch opens one window. Use Show Orchestrator / Show Planwharf to switch views. Closing the desktop window saves checkpoints and quits. Quit application or Ctrl+C also shuts down.`);
   return { server, url };
 }
 
@@ -278,6 +329,7 @@ module.exports = {
   loadAttempts,
   findEdge,
   findBrowser,
+  openWindow,
   listen,
   main,
   runApp,

@@ -2,11 +2,50 @@
 
 A local project notebook and coordinator for real coding workers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution across Codex, Antigravity, and Grok.
 
-[Beginner guide](docs/HOW-TO.md) · [Verification report](docs/VERIFICATION-REPORT-2026-10-10.md)
+Planwharf is still under active development and is provided **as is**. Features and behavior may change, and bugs or limitations may remain. Feedback, development suggestions, and contributions are welcome. Please share bug reports and ideas through GitHub Issues.
+
+[Quick start](docs/QUICKSTART.md) | [Complete user guide](docs/USER-GUIDE.md) | [Project status](docs/PROJECT-STATUS.md) | [First project guide](docs/HOW-TO.md) · [Phase 2 execution contract](docs/PLANWHARF-PHASE-2.md) · [Startup verification](docs/STARTUP-VERIFICATION-2026-10-13.md)
+
+## Start here
+
+1. Download the complete application folder, install Node.js, and open `Planwharf.exe`.
+2. Choose **Add project**, write a concrete goal, and link a new or existing project folder.
+3. For AI work, authenticate a supported coding CLI and enable available lead/worker models. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
+4. Review the proposed MegaTask, workers, and dependencies. Choose **Approve MegaTask**; Automatic mode also requires approval of new work.
+5. Follow **Progress**, **Now**, **Next**, and **Workers**, then test the output in the project folder. Completion does not automatically commit, push, or publish it.
+
+The [first project guide](docs/HOW-TO.md) explains each step, a separate practice notebook, checkpoints, providers, and troubleshooting. The remaining README sections provide reference details.
+
+## Understand your project and AI work
+
+**Planwharf** answers "What is happening with my project?" Its Home shows the goal, completed work, current state, next action, notes and concise history. **Orchestrator** answers "What are the AIs doing?" It shows approved work, worker processes, exact provider/model identities, remaining quota and AI usage. Both read the same durable state.
+
+Supported local coding providers are Codex / ChatGPT, Grok CLI and Antigravity / Gemini. Use the providers you have: no provider is preferred behind the scenes. In Orchestrator, enable a provider and set each exact model's Allowed roles (Orchestrator, Worker, Reviewer), and choose an eligible orchestrator. These role flags are assignment restrictions: a Reviewer-only model cannot implement code, and an Orchestrator-only model cannot be dispatched as a worker or reviewer. Unsupported Orchestrator roles cannot be selected. The Model role filter shows each class or All roles. Search finds models even in a large catalog; **Show all models** expands a provider. These choices survive restart. An unavailable model is reported explicitly and never silently replaced.
+
+Quota always means **REMAINING** in the provider's shared pool. Every model sharing that pool sees the same value. Green is 75?100%, orange 50?74%, yellow 25?49%, and red 1?24%. Zero is red and **EXHAUSTED**; grey **REMAINING UNREAD** means the provider could not report a reliable value. Reset times appear when available. **AI usage** shows observed calls, attempts, durations and results; it is not a monetary estimate.
+
+Review and approve a MegaTask before workers execute its SubTasks. **Pause after current tasks** prevents new slices from starting while active work finishes. **Stop** terminates current workers and saves a checkpoint. Before **Resume**, Home previews repository and plan changes; changed or incompletely comparable state requires explicit confirmation. Resume retains completed slices, even if you choose a different orchestrator. Existing **Finish by** deadlines follow the checkpoint policy rather than a general scheduler.
+
+Project history groups execution events into milestones. Expand technical evidence for individual starts, results, checkpoints and Git observations. **Since your last visit** uses saved project data and local Git inspection; opening Home never invokes an AI. Notes stay notes: choose **AI relevant: Yes** only for guidance you want included in the briefing.
+
+Use **Export project** on Home to download readable JSON containing project metadata, revisions, notes, tasks, results, checkpoints, history and a Markdown summary. Source contents, raw worker logs and provider credentials are excluded. Export is for review and metadata backup; automatic import/restore is not supported. Keep the original notebook and attempts directory for full recovery.
+
+Optional **Notifications: On** requests local browser permission for completion, failures and saved checkpoints. Support depends on the OS/browser; notifications require an open UI and are off by default. No external notification service is used.
+
+Use **Quit application** to checkpoint and shut down safely. After updating application files, Quit and relaunch to load the new code. Closing the desktop window follows the same checkpoint and shutdown path.
 
 ## Requirements and launch
 
 Install Node.js and a Chromium browser such as Edge or Chrome. Planwharf has no npm dependencies. Install and authenticate the coding CLIs you want to use separately.
+
+For a first Windows launch after downloading from GitHub:
+
+1. Clone the repository or use **Code → Download ZIP** and extract the entire archive.
+2. Install Node.js separately if it is missing; the download does not include or install Node.js.
+3. Keep the application files together and double-click `Planwharf.exe` in the extracted folder. No `npm install` step is required.
+4. To run coding workers, separately install and sign in to the provider CLIs you want to use. They are not required just to open the notebook.
+
+The executable checks for Node.js before starting the application. If it cannot find it, it shows: **“Node.js was not found. Install Node.js, then double-click Planwharf.exe again.”** The dialog also includes a startup log path. If `planwharf.cjs` is missing, download and extract the complete application folder again.
 
 On Windows, double-click `Planwharf.exe` or `planwharf.cmd`, or run:
 
@@ -16,7 +55,11 @@ node .\planwharf.cjs
 
 To rebuild the Windows launcher, run `launch\build-exe.cmd`; it requires the .NET Framework compiler. On Linux/macOS, run `node planwharf.cjs` or `sh planwharf.sh`. Windows is the verified platform. If a browser cannot be launched, open the printed local address. Opening `index.html` directly does not start file persistence.
 
-The server binds to `127.0.0.1`, normally on port 4173, and chooses another port when necessary. The desktop launcher opens one application window. Use **Show Orchestrator** / **Show Planwharf** to switch views on the same page; the selected project, conversation, and unsent chat draft remain in place. Older Orchestrator links open this page with the dashboard selected. Relaunching the same notebook reuses its backend and focuses or reopens the application. Closing the window keeps the backend and workers alive. **Quit application** or Ctrl+C requests shutdown and checkpoint saving. Browser heartbeats expire after 15 seconds if close events are unavailable.
+`Planwharf.exe` is a launcher: keep it with the complete application folder, including `planwharf.cjs`, `engine`, and `fixtures`, and install Node.js on each computer. Startup diagnostics are saved per launch under `%LOCALAPPDATA%\Planwharf\logs`; an error dialog includes the log path. `PLANWHARF_LAUNCH_LOG_DIR` can select another log directory. Browser launch failures attempt to open the same notebook in the default browser.
+
+Closing and immediately reopening the application clears stale window state. If native focus fails, the launcher requests a new window instead of silently accepting an old heartbeat. Interrupted startup locks recover automatically while preserving malformed lock bytes. A live, unresponsive notebook owner is retained and reported within approximately ten seconds. After updating the application, use **Quit application** before relaunching so the backend loads the fixes. See [startup verification](docs/STARTUP-VERIFICATION-2026-10-13.md) for the isolated launcher and browser checks.
+
+The server binds to `127.0.0.1`, normally on port 4173, and chooses another port when necessary. Normal desktop launch opens one window with **Show Orchestrator** / **Show Planwharf** to switch views while preserving the draft and recipient. Both views share one backend. Older Orchestrator links open this page with the dashboard selected. Relaunching the same notebook reuses its backend and focuses or reopens the application. Closing the desktop window follows the same checkpoint and shutdown path as **Quit application**. **Quit application** or Ctrl+C requests shutdown and checkpoint saving. Browser heartbeats expire after 15 seconds if close events are unavailable.
 
 ## Start a project
 
@@ -35,7 +78,7 @@ Explicit notebook paths must already contain valid Planwharf data. The default `
 ## Notebook, revisions, and Grill
 
 - **Project Home** shows the current Living Plan goal, progress, changes since your last visit, current work, next known action, and personal notes. It renders without model inference.
-- **Your notes** supports add, delete, and pin. Notes and per-project visit snapshots persist inside each project?s optional `home` field in the notebook; they are never converted into tasks, revisions, or decisions.
+- **Your notes** supports add, delete, and pin. **AI relevant: Yes/No** controls whether a note enters the AI briefing. The default is No. Notes and per-project visit snapshots persist inside each project?s optional `home` field in the notebook; they are never converted into tasks, revisions, or decisions.
 - **Living Plan / History / Decisions / Revisions / Runs / Checkpoints / Technical details** expands the existing controls and history.
 - **The plan** shows the selected revision's goal, current state, decisions, and open questions.
 - **What changed** shows revision differences or the cumulative change since your last visit. Previous revisions remain immutable.
@@ -62,13 +105,13 @@ Malformed JSON, unknown fields, and invalid types are rejected without changing 
 
 The comparison fetches the linked repository's current branch history into dedicated inspection refs. It does not merge, push, switch branches, or overwrite working files. When the local branch is unpublished, the comparison explicitly uses GitHub's default branch as its baseline. Diverged histories and failures remain visible; old tracking refs are not reported as a current GitHub check.
 
-The lead receives local paths and GitHub URLs for registered projects, plus an updated check for the focused project before answering. Its CLI has full filesystem/network permissions and runs without interactive approvals. Its prompt keeps it in a coordination role: workers implement jobs. A role instruction is not a filesystem sandbox.
+The lead receives a compact briefing for the selected project, its active work, recent results, checkpoint, AI-relevant notes and repository delta. Older conversation exchanges stay in the local archive; only six bounded recent turns are sent. Registered project paths support explicit recipient selection; the lead must inspect only the selected project unless the current request names another. Its CLI has full filesystem/network permissions and runs without interactive approvals. Its prompt keeps it in a coordination role: workers implement jobs. A role instruction is not a filesystem sandbox.
 
 The account must already have repository access. A URL alone cannot grant it. Check `gh auth status` or use `gh auth login` if authentication is missing. Credentials are not embedded in notebooks or model prompts.
 
 ## Providers and execution
 
-`models.json` declares the exact provider and CLI model ID for every entry. The runner launches that CLI and model; it rejects incompatible combinations and never silently routes GPT or Gemini labels to Grok.
+`models.json` uses schema 3 with a `providers` array; each provider declares its adapter, quota pool, and model entries. Model entries retain explicit provider and CLI model IDs. The runner launches that adapter and exact model; it rejects incompatible combinations and never silently routes GPT or Gemini labels to Grok. The configuration examples below describe individual entries inside a provider's `models` array.
 
 Model recognition is extensible through configuration. The installed adapters are `codex`, `antigravity`, and `grok`; a model name such as Claude, Qwen, or Kimi is not an adapter. Native model families retain their compatibility guard. For a different exact model ID that your selected CLI has explicitly been configured to accept, add `"modelRouting": "configured"`. This removes the family-name restriction while retaining the exact provider and CLI ID. It does not install a provider, verify account access, or change a CLI's supported models. Unknown adapters remain unavailable with a clear error.
 
@@ -95,7 +138,7 @@ Labels are for display; they never select a provider. Configuration errors disab
 
 On the verified account, GPT-6 Astra, GPT-6 Luna, GPT-6 Sol, GPT-6.1 Sol, GPT-5.6 Luna, and GPT-5.5 completed inference checks. Gemini Pro and Flash were used through Antigravity. GPT-5 and GPT-5 mini were explicitly rejected by Codex with this ChatGPT account and remain **Unavailable**. Grok 4.6 is switched off after a credit/spending-limit HTTP 403. These checks describe one account and date, rather than universal model availability.
 
-Choose a lead in **Functions** or the Orchestrator view. **Auto start** inspects the project, proposes Grill when configured, prepares a job, and waits for **Approve run**. Auto-start jobs require that approval even in Automatic mode. Manually added tasks can dispatch automatically when Automatic is selected. Worker tool permissions do not require repeated interactive confirmation.
+Choose a lead in **Functions** or the Orchestrator view. **Auto start** inspects the project, proposes Grill when configured, prepares a job, and waits for **Approve run**. Auto-start jobs require that approval even in Automatic mode. New jobs propose a persistent MegaTask and its dependent slices before execution. Approval binds to the exact MegaTask; Automatic mode does not bypass that approval. Worker tool permissions do not require repeated interactive confirmation.
 
 Enabled models are candidates, not a requirement to use every model for every task. Selection considers task type, provider quota, local counters, and failures. Implementation/difficult work may be split across up to three workers. Slice ownership and integration still require care.
 
@@ -105,7 +148,7 @@ Project actions require an explicit command such as **Start**, **Resume**, **Sto
 
 Matt skills are checked at startup against the latest `main` revision of `mattpocock/skills`. The visible status reports the revision, update result and skill count. Planwharf downloads the complete skills tree into an immutable revision folder before activating it; a failed update keeps the prior complete version and reports the failure. Every Codex, Grok and Antigravity lead/worker prompt receives the catalog and applicable skill instructions. **Use Matt skills for all models** is on by default and persists per notebook; turning it off applies to subsequent requests and launches. If enabled skills have no complete cache, model execution waits for a successful check or an explicit opt-out.
 
-After updating Planwharf code, use **Quit application** and relaunch to load the new backend. Closing and reopening the window reuses the existing process. The UI identifies older backends that lack a catalog count and never presents a missing count as “0 skills” verified successfully. A matching commit SHA is insufficient: the complete catalog and its files must also be present; incomplete caches are rebuilt even when the SHA has not changed.
+After updating Planwharf code, use **Quit application** and relaunch to load the new backend. Closing the desktop window quits that backend; the next launch starts a fresh process. The UI identifies older backends that lack a catalog count and never presents a missing count as “0 skills” verified successfully. A matching commit SHA is insufficient: the complete catalog and its files must also be present; incomplete caches are rebuilt even when the SHA has not changed.
 
 The skills status separates the upstream revision date, local installation time and last check time. Checking an unchanged revision does not overwrite its installation time. The switch saves the setting on the backend, and an older polling response cannot revert the displayed choice.
 
@@ -115,13 +158,13 @@ A failed model-list check preserves previously known availability and shows a wa
 
 Chat requests accept up to 1 MiB of JSON. Provider prompts avoid the Windows command-line length limit: Codex uses standard input, Antigravity uses its documented JSON user-event stream on standard input, and Grok reads a unique UTF-8 prompt file through its native `--prompt-file` option. Prompt files are kept outside linked project folders. Saved exchanges are retained without a fixed turn limit. Each lead answer receives the full retained history once in chronological order, together with the current notebook briefing. The provider's context limit still applies; automatic history compaction is not implemented.
 
-You can ask the lead to delegate a research task conversationally, naming a worker such as GPT-6 Luna. The lead proposes a structured research assignment; the notebook validates the exact enabled model and its usage, then returns the real process ID or a launch failure. Research uses a separate attempt folder, preserves existing implementation tasks, and writes findings and citations to `report.md`. The Workers view shows its process, activity, report, Stop, and Resume actions. A completed report requires both the report artifact and successful provider exit evidence.
+You can ask the lead to delegate a research task conversationally, naming a worker such as GPT-6 Luna. The lead proposes a structured research assignment; the notebook validates the exact enabled model and its usage, then returns a persistent MegaTask proposal. Review the slices and approve that research MegaTask before any worker starts. Dispatch records then report actual process IDs or launch failures. Research uses a separate attempt folder, preserves existing implementation tasks, and writes findings and citations to `report.md`. The Workers view shows its process, activity, report, Stop, and Resume actions. A completed report requires both the report artifact and successful provider exit evidence.
 
 Source-protected research currently uses Codex with its workspace write sandbox and network access. Linked project files are available for reading; only the isolated research workspace is writable. Other providers are rejected for this workflow until equivalent source protection is supported. Resume creates a new attempt while keeping prior research evidence. A lead's proposed assignment is not evidence that a worker has started; the notebook's dispatch receipt is authoritative.
 
 ## Stop, Resume, and quotas
 
-Stop terminates worker process trees and saves a checkpoint. Failure without usable alternatives, inactivity, a missed deadline, and normal shutdown also preserve state. Checkpoints have no expiry and remain **Paused / Checkpoint saved / Resume** across restarts. Resume verifies the job identity and creates a fresh assignment from the saved plan and existing files. It does not restore the interrupted model's internal memory.
+Stop terminates worker process trees and saves a checkpoint. Phase 2 also preserves remaining work after worker failures, pause, and shutdown/restart. At the first scheduling check at or after **Finish by**, it blocks new slices, terminates active worker process trees, and saves a deadline checkpoint with completed results and partial evidence retained. Valid completion of every slice takes precedence over interruption. Termination failures remain visible and are retried; they do not falsely mark live workers as stopped. Checkpoints have no expiry and remain **Paused / Checkpoint saved / Resume** across restarts. Resume verifies the job identity and creates fresh attempts for remaining work. Explicit Resume after a deadline continues beyond the original expired time. It does not restore the interrupted model's internal memory. See [deadline verification](docs/DEADLINE-VERIFICATION-2026-10-13.md).
 
 **Stop worker** on a running implementation worker card terminates only that process tree. Other slices continue. Automatic replacement for that project is suspended until an explicit resume; when the other slices finish, Planwharf saves a checkpoint instead of declaring the stopped slice complete. This pause survives backend restoration. Research cards have their own independent **Stop** action.
 
@@ -131,7 +174,7 @@ The session selector lists recorded sessions by date and ID, with a separate ent
 
 Running activity translates structured Codex, Grok and Antigravity events into readable actions such as “Reading Sayaku.ts” or “Running tests for Sayaku.test.ts”. It follows the latest action and distinguishes a completed command from proof that tests passed. Raw logs remain unchanged in the output details. Project Progress supplements the original Living Plan text with the last work item, recent readable worker actions, full reported findings and changed file names. Since your last visit includes commit subjects, edited files and newly recorded decisions rather than counts alone.
 
-Keep the notebook, settings, attempts directory, and project files together in backups. Forced termination or power loss cannot guarantee saving the last unsaved operation. Monitoring and deadlines currently depend on client polling.
+Keep the notebook, settings, attempts directory, and project files together in backups. Forced termination or power loss cannot guarantee saving the last unsaved operation. The running backend monitors active work on a periodic timer, including with the window closed; the interface also polls for updates.
 
 When all worker slices report completion, Planwharf closes the assignment and marks the notebook task `complete`. Later polls and restarts retain that terminal state. Historical process IDs remain recorded, with inactive worker flags; completed tasks cannot resume from an older checkpoint.
 

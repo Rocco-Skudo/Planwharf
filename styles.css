@@ -1386,3 +1386,9 @@ select[data-quota-band="grey"] { color: var(--muted); }
   .pw-app #yard-list { display: flex; gap: 8px; overflow-x: auto; }
   .pw-app .yard-row { min-width: 160px; }
 }
+
+.model-role-flags { display: flex; flex-wrap: wrap; gap: 8px 14px; margin: 10px 0; padding: 8px; border: 1px solid var(--border, #555); border-radius: 6px; }
+.model-role-flags legend { font-size: .8rem; }
+.model-role-flags label { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; }
+.model-role-flags input[type="checkbox"] { width: auto; margin: 0; }
+.model-role-flags label:has(input:disabled) { opacity: .55; }

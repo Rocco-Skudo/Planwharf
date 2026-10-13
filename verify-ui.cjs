@@ -54,6 +54,10 @@ const selectProject = (app, id) => app.node('project-select').listeners.change({
 (async () => {
   const app = await openApp();
   assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current');
+  for (const invalid of ['', 'not-a-revision', '99999']) {
+    selectRevision(app, invalid);
+    assert.equal(app.node('revision-badge').textContent, 'R2 · manual · Current', 'Unavailable revisions must not replace the current selection or crash rendering');
+  }
   assert.ok(app.node('changes-content').innerHTML.toLowerCase().includes('nothing new'));
   assert.equal(app.node('changes-content').innerHTML.includes('Harbor Street'), false);
   assert.ok(app.node('project-select').innerHTML.includes('orto'));

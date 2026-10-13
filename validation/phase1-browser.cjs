@@ -66,7 +66,7 @@ async function closeView(connection) {
   await waitFor(async () => !(await appState()).views[connection.record.view], connection.record.view + ' closes');
 }
 (async () => {
-  const models = require('../models.json').filter(m => m.plan === 'ChatGPT' && ['premium', 'default'].includes(m.kind)).slice(0, 2).map(m => ({ ...m, enabled: true, available: true }));
+  const models = require("../engine/provider-catalog.cjs").loadCatalog(require("../models.json")).models.filter(m => m.plan === 'ChatGPT' && ['premium', 'default'].includes(m.kind)).slice(0, 2).map(m => ({ ...m, enabled: true, available: true }));
   app = await runApp({ skillsEnabled: false, planFile, attemptsDir: path.join(output, 'attempts'), port: 0, portExplicit: true, noWindow: false, syncSkills: false, windows, models,
     fetchPlans: async () => [{ id: 'ChatGPT', label: 'ChatGPT', readable: true, pct: 18, leftPct: 82, exhausted: false, windows: [{ name: 'weekly', pct: 18, leftPct: 82 }] }] });
   assert.deepEqual(opened.map(r => r.view), ['planwharf']);
@@ -74,6 +74,7 @@ async function closeView(connection) {
   await waitFor(async () => (await appState()).views.planwharf && (await appState()).views.orchestrator, 'application registers both available views');
   const pid = (await appState()).pid;
   await waitFor(() => home.evaluate("document.getElementById('home-goal')?.textContent.includes('Harbor Street')"), 'current Living Plan goal');
+  await waitFor(() => home.evaluate("(() => { const select = document.getElementById('revision-select'); return select && !select.disabled && Array.from(select.options).some(option => option.value === '1'); })()"), 'revision selector is loaded and enabled');
   assert.equal(await home.evaluate("document.getElementById('project-details').open"), false);
   assert.equal(await home.evaluate("document.getElementById('project-lede').textContent.includes('R2')"), false);
   assert.ok(await home.evaluate("document.getElementById('home-since').textContent.includes('First visit')"));
@@ -129,4 +130,6 @@ async function closeView(connection) {
   for (const connection of connections) { try { await connection.command('Browser.close'); } catch {} connection.ws.close(); }
   if (app?.server.listening) await new Promise(r => app.server.close(r));
   for (const record of opened) { try { record.child.kill(); } catch {} }
+  // runApp installs a process exit hook to release this isolated notebook lock.
+  process.exit(process.exitCode || 0);
 });

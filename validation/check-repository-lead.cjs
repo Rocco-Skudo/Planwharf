@@ -7,7 +7,7 @@ const { askOrchestrator } = require('../engine/runner.cjs');
 const { createRepositoryInspector } = require('../engine/repository.cjs');
 const notebook = JSON.parse(fs.readFileSync('plan.json'));
 const project = notebook.projects.find(row => row.project.github?.includes('AI-Companion-Desktop')).project;
-const model = require('../models.json').find(row => row.id === 'gpt-6-astra');
+const model = require("../engine/provider-catalog.cjs").loadCatalog(require("../models.json")).models.find(row => row.id === 'gpt-6-astra');
 const status = () => {
   const row = spawnSync('git', ['-C', project.folder, 'status', '--porcelain'], { encoding: 'utf8', windowsHide: true });
   if (row.status !== 0) throw new Error(row.stderr);

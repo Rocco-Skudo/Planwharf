@@ -9,6 +9,10 @@
   let projectId = null;
   let toastTimer;
   let chatSig = '';
+  let catalogSearch = '';
+  let searchControl;
+  let modelRoleFilter = 'all';
+  let roleFilterControl;
   let sending = false;
   let pendingText = '';
   let pendingStarted = 0;
@@ -183,8 +187,9 @@
   function projectActions(row) {
     if (!row) return '';
     const id = row.id;
-    const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">Go</button>` : '';
-    const resume = row.canResume && row.status === 'checkpointed' ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
+    const approve = row.status === 'needs_approval' ? `<button type="button" class="primary" data-approve="${escape(id)}">${row.megaTaskId ? 'Approve MegaTask' : 'Go'}</button>` : '';
+    const resume = row.canResume && ['checkpointed', 'failed'].includes(row.status) ? `<button type="button" class="primary" data-resume="${escape(id)}">Resume</button>` : '';
+    const pause = row.canStop && row.megaTaskId ? `<button type="button" class="secondary" data-pause="${escape(id)}">Pause after current tasks</button>` : '';
     const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
     const propose = orchestra.grillPropose !== false;
     const kind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
@@ -193,10 +198,13 @@
     const grillTriggers = approve || resume || stop || busy
       ? ''
       : `<button type="button" class="${kind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me" data-grill-start="${escape(id)}">Grill me</button><button type="button" class="${kind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs" data-grill-start="${escape(id)}"${docsOk ? '' : ' disabled'}>Grill with the docs</button>`;
-    return `${approve}${grillTriggers}${resume}${stop}`;
+    return `${approve}${grillTriggers}${resume}${stop}${pause}`;
   }
 
   function workerState(row, part) {
+    if (part.validatedResultStatus === 'COMPLETE') return 'Complete';
+    if (part.validatedResultStatus === 'FAILED') return 'Failed';
+    if (part.validatedResultStatus === 'BLOCKED') return 'Blocked';
     if (part.stoppedByUser) return 'Paused';
     if (row.status === 'complete') return 'Finished';
     if (row.status === 'checkpointed') return 'Paused';
@@ -224,10 +232,11 @@
     const visible = workers.filter(({ row, part }) =>
       (projectFilter === 'all' || (row.projectId || row.id) === (projectFilter === 'current' ? projectId : projectFilter)) &&
       (sessionFilter === 'all' || sessionFilter === 'legacy' && !part.sessionId || sessionFilter === 'current' && (orchestra.sessionId ? part.sessionId === orchestra.sessionId && Date.parse(part.startedAt) >= workerSessionStartedAt : false) || part.sessionId === sessionFilter) &&
-      (stateFilter === 'all' || workerState(row, part) === stateFilter));
+      (stateFilter === 'all' || workerState(row, part) === stateFilter || stateFilter === 'Finished' && workerState(row, part) === 'Complete'
+        || stateFilter === 'Stopped' && workerState(row, part) === 'Failed' || stateFilter === 'Paused' && workerState(row, part) === 'Blocked'));
     const running = visible.filter(({ row, part }) => workerState(row, part) === 'Running').length;
-    const paused = visible.filter(({ row, part }) => workerState(row, part) === 'Paused').length;
-    const finished = visible.filter(({ row, part }) => workerState(row, part) === 'Finished').length;
+    const paused = visible.filter(({ row, part }) => ['Paused', 'Blocked'].includes(workerState(row, part))).length;
+    const finished = visible.filter(({ row, part }) => ['Finished', 'Complete'].includes(workerState(row, part))).length;
     visible.sort((a, b) => Number(workerState(b.row, b.part) === 'Running') - Number(workerState(a.row, a.part) === 'Running'));
     return `<section class="dash-section dash-zone-workers" aria-label="Workers"><div class="workers-heading"><h3>Workers</h3><span class="badge${running ? ' green' : ''}">${running} running</span></div><p class="worker-legend" role="status">${globalRunning} active across all projects and sessions | ${running} running, ${paused} paused, ${finished} finished in this view. Previous sessions are hidden by default.</p><div class="dash-workers">${visible.map(({ row, part, index }) => {
       const model = models.find(item => item.id === part.modelId) || {};
@@ -237,8 +246,8 @@
       const activity = part.activity || row.workerActivity || 'No worker output yet.';
       const log = row.workerTail ? `<details class="monitor-log" data-worker-log="${escape(key)}"><summary>${(row.dispatch || []).length > 1 ? 'Project worker logs (all slices)' : 'Worker output'}</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '<p class="muted">No log output yet.</p>';
       const report = researchReports.get(row.id);
-      const actions = row.research ? `<div class="now-actions">${row.reportAvailable || row.status === 'complete' ? `<button type="button" class="secondary compact" data-research-report="${escape(row.id)}">Read research report</button>` : ''}${state === 'Running' ? `<button type="button" class="secondary compact" data-research-stop="${escape(row.id)}">Stop</button>` : ''}${row.status === 'checkpointed' ? `<button type="button" class="secondary compact" data-research-resume="${escape(row.id)}">Resume</button>` : ''}</div>${report != null ? `<details class="monitor-log" data-worker-log="${escape(key)}:report" open><summary>Research report</summary><pre class="worker-tail">${escape(report)}</pre></details>` : ''}` : (state === 'Running' ? `<div class="now-actions"><button type="button" class="secondary compact" data-worker-stop="${escape(row.id)}" data-worker-pid="${escape(part.pid)}">Stop worker</button></div>` : '');
-      return `<article class="dash-worker${state === 'Running' ? ' is-running' : ''}" data-worker-state="${escape(state)}"><header><strong>${escape(part.label || model.label || part.modelId || 'Unknown worker')}</strong><span class="badge${state === 'Running' ? ' green' : ''}">${escape(state)}</span></header><p class="worker-model">Provider: ${escape(part.provider || model.provider || 'unknown')} · Model: ${escape(part.cli || model.cli || part.modelId || 'unknown')} · ID: ${escape(part.modelId || 'unknown')}</p><p><strong>${escape(row.name)}</strong>${row.jobTitle ? ` · ${escape(row.jobTitle)}` : ''}</p><p class="muted">${escape(part.slice || 'Whole job')} · ${part.pid ? `PID ${escape(part.pid)} · ${part.alive ? 'alive' : 'not alive'}` : (state === 'Awaiting launch' ? 'No process launched' : 'No live process')} · Project: ${escape(row.label || row.status || 'unknown')}</p><p class="worker-activity">${escape(activity)}</p>${progress ? `<p class="muted">Last ${row.research ? 'research update' : 'project progress'}: ${escape(progress)}</p>` : ''}${log}${actions}</article>`;
+      const actions = row.research ? `<div class="now-actions">${row.status === 'needs_approval' ? `<button type="button" class="primary compact" data-research-approve="${escape(row.id)}">Approve research MegaTask</button>` : ''}${row.reportAvailable || row.status === 'complete' ? `<button type="button" class="secondary compact" data-research-report="${escape(row.id)}">Read research report</button>` : ''}${state === 'Running' ? `<button type="button" class="secondary compact" data-research-stop="${escape(row.id)}">Stop</button>` : ''}${row.status === 'checkpointed' ? `<button type="button" class="secondary compact" data-research-resume="${escape(row.id)}">Resume</button>` : ''}</div>${report != null ? `<details class="monitor-log" data-worker-log="${escape(key)}:report" open><summary>Research report</summary><pre class="worker-tail">${escape(report)}</pre></details>` : ''}` : (state === 'Running' ? `<div class="now-actions"><button type="button" class="secondary compact" data-worker-stop="${escape(row.id)}" data-worker-pid="${escape(part.pid)}">Stop worker</button></div>` : '');
+      return `<article class="dash-worker${state === 'Running' ? ' is-running' : ''}" data-worker-state="${escape(state)}"><header><strong>${escape(part.label || model.label || part.modelId || 'Unknown worker')}</strong><span class="badge${state === 'Running' ? ' green' : ''}">${escape(state)}</span></header><p class="worker-model">Provider: ${escape(part.provider || model.provider || 'unknown')} · Model: ${escape(part.cli || model.cli || part.modelId || 'unknown')} · ID: ${escape(part.modelId || 'unknown')}</p><p><strong>${escape(row.name)}</strong>${row.jobTitle ? ` · ${escape(row.jobTitle)}` : ''}</p><p class="muted">${escape(part.slice || 'Whole job')} · ${part.pid ? `PID ${escape(part.pid)} · ${part.observedAlive && !part.alive ? 'recorded PID exists; this attempt is inactive' : part.alive ? 'alive' : 'not alive'}` : (state === 'Awaiting launch' ? 'No process launched' : 'No live process')} · Project: ${escape(row.label || row.status || 'unknown')}</p><p class="worker-activity">${escape(activity)}</p>${progress ? `<p class="muted">Last ${row.research ? 'research update' : 'project progress'}: ${escape(progress)}</p>` : ''}${log}${actions}</article>`;
     }).join('') || '<p class="workers-empty">No workers launched in the selected filters. Previous sessions remain available under All sessions.</p>'}</div></section>`;
   }
 
@@ -269,15 +278,46 @@
       const badge = item.exhausted ? '<span class="badge off">Exhausted</span>' : (item.readable ? '<span class="badge green">Live</span>' : '<span class="badge">Unread</span>');
       return `<article class="dash-model${item.exhausted ? ' state-off' : ''}"><header><strong>${escape(item.label)}</strong>${badge}</header>${quotaHtml(item)}</article>`;
     }).join('') || '<p class="muted">Provider usage loads from the local Grok and ChatGPT logins.</p>'}</div></section>`;
-    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3><div class="dash-models">${fleet.map(item => {
+    if (!searchControl && typeof document.createElement === 'function' && typeof el.before === 'function') {
+      const label = document.createElement('label'); label.textContent = 'Find models';
+      searchControl = document.createElement('input'); searchControl.type = 'search'; searchControl.placeholder = 'Provider, model name or exact ID'; searchControl.setAttribute('aria-label', 'Find models');
+      searchControl.addEventListener('input', () => { catalogSearch = searchControl.value.toLowerCase(); renderBoard(); });
+      label.append(searchControl); el.before(label);
+    }
+    if (!roleFilterControl && typeof document.createElement === 'function' && typeof el.before === 'function') {
+      const label = document.createElement('label'); label.textContent = 'Model role';
+      roleFilterControl = document.createElement('select'); roleFilterControl.setAttribute('aria-label', 'Filter models by role');
+      roleFilterControl.innerHTML = '<option value="all">All roles</option><option value="orchestrator">Orchestrator</option><option value="worker">Worker</option><option value="reviewer">Reviewer</option>';
+      roleFilterControl.addEventListener('change', () => { modelRoleFilter = roleFilterControl.value; renderBoard(); });
+      label.append(roleFilterControl); el.before(label);
+    }
+    const rolesSupported = fleet.every(item => item.roles && item.roleEligibility);
+    const roleSupportNotice = rolesSupported ? '' : '<p class="notice" role="status">Backend update required for model roles. Use Quit application, then relaunch Planwharf. Model role changes are unavailable until the backend is updated.</p>';
+    const providerList = orchestra.providers || [];
+    const visibleFleet = fleet.filter(item => {
+      if (modelRoleFilter !== 'all' && item.roles?.[modelRoleFilter] !== true) return false;
+      if (catalogSearch) return [item.id, item.label, item.provider, item.cli].some(value => String(value || '').toLowerCase().includes(catalogSearch));
+      if (modelRoleFilter !== 'all') return true;
+      const provider = providerList.find(provider => provider.id === (item.providerId || item.provider));
+      const siblings = fleet.filter(model => (model.providerId || model.provider) === (item.providerId || item.provider));
+      return !provider || provider.showAll || siblings.length <= 12 || item.enabled || item.lead || siblings.indexOf(item) < 8;
+    });
+    const providerControls = providerList.map(provider => `<article class="dash-model"><strong>${escape(provider.label)}</strong><p>${provider.models.length} configured models | ${escape(provider.availability)}</p><button class="secondary compact" data-provider="${escape(provider.id)}" data-provider-enabled="${!provider.enabled}">${provider.enabled ? 'Disable provider' : 'Enable provider'}</button><button class="secondary compact" data-provider-show="${escape(provider.id)}" data-provider-show-all="${!provider.showAll}">${provider.showAll ? 'Show selected models' : 'Show all models'}</button></article>`).join('');
+    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes every configured model.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
-      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.enabled ? 'Idle' : 'Off');
+      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
+      const availabilityText = item.availabilityWarning
+        ? `Availability unread: ${item.availabilityWarning} Last known status: ${item.available === false ? 'unavailable' : 'available'}.`
+        : item.available === false ? item.unavailableReason : doing;
       const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
-      const leadBtn = item.eligible && !item.lead
-        ? `<button type="button" class="secondary compact" data-lead="${escape(item.id)}">Use as orchestrator</button>`
-        : '';
-      const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planById(item.plan))}<p>${escape(item.available === false ? item.unavailableReason : doing)}</p>${pids ? `<p class="muted">${escape(pids)}</p>` : ''}<div class="now-actions">${leadBtn}<button type="button" class="secondary compact" title="${escape(item.unavailableReason || item.cli || '')}" ${item.available === false ? 'disabled' : ''} data-model="${escape(item.id)}" data-enabled="${item.enabled ? '0' : '1'}">${item.available === false ? 'Unavailable' : (item.enabled ? 'On' : 'Off')}</button></div></article>`;
+      const roleFlags = rolesSupported ? ['orchestrator', 'worker', 'reviewer'].map(role => {
+        const compatible = item.roleEligibility?.[role] !== false;
+        const selected = item.roles?.[role] ?? (role === 'orchestrator' ? item.orchestratorEligible !== false : true);
+        const title = compatible ? 'Permit this model to perform this role' : 'This model is not compatible with this role';
+        return `<label title="${escape(title)}"><input type="checkbox" data-model-role="${escape(item.id)}" data-role="${role}" ${selected ? 'checked' : ''} ${compatible ? '' : 'disabled'}>${role[0].toUpperCase() + role.slice(1)}${compatible ? '' : ' (not supported)'}</label>`;
+      }).join('') : '';
+      const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.availabilityWarning ? 'Availability unread' : item.state || 'idle')}</span>`);
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planById(item.plan))}<p>${escape(availabilityText)}</p>${item.availabilityCheckedAt ? `<p class="muted">Availability checked: ${escape(new Date(item.availabilityCheckedAt).toLocaleString('en-GB'))}</p>` : ''}${pids ? `<p class="muted">${escape(pids)}</p>` : ''}${rolesSupported ? `<fieldset class="model-role-flags"><legend>Allowed roles</legend>${roleFlags}</fieldset>` : ''}</article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -292,13 +332,17 @@
       ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
       : '<p class="muted">No interventions yet. I switch workers on stall, death, or FAILED.</p>'}</section>`;
     const openLogs = new Set(Array.from(el.querySelectorAll('details[data-worker-log][open]')).map(detail => detail.getAttribute('data-worker-log')));
-    el.innerHTML = `${workersHtml(rows)}${planCards}${models}${processes}${iv}`;
+    const usage = orchestra.aiUsage || { orchestrator: [], workers: [], recent: [] };
+    const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
+    const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
+    el.innerHTML = `${workersHtml(rows)}${usageHtml}${planCards}${models}${processes}${iv}`;
     el.querySelectorAll('details[data-worker-log]').forEach(detail => {
       if (openLogs.has(detail.getAttribute('data-worker-log'))) detail.open = true;
     });
   }
 
   function render() {
+    if (typeof window !== 'undefined' && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-evidence', { detail: orchestra.execution?.timeline || [] }));
     const recipient = $('orch-project');
     const projects = orchestra.projects || [];
     try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
@@ -324,11 +368,20 @@
   async function loadPlan() {
     const response = await fetch('/api/plan');
     const body = await response.json();
-    if (!response.ok) throw new Error(body.error || 'Save failed.');
+    if (!response.ok) { const error = new Error(body.error || body.reason || 'Save failed.'); error.confirmation = body.requiresConfirmation; throw error; }
     version = body.version;
   }
 
+  async function executionPost(action, id) {
+    const row = (orchestra.projects || []).find(row => row.id === id);
+    if (!window.PlanwharfRunExecution) return post('/api/orchestrator/' + action, { projectId: id });
+    const response = await window.PlanwharfRunExecution(action, row), result = await response.json();
+    if (!response.ok) throw new Error(result.error || result.reason);
+    return result;
+  }
+
   async function post(url, payload, signal) {
+    if (url === '/api/orchestrator/ask') await window.PlanwharfFocusReady;
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}), signal });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || 'Save failed.');
@@ -483,18 +536,34 @@
   }
 
   if ($('orchestrator')) {
+    $('orchestrator').addEventListener('change', async event => {
+      const control = event.target.closest('[data-model-role]');
+      if (!control) return;
+      const enabled = control.checked; control.disabled = true;
+      try { orchestra = await post('/api/models/roles', { id: control.dataset.modelRole, roles: { [control.dataset.role]: enabled } }); render(); }
+      catch (error) { control.checked = !enabled; notice(error.message); }
+      finally { control.disabled = false; }
+    });
     $('orchestrator').addEventListener('click', async event => {
       const researchReport = event.target && event.target.getAttribute && event.target.getAttribute('data-research-report');
       const researchStop = event.target && event.target.getAttribute && event.target.getAttribute('data-research-stop');
+      const researchApprove = event.target && event.target.getAttribute && event.target.getAttribute('data-research-approve');
       const researchResume = event.target && event.target.getAttribute && event.target.getAttribute('data-research-resume');
       const leadId = event.target && event.target.getAttribute && event.target.getAttribute('data-lead');
       const modelId = event.target && event.target.getAttribute && event.target.getAttribute('data-model');
+      const pauseId = event.target && event.target.getAttribute && event.target.getAttribute('data-pause');
       const stopId = event.target && event.target.getAttribute && event.target.getAttribute('data-stop');
       const resumeId = event.target && event.target.getAttribute && event.target.getAttribute('data-resume');
       const approveId = event.target && event.target.getAttribute && event.target.getAttribute('data-approve');
       const grillStartId = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-start');
       const grillStartKind = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
       try {
+        const provider = event.target.closest('[data-provider], [data-provider-show]');
+        if (provider) {
+          orchestra = await post('/api/catalog/settings', { providerId: provider.dataset.provider || provider.dataset.providerShow,
+            ...(provider.dataset.provider ? { enabled: provider.dataset.providerEnabled === 'true' } : { showAll: provider.dataset.providerShowAll === 'true' }) });
+          render(); return;
+        }
         const workerStop = event.target.closest('[data-worker-stop]');
         if (workerStop) {
           workerStop.disabled = true;
@@ -514,8 +583,13 @@
           renderBoard();
           return;
         }
-        if (researchStop || researchResume) {
-          const body = await post(`/api/orchestrator/research/${researchStop ? 'stop' : 'resume'}`, { id: researchStop || researchResume });
+        if (researchStop || researchResume || researchApprove) {
+          const record = orchestra.researches.find(record => record.id === (researchStop || researchResume || researchApprove));
+          const target = { id: record.id, ...(record.megaTaskId ? { projectId: record.projectId, megaTaskId: record.megaTaskId } : {}) };
+          if (researchResume && record.megaTaskId) { const choices = (orchestra.execution?.checkpoints || []).filter(cp => cp.megaTaskId === record.megaTaskId); const selected = choices.length === 1 ? choices[0] : choices[Number(window.prompt('Choose checkpoint number:\n' + choices.map((cp, index) => `${index + 1}. ${cp.summary}`).join('\n'))) - 1]; if (!selected) throw new Error('Choose an explicit checkpoint.'); target.checkpointId = selected.id; }
+          let body;
+          const route = `/api/orchestrator/research/${researchApprove ? 'approve' : researchStop ? 'stop' : 'resume'}`;
+          try { body = await post(route, target); } catch (error) { if (!error.confirmation || !window.confirm(error.message + '\nContinue remaining research?')) throw error; body = await post(route, { ...target, confirmChanges: true }); }
           if (body.ok === false) throw new Error(body.reason || 'Research action failed.');
           if (body.snapshot) orchestra = body.snapshot;
           render();
@@ -533,20 +607,21 @@
           render();
           return;
         }
+        if (pauseId) { orchestra = await executionPost('pause', pauseId); render(); notice('Scheduling paused. Active workers may finish.'); return; }
         if (stopId) {
-          orchestra = await post('/api/orchestrator/stop', { projectId: stopId });
+          orchestra = await executionPost('stop', stopId);
           render();
           notice('Stopped. Checkpoint saved. Press Resume to continue from the last plan.');
           return;
         }
         if (resumeId) {
-          orchestra = await post('/api/orchestrator/resume', { projectId: resumeId });
+          orchestra = await executionPost('resume', resumeId);
           render();
           notice('Resumed from checkpoint.');
           return;
         }
         if (approveId) {
-          orchestra = await post('/api/orchestrator/approve', { projectId: approveId });
+          orchestra = await executionPost('approve', approveId);
           render();
           notice('Run approved.');
           return;
