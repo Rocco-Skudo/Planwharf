@@ -80,6 +80,10 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
   if (routeError) throw new Error(routeError);
   const provider = model.providerId || model.provider;
   const adapter = model.adapter || model.provider;
+  if (model.accountKey) {
+    const current = require('./provider-adapters.cjs').adapterFor(model)?.account?.({ id: provider, adapter });
+    if (!current || current.key !== model.accountKey) throw new Error('CLI account changed before launch. Refresh models and review the current account roles.');
+  }
   if (research && !require('./provider-adapters.cjs').adapterFor(model)?.sourceProtectedResearch) throw new Error('Research source protection is not supported by the requested adapter: ' + adapter);
   const cli = model.cli;
   const command = executable(adapter);

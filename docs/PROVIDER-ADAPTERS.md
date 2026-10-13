@@ -1,5 +1,8 @@
 # Coding provider adapters
 
+Adapters may expose a synchronous `account(provider)` method returning only `{ key, type, source, checkedAt }`. `key` is an opaque stable account/workspace identifier, never a token or email; `type` is `business`, `normal` or `unread`. The core adds Business labels, scopes role preferences and clears stale quota/catalog state when this identity changes. Adapters without reliable metadata return unread. Execution checks the current account key again before launching an assigned model. Do not infer Business from model quality, quota exhaustion, email domains or enterprise configuration alone.
+
+
 The core uses `engine/provider-adapters.cjs`. Register an adapter with a unique ID before loading the catalog; reference that ID in a schema 3 provider's `adapter` field. The user configures provider identity, quota pool, exact CLI model IDs, enablement and order. No model substitution or provider ranking is allowed.
 
 Each adapter supplies:

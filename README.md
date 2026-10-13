@@ -4,6 +4,8 @@ A local project notebook and coordinator for real coding workers. Keep decisions
 
 Planwharf is still under active development and is provided **as is**. Features and behavior may change, and bugs or limitations may remain. Feedback, development suggestions, and contributions are welcome. Please share bug reports and ideas through GitHub Issues.
 
+Planwharf can use [Matt Pocock's open-source skills](https://github.com/mattpocock/skills) to guide its coding agents. Thanks to Matt and the contributors; see [third-party acknowledgments and license notices](docs/THIRD-PARTY-NOTICES.md).
+
 [Quick start](docs/QUICKSTART.md) | [Complete user guide](docs/USER-GUIDE.md) | [Project status](docs/PROJECT-STATUS.md) | [First project guide](docs/HOW-TO.md) · [Phase 2 execution contract](docs/PLANWHARF-PHASE-2.md) · [Startup verification](docs/STARTUP-VERIFICATION-2026-10-13.md)
 
 ## Start here
@@ -152,7 +154,7 @@ After updating Planwharf code, use **Quit application** and relaunch to load the
 
 The skills status separates the upstream revision date, local installation time and last check time. Checking an unchanged revision does not overwrite its installation time. The switch saves the setting on the backend, and an older polling response cannot revert the displayed choice.
 
-**Refresh Grok models** queries the active CLI login and validates each configured exact model ID, replacing old account availability without substituting models or automatically enabling them. Startup and periodic API checks also refresh the list. Authentication and policy failures are shown as verification failures, not as invented account access.
+**Refresh models** queries supported provider catalogs for the active CLI login, replacing old account availability without substituting models or automatically assigning roles. A fresh check runs at backend startup; unchanged-login status polling does not invoke provider CLIs. Detected account changes trigger a new catalog check and invalidate cached quota. Confirmed organizational accounts add **Business** to their labels; normal accounts keep their names. Role flags are saved separately for recognized accounts. Authentication and policy failures are shown as verification failures, not as invented account access.
 
 A failed model-list check preserves previously known availability and shows a warning; it does not fabricate access to other IDs. An unreadable Grok quota endpoint is separate from access to the Grok CLI and does not itself disable models.
 

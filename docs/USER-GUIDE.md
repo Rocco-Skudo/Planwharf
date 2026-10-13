@@ -8,6 +8,8 @@ Planwharf answers **"What is happening with my project?"** Orchestrator answers 
 
 Home is the project overview. Orchestrator contains chat, model/provider settings, processes, worker evidence, remaining quota and AI usage. Opening Home does not invoke a model. Deterministic commands such as Stop, model toggles and quota/status inquiries use local paths; reasoning and clarification may invoke your selected lead.
 
+A Planwharf project is a local notebook entry linked to a source folder and optionally a GitHub repository. A GitHub repository stores code and releases; GitHub Projects is a separate optional issue-planning board and is not required to use Planwharf.
+
 ## Installation, launch and windows
 
 Install Node.js and a Chromium browser. Planwharf has no npm dependencies. Download or clone the complete application directory: the executable is a launcher and needs the neighboring files. Windows is the verified desktop platform. Linux/macOS launcher paths exist, but their desktop behavior has not been verified by the Windows acceptance.
@@ -83,6 +85,16 @@ At every backend startup, Planwharf checks enabled providers before publishing t
 
 ## Remaining quota and AI usage
 
+### Personal and Business accounts
+
+Normal accounts keep the existing provider and model names. Confirmed team, Business or Enterprise accounts add **Business**: for example, **Grok Business** and **GPT-6 Luna Business**. A paid personal subscription is not automatically a Business account. If the provider does not expose account classification, the existing name is shown without an extra label. This is a display default, not confirmation of a personal plan; Planwharf does not infer Business from an email domain or exhausted credits.
+
+The account is the CLI login used by workers, which may differ from the account open in your browser. For Grok, stop active work before changing accounts, use the CLI's logout/login flow, then use **Refresh models** or reopen Planwharf. Account changes invalidate old availability and remaining-quota readings. Roles are saved separately using a local opaque account identifier; returning to a recognized account restores its role flags. Existing settings are adopted by the first recognized account; a newly seen account starts with no roles selected and needs explicit configuration.
+
+Only the current CLI login is usable; Planwharf does not keep both accounts signed in or silently fall back between them. Codex classification uses selected-workspace plan metadata; Grok classification uses the CLI's team principal metadata. Antigravity currently exposes no verified account-type/identity interface in this integration, so it keeps its existing names and automatic per-account role separation is unavailable. No credentials, email addresses or raw login profiles are copied into exports or invocation evidence.
+
+### Reading remaining quota
+
 Quota always communicates the percentage **REMAINING** in the provider's shared pool:
 
 | Remaining | Display |
@@ -106,7 +118,7 @@ The lead receives a compact project briefing, recent relevant results, checkpoin
 
 Recorded chat sessions remain available through the session selector. **Copy output** copies one answer; **Copy displayed conversation** copies the visible exchanges. Stop for a pending chat response cancels that model response; project Stop is the execution/checkpoint control.
 
-Matt skills can supply instructions to leads and workers. **Use Matt skills for all models** persists per notebook. **Check skills updates** checks the upstream catalog. A failed update retains a prior complete cache. If no complete cache is available, enablement requires a successful check or explicit opt-out before model execution.
+[Matt Pocock's skills](https://github.com/mattpocock/skills) can supply instructions to leads and workers. **Use Matt skills for all models** persists per notebook. **Check skills updates** checks the upstream catalog. A failed update retains a prior complete cache. If no complete cache is available, enablement requires a successful check or explicit opt-out before model execution.
 
 ## MegaTasks, SubTasks, Attempts and Results
 
@@ -164,12 +176,14 @@ Export is for metadata review/backup. Automatic re-import/restore is not support
 | --- | --- |
 | Launcher cannot find Node.js | Install Node.js and keep the complete application folder together. The error dialog identifies its launch log. |
 | Model is unavailable | Verify the exact CLI model ID, installed executable, account sign-in and provider catalog. |
-| No eligible worker/reviewer | Check provider/model On state, the required allowed role, capability, quota and the exact proposed assignment. |
-| Model cannot be selected as lead | Check Orchestrator compatibility, its role flag, model/provider On state and quota. |
+| No eligible worker/reviewer | Check provider enablement, the required allowed role, capability, quota and the exact proposed assignment. |
+| Model cannot be selected as lead | Check Orchestrator compatibility, its role flag, provider enablement and quota. |
 | REMAINING UNREAD | Check provider sign-in/interface support; do not infer a fake percentage. |
 | Skills cache blocks execution | Check skills updates or explicitly turn off skills for new requests. |
 | Resume needs confirmation | Review repository and plan changes against the saved checkpoint. |
-| UI still shows old behavior after an update | Quit application and relaunch; reopening a window can reuse the old backend. |
+| UI still shows old behavior after an update | Quit application and relaunch to load the updated backend. |
 | Historical logs use another language | Original evidence and user-authored data are preserved; current product text is English. |
 
 Keep TLS verification enabled. Existing operator CA settings remain respected, and provider environment adjustments are scoped to child processes. See [project status](PROJECT-STATUS.md) for verified platforms/providers and limitations, and [provider adapters](PROVIDER-ADAPTERS.md) for the developer extension contract.
+
+See [third-party acknowledgments](THIRD-PARTY-NOTICES.md) for upstream credits and license notices.

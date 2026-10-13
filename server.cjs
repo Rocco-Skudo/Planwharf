@@ -74,15 +74,48 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans } = {}) {
+function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans } = {}) {
   const catalog = loadCatalog(providers ? { schema: 3, providers } : models === defaultModels ? require('./models.json') : models);
   models = catalog.models; providers = catalog.providers;
   const providerModels = createProviderModels(models, { providers, ...(discoverModels ? { discover: discoverModels } : {}) });
+  const accountStates = new Map();
+  let accountSync;
+  async function syncAccounts() {
+    // Injected discovery fixtures must not inspect real login profiles.
+    if (!readAccount && (!refreshModels || discoverModels)) return;
+    if (accountSync) return accountSync;
+    accountSync = (async () => {
+      for (const provider of providers) {
+        let account;
+        try { account = await (readAccount ? readAccount(provider) : adapterFor(provider)?.account?.(provider)); } catch { account = null; }
+        account ||= require('./engine/provider-accounts.cjs').unknownAccount();
+        const previous = accountStates.get(provider.id);
+        provider.account = account;
+        accountStates.set(provider.id, account);
+        const changedOnDisk = orchestra.bindAccount(provider.id, account.key);
+        if (changedOnDisk || previous && previous.key !== account.key) {
+          for (const model of models.filter(model => model.providerId === provider.id)) {
+            model.available = false;
+            model.unavailableReason = 'CLI account changed. Access must be verified for the current login.';
+          }
+          orchestra.invalidateAccountCache(provider.id);
+          if (previous || !refreshModels) await providerModels.refresh(true, provider.id);
+        }
+      }
+    })().finally(() => { accountSync = null; });
+    return accountSync;
+  }
   if (fetchPlans === undefined) fetchPlans = async () => {
     const pools = new Map();
     for (const provider of providers) if (!pools.has(provider.quotaPoolId)) {
+      const expectedAccount = provider.account?.key || null;
       let quota; try { quota = await adapterFor(provider)?.quota?.(provider); } catch { quota = null; }
-      pools.set(provider.quotaPoolId, { ...(quota || { readable: false, exhausted: false, leftPct: null }), id: provider.quotaPoolId, label: provider.label });
+      let current = provider.account;
+      if (provider.account) {
+        try { current = await (readAccount ? readAccount(provider) : adapterFor(provider)?.account?.(provider)); } catch { current = null; }
+      }
+      if (expectedAccount !== (current?.key || null)) quota = null;
+      pools.set(provider.quotaPoolId, { ...(quota || { readable: false, exhausted: false, leftPct: null }), id: provider.quotaPoolId, label: require('./engine/provider-accounts.cjs').accountLabel(provider.label, provider.account), accountKey: provider.account?.key || null });
     }
     return [...pools.values()];
   };
@@ -275,7 +308,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     return { ok: true, plan: next, version: version(next), snapshot, phase: prepared.phase || (prepared.job ? 'plan' : 'grill') };
   }
   if (initialSkillsSync) initialSkillsSync.catch(() => {});
-  const initialModelsSync = refreshModels ? providerModels.refresh(true).catch(() => {}) : Promise.resolve();
+  const initialModelsSync = syncAccounts().then(() => refreshModels ? providerModels.refresh(true) : undefined).catch(() => {});
   const staticFiles = { '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
@@ -287,6 +320,10 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Open the interface from its local address.');
       const loc = new URL(request.url, `http://${expectedHost}`);
       const pathname = loc.pathname;
+      if (pathname === '/api/orchestrator' || request.method === 'POST' && !/\/(?:stop|abort)(?:\/|$)/.test(pathname) && /^\/api\/(?:orchestrator|models|catalog)\//.test(pathname)) {
+        await initialModelsSync;
+        await syncAccounts();
+      }
       // Wait for the fresh startup catalog before reporting or executing model work.
       // Local shutdown and status polling remain available while discovery runs.
       if (pathname === '/api/orchestrator' || request.method === 'POST' && ['/api/orchestrator/propose', '/api/orchestrator/approve', '/api/orchestrator/resume', '/api/orchestrator/start', '/api/orchestrator/ask', '/api/orchestrator/lead', '/api/orchestrator/research/approve', '/api/orchestrator/research/resume'].includes(pathname)) await initialModelsSync;
@@ -822,6 +859,8 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (closing || monitoring) return;
       monitoring = true;
       try {
+        await initialModelsSync;
+        await syncAccounts();
         const state = await orchestra.snapshot();
         if (state.projects.some(row => row.status === 'watching') || (state.researches || []).some(row => row.status === 'watching')) await enqueue(() => orchestra.tick());
       } catch (error) { console.error('Execution monitoring failed:', error.message); }

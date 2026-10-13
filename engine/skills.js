@@ -30,7 +30,7 @@ function createSkillsCache(options = {}) {
     const complete = catalogComplete();
     return { ...meta, status: meta.status === 'current' && !complete ? 'incomplete' : meta.status, checking, catalogComplete: complete, skillCount: Array.isArray(meta.catalog) ? meta.catalog.length : 0 };
   };
-  const safePath = relative => typeof relative === 'string' && /^skills\/(?:[\w.-]+\/)*[\w.-]+$/.test(relative) && !relative.split('/').includes('..');
+  const safePath = relative => typeof relative === 'string' && (relative === 'LICENSE' || /^skills\/(?:[\w.-]+\/)*[\w.-]+$/.test(relative)) && !relative.split('/').includes('..');
   function fileFor(relative) {
     if (!safePath(relative)) return null;
     const target = path.resolve(dir, meta.revisionDir || '', relative);

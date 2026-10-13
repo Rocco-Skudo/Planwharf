@@ -768,6 +768,8 @@ function fleetOf(models, projects, leadId, plans) {
       availabilityVerified: item.availabilityVerified === true,
       availabilityCheckedAt: item.availabilityCheckedAt || null,
       availabilityWarning: item.availabilityWarning || null,
+      accountType: item.accountType || 'unread',
+      accountKey: item.accountKey || null,
       provider: item.provider || null,
       cli: item.cli || null,
       exhausted,
@@ -1024,7 +1026,7 @@ function createOrchestrator(options) {
   };
   if (typeof askProvider === 'function' && ledger) opts.askModel = async info => {
     const id = ledger.start({ role: 'orchestrator', projectId: info.projectId, megaTaskId: info.state?.executionHandoff?.megaTask?.id,
-      provider: info.model.providerId || info.model.provider, model: info.model.cli, modelId: info.model.id, reason: info.allowActions === false ? 'clarification' : 'user reasoning request' });
+      provider: info.model.providerId || info.model.provider, model: info.model.cli, modelId: info.model.id, accountKey: info.model.accountKey, accountType: info.model.accountType, reason: info.allowActions === false ? 'clarification' : 'user reasoning request' });
     activeLeadInvocation = id;
     try {
       const result = await options.askModel(info);
@@ -1035,7 +1037,7 @@ function createOrchestrator(options) {
   };
   if (typeof launchWorker === 'function' && ledger) opts.spawnWorker = info => {
     const id = ledger.start({ role: 'worker', projectId: info.projectId, megaTaskId: info.megaTaskId, subTaskId: info.subTaskId, attemptId: info.attemptId,
-      provider: info.worker.providerId || info.worker.provider, model: info.worker.cli, modelId: info.worker.id, reason: info.job?.kind === 'research' ? 'approved research' : 'approved work' });
+      provider: info.worker.providerId || info.worker.provider, model: info.worker.cli, modelId: info.worker.id, accountKey: info.worker.accountKey, accountType: info.worker.accountType, reason: info.job?.kind === 'research' ? 'approved research' : 'approved work' });
     try { const receipt = options.spawnWorker(info); ledger.update(id, { pid: receipt?.pid, exitPath: info.exitPath, resultPath: info.resultPath }); if (!receipt?.pid) ledger.finish(id, 'FAILED'); return receipt; }
     catch (error) { ledger.finish(id, 'FAILED'); throw error; }
   };
@@ -1061,6 +1063,9 @@ function createOrchestrator(options) {
           providerEnabled: parsed.providerEnabled || {},
           catalogVisibility: parsed.catalogVisibility || {},
           modelRoles: parsed.modelRoles || {},
+          accountModelRoles: parsed.accountModelRoles || {},
+          accountBindings: parsed.accountBindings || {},
+          lastAccountKeys: parsed.lastAccountKeys || {},
           projects: parsed.projects && typeof parsed.projects === 'object'
             ? Object.fromEntries(Object.entries(parsed.projects).map(([id, row]) => [
               id,
@@ -1081,6 +1086,9 @@ function createOrchestrator(options) {
     } catch (_) {}
   }
   store.modelRoles ||= {};
+  store.accountModelRoles ||= {};
+  store.accountBindings ||= {};
+  store.lastAccountKeys ||= {};
   store.briefingBaselines ||= {};
   if (!Array.isArray(store.asks)) store.asks = [];
   if (!Array.isArray(store.researches)) store.researches = [];
@@ -1501,8 +1509,24 @@ function createOrchestrator(options) {
   function roster() {
     return normalizeModels(models).map(item => {
       const legacyEnabled = store.enabled[item.id] ?? item.enabled;
-      const permissions = store.modelRoles[item.id] || item.roles || (legacyEnabled ? {} : Object.fromEntries(ROLE_IDS.map(role => [role, false])));
       const provider = providerDefinitions.find(p => p.id === (item.providerId || item.provider));
+      const account = provider?.account;
+      const scope = account?.key ? provider.id + ':' + account.key : null;
+      const emptyRoles = () => Object.fromEntries(ROLE_IDS.map(role => [role, false]));
+      const legacy = store.modelRoles[item.id] || item.roles || (legacyEnabled ? {} : emptyRoles());
+      if (scope && !store.accountModelRoles[scope]) {
+        const first = !store.accountBindings[provider.id];
+        store.accountBindings[provider.id] ||= scope;
+        store.accountModelRoles[scope] = Object.fromEntries(models.filter(model => model.providerId === provider.id || model.provider === provider.id).map(model => [model.id,
+          first ? withModelRoles(model, store.modelRoles[model.id] || model.roles || ((store.enabled[model.id] ?? model.enabled) ? {} : emptyRoles())).roles : emptyRoles()]));
+        persist();
+      }
+      const permissions = scope ? store.accountModelRoles[scope][item.id] || emptyRoles()
+        : provider && store.accountBindings[provider.id] ? emptyRoles() : legacy;
+      item.accountKey = account?.key || null;
+      item.accountType = account?.type || 'unread';
+      item.accountScope = scope;
+      item.label = require('./provider-accounts.cjs').accountLabel(item.label, account);
       item.providerEnabled = provider ? (store.providerEnabled[provider.id] ?? provider.enabled) : true;
       const used = usedOf(store.usage, item.id);
       const resolved = withModelRoles({ ...item, used, remaining: Math.max(0, item.limit - used) }, permissions);
@@ -1834,6 +1858,23 @@ function createOrchestrator(options) {
     ledger?.reconcile(view, opts.isProcessAlive);
     view.aiUsage = ledger?.view() || { orchestrator: [], workers: [], recent: [] };
     return view;
+  }
+
+  function bindAccount(providerId, key) {
+    const previous = store.lastAccountKeys[providerId];
+    const changed = previous !== undefined && previous !== key;
+    if (previous !== key) { store.lastAccountKeys[providerId] = key; persist(); }
+    return changed;
+  }
+
+  function invalidateAccountCache(providerId) {
+    const provider = providerDefinitions.find(provider => provider.id === providerId);
+    if (!provider) return;
+    plansAt = 0;
+    plansLive = plansLive.map(pool => pool.id !== provider.quotaPoolId ? pool : {
+      id: pool.id, label: require('./provider-accounts.cjs').accountLabel(provider.label, provider.account),
+      readable: false, exhausted: false, pct: null, leftPct: null, windows: [], reason: 'CLI account changed; remaining quota must be refreshed.'
+    });
   }
 
   async function refreshPlans(force) {
@@ -2519,6 +2560,7 @@ function createOrchestrator(options) {
     if (enabled && !model.available && !model.providerCatalog) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
     store.enabled[id] = Boolean(enabled);
     store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role])]));
+    if (model.accountScope) store.accountModelRoles[model.accountScope][id] = { ...store.modelRoles[id] };
     persist();
     return { ok: true, snapshot: await tick() };
   }
@@ -2530,6 +2572,7 @@ function createOrchestrator(options) {
     const eligibility = roleEligibility(model);
     for (const [role, enabled] of Object.entries(roles)) if (enabled && !eligibility[role]) return { ok: false, reason: `This model is not compatible with the ${role} role.` };
     store.modelRoles[id] = { ...model.roles, ...roles };
+    if (model.accountScope) store.accountModelRoles[model.accountScope][id] = { ...store.modelRoles[id] };
     if (store.orchestratorId === id && !withModelRoles(model, store.modelRoles[id]).roles.orchestrator) store.orchestratorId = null;
     persist();
     return { ok: true, snapshot: snapshot(await opts.readPlan()) };
@@ -2540,9 +2583,10 @@ function createOrchestrator(options) {
     if (!provider) return { ok: false, reason: 'Provider not present.' };
     if (typeof input.enabled === 'boolean') store.providerEnabled[provider.id] = input.enabled;
     if (typeof input.showAll === 'boolean') store.catalogVisibility[provider.id] = input.showAll;
-    if (typeof input.allModelsEnabled === 'boolean') for (const model of models.filter(m => (m.providerId || m.provider) === provider.id)) {
+    if (typeof input.allModelsEnabled === 'boolean') for (const model of roster().filter(m => (m.providerId || m.provider) === provider.id)) {
       store.enabled[model.id] = input.allModelsEnabled;
       store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role])]));
+      if (model.accountScope) store.accountModelRoles[model.accountScope][model.id] = { ...store.modelRoles[model.id] };
     }
     persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) };
   }
@@ -2890,7 +2934,7 @@ function createOrchestrator(options) {
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, shutdown, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

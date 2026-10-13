@@ -113,11 +113,12 @@ function readJson(file) {
 }
 
 function grokAuth(home) {
-  const raw = readJson(path.join(home, '.grok', 'auth.json'));
+  const grokHome = (home === os.homedir() && process.env.GROK_HOME) || path.join(home, '.grok');
+  const raw = readJson(path.join(grokHome, 'auth.json'));
   if (!raw || typeof raw !== 'object') return null;
-  const entry = Object.values(raw).find(item => item && typeof item === 'object' && (item.key || item.refresh_token));
+  const entry = require('./provider-accounts.cjs').grokEntry(raw);
   if (!entry) return null;
-  const ver = readJson(path.join(home, '.grok', 'version.json')) || {};
+  const ver = readJson(path.join(grokHome, 'version.json')) || {};
   return {
     key: typeof entry.key === 'string' ? entry.key : '',
     refresh: typeof entry.refresh_token === 'string' ? entry.refresh_token : '',
@@ -128,7 +129,7 @@ function grokAuth(home) {
 }
 
 function codexAuth(home) {
-  const raw = readJson(path.join(home, '.codex', 'auth.json'));
+  const raw = readJson(path.join((home === os.homedir() && process.env.CODEX_HOME) || path.join(home, '.codex'), 'auth.json'));
   if (!raw || typeof raw !== 'object') return null;
   const tokens = raw.tokens && typeof raw.tokens === 'object' ? raw.tokens : {};
   return {

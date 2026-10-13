@@ -26,7 +26,7 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
     return write({ id: crypto.randomUUID(), timestamp: startTime, startTime, role: info.role,
       projectId: info.projectId || null, megaTaskId: info.megaTaskId || null, subTaskId: info.subTaskId || null,
       attemptId: info.attemptId || null, provider: info.provider || null, model: info.model || null,
-      modelId: info.modelId || null, reason: info.reason, status: 'RUNNING', durationMs: null, processExit: null });
+      modelId: info.modelId || null, accountKey: info.accountKey || null, accountType: info.accountType || 'unread', reason: info.reason, status: 'RUNNING', durationMs: null, processExit: null });
   }
   function update(id, fields) {
     const row = records.get(id);

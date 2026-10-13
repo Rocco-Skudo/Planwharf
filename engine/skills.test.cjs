@@ -20,8 +20,8 @@ const { createSkillsCache, SKILL_FILES, REPO, REF } = require('./skills.js');
         })
       };
     }
-    if (url.includes('/git/trees/')) return { ok: true, status: 200, text: async () => JSON.stringify({ truncated: false, tree: SKILL_FILES.map(path => ({ path, type: 'blob' })) }) };
-    const name = SKILL_FILES.find(item => url.endsWith(item));
+    if (url.includes('/git/trees/')) return { ok: true, status: 200, text: async () => JSON.stringify({ truncated: false, tree: [...SKILL_FILES, 'LICENSE'].map(path => ({ path, type: 'blob' })) }) };
+    const name = [...SKILL_FILES, 'LICENSE'].find(item => url.endsWith(item));
     if (!name) return { ok: false, status: 404, text: async () => '' };
     files[name] = `# ${name}\n`;
     return { ok: true, status: 200, text: async () => files[name] };
@@ -34,7 +34,8 @@ const { createSkillsCache, SKILL_FILES, REPO, REF } = require('./skills.js');
   assert.equal(first.date, '2026-10-09T10:56:49Z');
   assert.equal(first.status, 'current');
   assert.equal(first.updated, true);
-  assert.equal(first.files.length, SKILL_FILES.length);
+  assert.equal(first.files.length, SKILL_FILES.length + 1);
+  assert.ok(cache.read('LICENSE'), 'Downloaded skills retain their upstream license notice');
   assert.ok(cache.read(SKILL_FILES[0]));
   assert.ok(cache.prompt('worker', 'Implement fixture').includes(REPO));
   assert.equal(cache.read('../outside'), '');

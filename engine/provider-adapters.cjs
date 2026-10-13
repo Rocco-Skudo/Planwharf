@@ -3,6 +3,7 @@
 // Mechanics live here; catalog policy and user ordering live in configuration.
 const adapters = {
   codex: { nativeModel: /^gpt-/, sourceProtectedResearch: true,
+    account: provider => require('./provider-accounts.cjs').codexAccount(provider),
     quota: () => require('./planUsage.js').readChatGpt(require('node:os').homedir(), fetch),
     discover: async () => {
       const fs = require('node:fs'), path = require('node:path'), os = require('node:os');
@@ -16,9 +17,11 @@ const adapters = {
       return { ok: true, models: (body.models || []).map(model => ({ cli: model.slug || model.id, label: model.display_name || model.slug || model.id, capabilities: { canUseTools: true, canCode: true, canOrchestrate: true, canResearch: true } })) };
     } },
   grok: { nativeModel: /^grok-/, sourceProtectedResearch: false,
+    account: provider => require('./provider-accounts.cjs').grokAccount(provider),
     quota: () => require('./planUsage.js').readGrok(require('node:os').homedir(), fetch, Date.now()),
     discover: () => require('./provider-models.cjs').listGrok() },
   antigravity: { nativeModel: /^(gemini-|claude-|gpt-oss-)/, sourceProtectedResearch: false,
+    account: () => require('./provider-accounts.cjs').unknownAccount(),
     quota: () => require('./antigravity.cjs').readAntigravity(),
     discover: async () => ({ ok: false, reason: 'This adapter uses the configured exact model catalog; no verified non-inference enumeration command.' }) },
 };
@@ -28,7 +31,7 @@ for (const [id, adapter] of Object.entries(adapters)) {
   adapter.execute = (model, folder, prompt, lead, research) => require('./provider-runtime.cjs').launchSpec(model, folder, prompt, lead, research);
   adapter.environment = (inherited, platform) => require('./provider-runtime.cjs').providerEnvironment(id, inherited, platform);
   adapter.terminate = pid => require('./runner.cjs').killWorker(pid);
-  adapter.resultIdentity = model => ({ provider: model.providerId || model.provider, model: model.cli });
+  adapter.resultIdentity = model => ({ provider: model.providerId || model.provider, model: model.cli, ...(model.accountKey ? { accountKey: model.accountKey } : {}) });
   adapter.capabilities = { canCode: true, canResearch: true, canUseTools: true, canInspectFilesystem: true, supportsStreaming: true };
 }
 function registerAdapter(id, adapter) {

@@ -38,7 +38,7 @@ function providerViews(providers, models, plans = [], settings = {}) {
     const remaining = pool?.readable === true && Number.isFinite(pool.leftPct) ? Math.max(0, Math.min(100, pool.leftPct)) : null;
     const available = provider.available !== false && Boolean(adapterFor(provider)) && adapterFor(provider)?.executionSupported !== false && rows.some(m => m.available !== false);
     const enabled = settings.providerEnabled?.[provider.id] ?? provider.enabled;
-    return { ...provider, enabled, available, availability: !available ? 'UNAVAILABLE' : pool?.readable && (pool.exhausted || remaining === 0) ? 'EXHAUSTED' : remaining === null ? 'UNREAD' : 'AVAILABLE',
+    return { ...provider, label: require('./provider-accounts.cjs').accountLabel(provider.label, provider.account), enabled, available, availability: !available ? 'UNAVAILABLE' : pool?.readable && (pool.exhausted || remaining === 0) ? 'EXHAUSTED' : remaining === null ? 'UNREAD' : 'AVAILABLE',
       quotaReadable: remaining !== null, remainingPercent: remaining, resetAt: pool?.resetAt || pool?.windows?.find(w => w.leftPct === remaining)?.resetAt || null,
       quota: pool || { id: provider.quotaPoolId, label: provider.label, readable: false, leftPct: null, exhausted: false }, showAll: settings.catalogVisibility?.[provider.id] === true, models: rows };
   });

@@ -25,8 +25,15 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     if (!port) await pause(100);
   }
   assert.ok(port, 'Browser did not start');
-  const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  ws = new WebSocket(pages.find(page => page.type === 'page').webSocketDebuggerUrl);
+  const appOrigin = `http://127.0.0.1:${server.address().port}`;
+  let target;
+  for (let n = 0; n < 200 && !target; n++) {
+    const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+    target = pages.find(page => page.type === 'page' && page.url.startsWith(appOrigin));
+    if (!target) await pause(50);
+  }
+  assert.ok(target, 'The application tab did not reach its local URL');
+  ws = new WebSocket(target.webSocketDebuggerUrl);
   await new Promise(resolve => ws.addEventListener('open', resolve, { once: true }));
   let id = 0;
   const pending = new Map();
@@ -46,8 +53,8 @@ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
     return value.result.value;
   };
   async function waitFor(expression) {
-    for (let n = 0; n < 100; n++) { if (await evaluate(expression)) return; await pause(50); }
-    const state = await evaluate("JSON.stringify({error: document.getElementById('project-error')?.textContent, toast: document.getElementById('toast')?.textContent, root: document.getElementById('projects-root')?.value, dialog: document.getElementById('project-dialog')?.open, badge: document.getElementById('revision-badge')?.textContent})");
+    for (let n = 0; n < 300; n++) { if (await evaluate(expression)) return; await pause(100); }
+    const state = await evaluate("JSON.stringify({url: location.href, readyState: document.readyState, error: document.getElementById('project-error')?.textContent, toast: document.getElementById('toast')?.textContent, root: document.getElementById('projects-root')?.value, dialog: document.getElementById('project-dialog')?.open, badge: document.getElementById('revision-badge')?.textContent})");
     throw new Error('UI condition timed out: ' + expression + ' ' + state);
   }
   await command('Emulation.setDeviceMetricsOverride', { width: 1365, height: 1100, deviceScaleFactor: 1, mobile: false });

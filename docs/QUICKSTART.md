@@ -28,6 +28,8 @@ In Orchestrator, enable your provider and select the desired model roles. Each m
 
 A model can have several roles. A model with only Reviewer selected cannot receive implementation work. A model with only Orchestrator selected cannot be dispatched as a worker or reviewer. There is no separate model On/Off switch. A selected role permits assignment when the provider/model is available and quota is not exhausted. With no roles selected, the model receives no assignments. Settings survive restart. Availability is checked at backend startup; **Refresh models** repeats the catalog check. **Availability unread** means the check failed or no reliable listing is available, not that quota is exhausted.
 
+Confirmed organizational accounts add **Business** to provider/model names; normal accounts keep their existing names. If account classification is unavailable, the existing name is shown without an extra label. The CLI login controls execution, even if your browser uses another account. Stop work before switching CLI accounts, then refresh models. Recognized accounts retain separate role flags; a new account starts with no roles selected. See the [account section](USER-GUIDE.md#personal-and-business-accounts) for provider limitations.
+
 Use **Find models** to search by provider, name or exact ID. **Model role** filters by Orchestrator, Worker or Reviewer; **All roles** clears that filter. **Show all models** expands a provider's catalog. Select an enabled, compatible model in **Orchestrator model** to choose your lead.
 
 ## 4. Prepare and approve work

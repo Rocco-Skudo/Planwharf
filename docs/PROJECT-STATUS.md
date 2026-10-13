@@ -11,6 +11,7 @@ Planwharf is a local project notebook and AI coding coordinator. Planwharf expla
 - Living Plan revisions, Grill, project folders, personal notes with optional AI relevance.
 - Approved MegaTasks, dependent SubTasks, real local coding workers and structured Results.
 - Stop, graceful pause, existing deadlines, checkpoints, changed-repository confirmation and Resume without replaying completed work.
+- Business labels from provider-reported login metadata, account-scoped roles and account-change cache invalidation.
 - User-controlled provider/model catalogs, independent persisted Orchestrator/Worker/Reviewer permission flags, role filtering, eligibility, coding/research/tool capabilities and shared REMAINING quota pools.
 - Adapter execution facade and documented developer registration contract.
 - Deterministic command/status paths, compact selected-project briefings and six bounded recent chat turns with full archived history.
@@ -28,6 +29,7 @@ Windows, Node.js 22 and Edge are exercised by the regression and browser harness
 - Export-only: there is no automatic import or portable restore. Preserve notebook plus attempts directory for full recovery. Export omits source and large raw logs.
 - Local notifications depend on OS/browser support and permission, and require an open UI. Notification preference is local to a browser profile.
 - Quota and catalogs depend on provider interfaces. Unread values remain explicit. Antigravity uses configured exact models when non-inference enumeration is unavailable.
+- Antigravity retains its normal display names because no verified account metadata interface is available; automatic per-account role separation is unavailable there.
 - Source-protected research remains supported only by the verified Codex adapter.
 - Full conversation/evidence archives grow with intentional work. Context sent to AI and recent usage rendering are bounded; historical evidence is preserved. There is no billing estimator.
 - Windows is the verified desktop platform. Linux/macOS launcher paths exist but were not validated in this Windows acceptance.
@@ -37,4 +39,4 @@ Windows, Node.js 22 and Edge are exercised by the regression and browser harness
 
 Run `node validation/phase1-suite.cjs` for the complete local regression suite, including browser checks. Run `node engine/final.test.cjs` for focused final-scope checks. `node validation/live-acceptance.cjs` opts into real providers against an isolated harmless project; it reads personal projects solely for explicit recipient-isolation verification and checks unchanged source/notebook hashes. `node validation/launcher-smoke.cjs` validates the compiled Windows launcher with an isolated notebook.
 
-Release recommendation: **v0.1.0**, the first release checkpoint for this completed local product scope. Existing workspace changes are preserved for owner review. No commit, tag, push or publication is performed automatically. See `PLANWHARF-FINAL-ACCEPTANCE.md` for real-provider acceptance and `MODEL-ROLES-VERIFICATION.md` for the subsequent user-requested role controls, English guides and 48/48 regression checks.
+Published checkpoint: [v0.1.0](https://github.com/benitz94/Planwharf/releases/tag/v0.1.0), an initial development prerelease. Business account labels, account-scoped role preferences and attribution notices are on `main` in this source commit. The v0.1.0 release ZIP does not include these later source changes. The existing release/tag is preserved as the rollback checkpoint. See `PLANWHARF-FINAL-ACCEPTANCE.md`, `MODEL-ROLES-VERIFICATION.md` and `ACCOUNT-METADATA-VERIFICATION.md` for acceptance evidence and limitations.
