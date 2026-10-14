@@ -18,6 +18,10 @@ Example goal: "Build a local HTML counter with increment and reset buttons. Keep
 
 Install and authenticate the coding CLIs you want to use: **Codex / ChatGPT**, **Grok CLI**, or **Antigravity / Gemini**. Provider/account availability determines which exact models you can actually run.
 
+For other providers, open **Usage and permissions → Add API / CLI connection**. Direct OpenAI-compatible and Anthropic Messages APIs accept your endpoint, key environment variable name and exact model IDs. Configured CLIs require a supported structured event protocol and explicit permission arguments. See [external connection setup](EXTERNAL-PROVIDERS.md). API billing is separate from chat subscriptions; configured access is not proof of successful inference.
+
+The provider selector in **Usage and permissions** loads that provider's remaining quota stop threshold, earlier warning, fallback mode and YOLO setting. For example, stop at 20% remaining warns automatically at 30% remaining; choose Automatic fallback to use another eligible provider when the stop threshold is reached. All models under that provider inherit the policy; other providers retain their own values. New external connections start with YOLO off. Token usage is recorded when an API reports it; unread balances are never converted into invented percentages or currency estimates.
+
 In Orchestrator, enable your provider and select the desired model roles. Each model has three independent **Allowed roles** checkboxes:
 
 | Role | Permission |

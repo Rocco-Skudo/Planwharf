@@ -69,7 +69,7 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl }) {
           for (const entry of entries) if (!models.some(m => m.providerId === provider.id && m.cli === entry.cli)) {
             models.push({ ...entry, id: provider.id + ':' + entry.cli, providerId: provider.id, provider: provider.id, adapter: provider.adapter, quotaPoolId: provider.quotaPoolId, plan: provider.quotaPoolId,
               label: entry.label || entry.cli, enabled: false, available: true, availabilityVerified: true, availabilityCheckedAt: checkedAt, availabilityWarning: null, providerCatalog: true, orchestratorEligible: entry.orchestratorEligible ?? entry.capabilities?.canOrchestrate ?? true,
-              workerEligible: entry.workerEligible ?? entry.capabilities?.canCode ?? true, providerConfig: { baseUrl: provider.baseUrl, authEnv: provider.authEnv, subscriptionIncluded: provider.subscriptionIncluded } });
+              workerEligible: entry.workerEligible ?? entry.capabilities?.canCode ?? true, capabilities: { ...entry.capabilities }, providerConfig: require('./provider-catalog.cjs').providerConfiguration(provider) });
           }
         }
         states.set(provider.id, { providerId: provider.id, label: provider.label || provider.id, status: result.ok ? 'current' : 'unread', checkedAt, reason: result.ok ? null : result.reason, preservingPreviousAvailability: !result.ok, ids: result.ok ? entries.map(m => m.cli) : previous?.ids || [] });

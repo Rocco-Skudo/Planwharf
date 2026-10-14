@@ -224,7 +224,7 @@
     'Disco non disponibile.': 'Disk unavailable.',
     'Compila nome e direzione.': 'Fill in name and goal.',
     'Percorso cartella non valido.': 'Folder must be an absolute path on this PC.',
-    'GitHub deve essere un URL https://github.com/proprietario/repo.': 'GitHub must be an https://github.com/owner/repo URL.',
+    'GitHub deve essere un URL https://github.com/proprietario/repo.': 'Repository must be an HTTPS GitHub or Gitea owner/repository URL.',
     'Cartella non trovata.': 'Folder not found.',
     'Nessuna cartella per questo progetto.': 'No folder for this project.',
     'Nessun GitHub per questo progetto.': 'No GitHub for this project.'
@@ -293,19 +293,19 @@
     const checked = (orchestra.projects || []).find(row => row.id === projectId)?.repository;
     const info = checked && checked.folder === (meta.folder || null) && checked.github === (meta.github || null) ? checked : null;
     const folderLine = meta.folder ? escape(meta.folder) : 'No local folder.';
-    const githubLine = meta.github ? `<a href="${escape(meta.github)}" target="_blank" rel="noopener noreferrer">${escape(meta.github)}</a>` : 'No GitHub.';
+    const githubLine = meta.github ? `<a href="${escape(meta.github)}" target="_blank" rel="noopener noreferrer">${escape(meta.github)}</a>` : 'No repository.';
     let status = 'Repository access has not been checked.';
     if (info) {
       const local = info.local || {};
       const remote = info.remote || {};
       const comparison = info.comparison || {};
-      const access = `Local: ${local.readable ? local.writable ? 'read/write' : 'readable; OS denies writes' : 'not accessible'}. GitHub: ${remote.accessible ? `${remote.private ? 'private' : 'public'}, ${remote.permissions?.push ? 'read/write' : 'read access'}` : remote.error || 'not accessible'}.`;
+      const access = `Local: ${local.readable ? local.writable ? 'read/write' : 'readable; OS denies writes' : 'not accessible'}. ${remote.provider === 'gitea' ? 'Gitea' : 'GitHub'}: ${remote.accessible ? `${remote.private ? 'private' : 'public'}, ${remote.permissions?.push ? 'read/write' : 'read access'}` : remote.error || 'not accessible'}.`;
       const sync = comparison.ahead != null && comparison.behind != null
-        ? `${comparison.localBranch || 'HEAD'} vs GitHub ${comparison.remoteBranch}: ${comparison.ahead} ahead, ${comparison.behind} behind. ${local.uncommitted == null ? 'Working-tree status unavailable.' : `${local.uncommitted} uncommitted path(s).`}`
+        ? `${comparison.localBranch || 'HEAD'} vs ${remote.provider === 'gitea' ? 'Gitea' : 'GitHub'} ${comparison.remoteBranch}: ${comparison.ahead} ahead, ${comparison.behind} behind. ${local.uncommitted == null ? 'Working-tree status unavailable.' : `${local.uncommitted} uncommitted path(s).`}`
         : `Comparison: ${comparison.status || 'unknown'}. ${comparison.error || info.error || ''}`;
       status = `${access} ${sync}${comparison.localBranchPublished === false ? ' Local branch is not published; comparison uses the default branch.' : ''}${info.warning ? ' ' + info.warning : ''} Checked ${info.checkedAt || 'unknown'}.`;
     }
-    $('project-place').innerHTML = `<span class="place-item"><small>Folder</small>${folderLine}</span><span class="place-item"><small>GitHub</small>${githubLine}</span><span class="place-actions"><button type="button" class="secondary" data-place="set">Set place</button><button type="button" class="secondary" data-place="folder" ${meta.folder ? '' : 'disabled'}>Open folder</button><button type="button" class="secondary" data-place="github" ${meta.github ? '' : 'disabled'}>Open GitHub</button><button type="button" class="secondary" data-place="check" ${meta.folder || meta.github ? '' : 'disabled'}>Check repository</button></span><p class="muted repository-status" role="status">${escape(status)}</p>`;
+    $('project-place').innerHTML = `<span class="place-item"><small>Folder</small>${folderLine}</span><span class="place-item"><small>Repository</small>${githubLine}</span><span class="place-actions"><button type="button" class="secondary" data-place="set">Set place</button><button type="button" class="secondary" data-place="folder" ${meta.folder ? '' : 'disabled'}>Open folder</button><button type="button" class="secondary" data-place="github" ${meta.github ? '' : 'disabled'}>Open repository</button><button type="button" class="secondary" data-place="check" ${meta.folder || meta.github ? '' : 'disabled'}>Check repository</button></span><p class="muted repository-status" role="status">${escape(status)}</p>`;
   }
 
   function render() {
@@ -645,7 +645,7 @@
     const models = Array.isArray(orchestra.orchestrators) && orchestra.orchestrators.length
       ? orchestra.orchestrators
       : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
-    const current = orchestra.orchestratorId || '';
+    const current = orchestra.selectedOrchestratorId || orchestra.orchestratorId || '';
     if (typeof el.setAttribute === 'function') el.setAttribute('data-quota-band', PlanwharfQuota.describe((orchestra.plans || []).find(p => p.id === (orchestra.models || []).find(m => m.id === current)?.plan)).band);
     const groups = [];
     const seen = new Map();
@@ -1471,7 +1471,7 @@
         if (response.status === 404) throw new Error('This Planwharf window is old. Close it and run node planwharf.cjs again.');
         throw new Error(translateError(result.error) || 'Save failed.');
       }
-      $('toast').textContent = action === 'folder' ? 'Opening folder.' : 'Opening GitHub.';
+      $('toast').textContent = action === 'folder' ? 'Opening folder.' : 'Opening repository.';
       clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 4000);
     } catch (error) {
       notice(error.message);

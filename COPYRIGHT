@@ -1,0 +1,27 @@
+Copyright (c) 2026 Benito Cifiello
+
+SPDX-License-Identifier: GPL-3.0-only
+
+Planwharf is free software: you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation, version 3.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see <https://www.gnu.org/licenses/>.
+
+This notice applies the GNU GPL version 3 only. It does not grant
+permission to use any later version of the GNU GPL.
+
+Commercial use, paid distribution, and paid support are allowed if
+you comply with GPL-3.0-only. A separate license from the maintainer
+is required only if you want to distribute this software or a covered
+derivative without complying with the applicable GPL-3.0-only
+obligations.
+
+Inbound contributions are accepted only under the project's
+Contributor License Agreements. See CLA.md and CONTRIBUTING.md.

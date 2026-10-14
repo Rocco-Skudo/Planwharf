@@ -45,14 +45,16 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
   function reconcile(snapshot, isAlive) {
     for (const row of records.values()) {
       if (row.role !== 'worker' || row.status !== 'RUNNING') continue;
+      let tokens = null;
+      try { tokens = JSON.parse(fs.readFileSync(row.resultPath + '.usage.json', 'utf8')); } catch {}
       const result = snapshot?.execution?.results?.find(result => result.attemptId === row.attemptId);
-      if (result) { finish(row.id, result.status, result.exitCode); continue; }
+      if (result) { finish(row.id, result.status, result.exitCode, tokens); continue; }
       if (!row.pid || typeof isAlive !== 'function' || isAlive(row.pid)) continue;
       let exit = null, text = '';
       try { exit = JSON.parse(fs.readFileSync(row.exitPath, 'utf8')); } catch {}
       try { text = fs.readFileSync(row.resultPath, 'utf8').slice(0, 8192); } catch {}
       const status = text.match(/^STATUS:\s*(COMPLETE|FAILED|BLOCKED|CHECKPOINTED)\b/m)?.[1];
-      finish(row.id, status === 'CHECKPOINTED' ? 'BLOCKED' : status || 'BLOCKED', exit?.exitCode);
+      finish(row.id, status === 'CHECKPOINTED' ? 'BLOCKED' : status || 'BLOCKED', exit?.exitCode, tokens);
     }
   }
   // A lead response cannot survive backend replacement. Worker state is reconciled separately.
@@ -65,6 +67,7 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
         const key = JSON.stringify([row.provider, row.model]);
         const group = totals.get(key) || { provider: row.provider, model: row.model, calls: 0, durationMs: 0, COMPLETE: 0, FAILED: 0, BLOCKED: 0, RUNNING: 0 };
         group.calls++; group.durationMs += row.durationMs || 0; group[row.status] = (group[row.status] || 0) + 1;
+        if (row.tokens) { group.inputTokens = (group.inputTokens || 0) + row.tokens.input; group.outputTokens = (group.outputTokens || 0) + row.tokens.output; group.tokenReadings = (group.tokenReadings || 0) + 1; }
         totals.set(key, group);
       }
       return [...totals.values()];

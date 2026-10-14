@@ -27,7 +27,7 @@ function resultContract(opts) {
   if (!opts.structuredResultPath) return '';
   const template = { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId,
     status: 'COMPLETE | FAILED | BLOCKED', summary: 'What actually happened', filesChanged: [], tests: [{ command: 'Exact command or check', status: 'PASSED | FAILED | NOT_RUN', evidence: 'Observed outcome; do not invent execution' }], blockers: [], nextAction: 'Remaining work or recommended next step', createdAt: 'ISO timestamp' };
-  return `Planwharf structured result contract:\nWrite one UTF-8 JSON object to ${opts.structuredResultPath}. Use these exact identity fields:\n${JSON.stringify(template, null, 2)}\nUse one status from the listed choices. Record only observed work and tests. No tests means an empty array. Exit 0 alone is not completion. For research, include reportPath (the absolute report.md path), sources (URLs), and recommendedNextAction. Keep the text execution evidence separate.`;
+  return `Planwharf structured result contract:\nWrite one UTF-8 JSON object to ${opts.structuredResultPath}. If a write_result tool is provided, submit the JSON through that tool instead of writing the result with write_file. Use these exact identity fields:\n${JSON.stringify(template, null, 2)}\nUse one status from the listed choices. Record only observed work and tests. No tests means an empty array. Exit 0 alone is not completion. For research, include reportPath (the absolute report.md path), sources (URLs), and recommendedNextAction. Keep the text execution evidence separate.`;
 }
 function reportExists(result, folder) {
   if (!result.reportPath || path.resolve(result.reportPath) !== path.join(path.resolve(folder), 'report.md')) return false;

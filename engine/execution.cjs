@@ -102,9 +102,10 @@ function createExecutionBridge(options) {
     if (typeof spawnWorker !== 'function') return ['The worker launcher is unavailable. Start Planwharf through its desktop launcher.'];
     return subtasks(mega).flatMap(sub => {
       const worker = models().find(model => model.id === sub.assignedModelId);
-      if (!worker?.enabled || worker.available === false || options.workerEligible && !options.workerEligible(worker, sub)) return [`Worker ${sub.assignedModelId} is unavailable or has insufficient remaining quota.`];
-      if (worker.provider !== sub.proposedProvider || worker.cli !== sub.proposedCli) return [`Provider/model configuration changed for ${sub.assignedModelId}; review a new proposal.`];
-      if (sub.type === 'RESEARCH' && !adapterFor(worker)?.sourceProtectedResearch) return [`Source-protected research is not supported by ${worker.provider}.`];
+      const candidate = options.resolveWorker ? options.resolveWorker(worker, sub) : worker;
+      if (!candidate?.enabled || candidate.available === false || options.workerEligible && !options.workerEligible(candidate, sub)) return [`Worker ${sub.assignedModelId} is unavailable or has insufficient remaining quota.`];
+      if (!worker || worker.provider !== sub.proposedProvider || worker.cli !== sub.proposedCli) return [`Provider/model configuration changed for ${sub.assignedModelId}; review a new proposal.`];
+      if (sub.type === 'RESEARCH' && !adapterFor(candidate)?.sourceProtectedResearch) return [`Source-protected research is not supported by ${worker.provider}.`];
       return [];
     });
   }
@@ -141,7 +142,16 @@ function createExecutionBridge(options) {
     return subtasks(mega);
   }
   function launch(item, job, mega, sub) {
-    const row = rowFor(mega.projectId, mega.id), worker = models().find(model => model.id === sub.assignedModelId && model.enabled && model.available !== false);
+    const row = rowFor(mega.projectId, mega.id);
+    const requested = models().find(model => model.id === sub.assignedModelId && model.enabled && model.available !== false);
+    if (requested && (requested.provider !== sub.proposedProvider || requested.cli !== sub.proposedCli)) { sub.status = 'BLOCKED'; mega.nextAction = 'Review changed provider/model configuration before continuing.'; return; }
+    const worker = options.resolveWorker ? options.resolveWorker(requested, sub) : requested;
+    if (worker && worker.id !== sub.assignedModelId) {
+      const from = sub.assignedModelId;
+      sub.fallbackFrom = from; sub.assignedModelId = worker.id; sub.proposedProvider = worker.provider; sub.proposedCli = worker.cli;
+      event(mega.projectId, 'MODEL_USAGE_FALLBACK', 'Usage limit: switched from ' + from + ' to ' + worker.id + '.', { megaTaskId: mega.id, subTaskId: sub.id, fromModelId: from, modelId: worker.id });
+      persist();
+    }
     if (!worker || typeof spawnWorker !== 'function' || options.workerEligible && !options.workerEligible(worker, sub)) { sub.status = 'BLOCKED'; mega.nextAction = `Enable the exact worker ${sub.assignedModelId}, verify its remaining quota, and resume.`; return; }
     if (worker.provider !== sub.proposedProvider || worker.cli !== sub.proposedCli) { sub.status = 'BLOCKED'; mega.nextAction = 'Review changed provider/model configuration and explicitly reassign this slice on Resume.'; return; }
     if (sub.type === 'RESEARCH' && !adapterFor(worker)?.sourceProtectedResearch) { sub.status = 'BLOCKED'; mega.nextAction = 'Source-protected research is not supported by this adapter.'; return; }

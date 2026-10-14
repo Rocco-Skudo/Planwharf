@@ -11,9 +11,12 @@ const { createExecutionBridge } = require('./execution.cjs');
 const { executionNext } = require('./execution-next.cjs');
 const { loadCatalog, providerViews } = require('./provider-catalog.cjs');
 const { adapterFor } = require('./provider-adapters.cjs');
+const { diagnoseProvider } = require('./provider-diagnostics.cjs');
 const { createInvocationLedger } = require('./invocations.cjs');
 const { compactState, recentContext } = require('./briefing.cjs');
 const Quota = require('../quota.js');
+const { validatePolicy, migratePolicy, usagePolicy, resolveUsageFallback } = require('./model-policy.cjs');
+const { validateProviderPolicy, providerPolicyFor } = require('./provider-policy.cjs');
 const { ROLE_IDS, withModelRoles, roleEligibility, permitsAssignment, assignmentRole } = require('./model-roles.cjs');
 
 const LABELS = {
@@ -212,7 +215,7 @@ function pickWorker(models, options) {
   const skip = new Set(Array.isArray(opts.skip) ? opts.skip.filter(Boolean) : []);
   const pool = normalizeModels(models)
     .map((item, index) => ({ ...item, index }))
-    .filter(item => item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && (item.providerCatalog || usedOf(usage, item.id) + item.cost <= item.limit) && !planExhausted(plans, item.quotaPoolId || item.plan));
+    .filter(item => item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && !usagePolicy(item, plans).blocked && (item.providerCatalog || usedOf(usage, item.id) + item.cost <= item.limit) && !planExhausted(plans, item.quotaPoolId || item.plan));
   if (!pool.length) return null;
   const chosen = pool[0];
   chosen.why = `${kind} job · ${chosen.label} on ${chosen.plan}; user catalog order`;
@@ -235,7 +238,7 @@ function pickWorkers(models, options) {
   const skip = new Set(Array.isArray(opts.skip) ? opts.skip.filter(Boolean) : []);
   const baseUsage = opts.usage || {};
   const eligible = normalizeModels(models).filter(item => (
-    item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && (item.providerCatalog || usedOf(baseUsage, item.id) + item.cost <= item.limit) && !planExhausted(opts.plans, item.quotaPoolId || item.plan)
+    item.enabled && item.available !== false && permitsAssignment(item, opts.job) && (assignmentRole(opts.job) === 'reviewer' ? true : opts.job?.kind === 'research' ? item.capabilities?.canResearch !== false : jobKind(opts.job) === 'build' ? item.capabilities?.canCode !== false : true) && item.providerEnabled !== false && !skip.has(item.id) && !usagePolicy(item, opts.plans || []).blocked && (item.providerCatalog || usedOf(baseUsage, item.id) + item.cost <= item.limit) && !planExhausted(opts.plans, item.quotaPoolId || item.plan)
   )).length;
   const want = Math.max(1, Number(opts.count) || sliceCount(opts.job, opts.facts, eligible));
   const workers = [];
@@ -1013,6 +1016,7 @@ function createOrchestrator(options) {
   const providerDefinitions = opts.providers || catalog.providers;
   const sessionId = opts.sessionId || crypto.randomUUID();
   const inspect = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
+  const repositoryPending = new Map();
   const readRepository = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
   const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
   const dir = typeof opts.dir === 'string' && opts.dir.trim() ? opts.dir : null;
@@ -1042,7 +1046,7 @@ function createOrchestrator(options) {
     catch (error) { ledger.finish(id, 'FAILED'); throw error; }
   };
 
-  let store = { mode: 'manual', grillPropose: true, grillKind: 'me', usage: {}, enabled: {}, providerEnabled: {}, catalogVisibility: {}, projects: {}, asks: [], orchestratorId: null };
+  let store = { mode: 'manual', grillPropose: true, grillKind: 'me', usage: {}, enabled: {}, providerEnabled: {}, catalogVisibility: {}, modelPolicies: {}, providerPolicies: {}, projects: {}, asks: [], orchestratorId: null };
   let thinkingLive = null;
   let askToken = 0;
   let plansLive = emptyPlans();
@@ -1062,6 +1066,8 @@ function createOrchestrator(options) {
           enabled: parsed.enabled && typeof parsed.enabled === 'object' ? parsed.enabled : {},
           providerEnabled: parsed.providerEnabled || {},
           catalogVisibility: parsed.catalogVisibility || {},
+          modelPolicies: parsed.modelPolicies || {},
+          providerPolicies: parsed.providerPolicies || {},
           modelRoles: parsed.modelRoles || {},
           accountModelRoles: parsed.accountModelRoles || {},
           accountBindings: parsed.accountBindings || {},
@@ -1085,6 +1091,8 @@ function createOrchestrator(options) {
       }
     } catch (_) {}
   }
+  store.providerPolicies ||= {};
+  store.modelPolicies ||= {};
   store.modelRoles ||= {};
   store.accountModelRoles ||= {};
   store.accountBindings ||= {};
@@ -1113,7 +1121,9 @@ function createOrchestrator(options) {
   }
 
   const bridge = createExecutionBridge({ store, attempts, dir, rowFor: (id, megaTaskId) => store.researches.find(record => record.megaTaskId === megaTaskId) || entry(id), inspect, spawnWorker: opts.spawnWorker,
-    isProcessAlive: opts.isProcessAlive, killWorker: opts.killWorker, models: roster, workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
+    isProcessAlive: opts.isProcessAlive, killWorker: opts.killWorker, models: roster,
+    resolveWorker: (worker, sub) => sub?.type === 'RESEARCH' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
+    workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !usagePolicy(worker, plansLive).blocked && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
     now, persist, sessionId, leadId: () => leadModel()?.id || null });
 
   function entry(id) {
@@ -1501,7 +1511,9 @@ function createOrchestrator(options) {
     const list = roster();
     if (store.orchestratorId) {
       const picked = list.find(item => item.id === store.orchestratorId);
-      if (picked && canOrchestrate(picked) && !planExhausted(plansLive, picked.quotaPoolId || picked.plan)) return picked;
+      if (picked && canOrchestrate(picked) && !usagePolicy(picked, plansLive).blocked && !planExhausted(plansLive, picked.quotaPoolId || picked.plan)) return picked;
+      const fallback = resolveUsageFallback(picked, list, plansLive, canOrchestrate);
+      if (fallback && fallback.id !== picked.id) return { ...fallback, fallbackFrom: picked.id };
     }
     return null;
   }
@@ -1528,6 +1540,15 @@ function createOrchestrator(options) {
       item.accountScope = scope;
       item.label = require('./provider-accounts.cjs').accountLabel(item.label, account);
       item.providerEnabled = provider ? (store.providerEnabled[provider.id] ?? provider.enabled) : true;
+      item.policy = validatePolicy({ alwaysApprove: item.alwaysApprove ?? true, ...migratePolicy(item.policy || {}), ...migratePolicy(store.modelPolicies[item.id] || {}) });
+      if (provider) {
+        const shared = providerPolicyFor(provider, models, store).policy;
+        item.policy = { minRemainingPercent: shared.minRemainingPercent, warningRemainingPercent: shared.warningRemainingPercent, fallbackModelId: null, alwaysApprove: shared.alwaysApprove };
+        item.fallbackProviderId = shared.fallbackProviderId;
+        item.policyScope = provider.id;
+      }
+      item.alwaysApprove = item.policy.alwaysApprove;
+      item.usagePolicy = usagePolicy(item, plansLive);
       const used = usedOf(store.usage, item.id);
       const resolved = withModelRoles({ ...item, used, remaining: Math.max(0, item.limit - used) }, permissions);
       resolved.enabled = ROLE_IDS.some(role => resolved.roles[role]);
@@ -1543,6 +1564,7 @@ function createOrchestrator(options) {
     if (!adapterFor(worker)?.sourceProtectedResearch) throw new Error('Source-protected research is not supported by the requested adapter: ' + worker.provider);
     const routeError = modelRouteError(worker);
     if (routeError) throw new Error(routeError);
+    if (usagePolicy(worker, plansLive).blocked) throw new Error(usagePolicy(worker, plansLive).reason);
     if (planExhausted(plansLive, worker.plan) || worker.remaining < worker.cost) throw new Error('Requested research model has no remaining usage: ' + modelId);
     return worker;
   }
@@ -1763,7 +1785,7 @@ function createOrchestrator(options) {
       asking: Boolean(thinkingLive),
       orchestratorId: lead ? lead.id : null,
       selectedOrchestratorId: store.orchestratorId || null,
-      orchestratorUnavailableReason: store.orchestratorId && !lead ? 'Selected orchestrator is disabled or unavailable. Choose an enabled eligible model; no substitute was selected.' : null,
+      orchestratorUnavailableReason: store.orchestratorId && !lead ? 'Selected orchestrator is unavailable or blocked by its usage policy. Choose an eligible model or configure an explicit fallback.' : null,
       orchestratorLabel: lead ? lead.label : ORCH_NAME,
       orchestrators: roster().filter(canOrchestrate).map(item => ({ id: item.id, label: item.label, providerId: item.providerId || item.provider, plan: item.plan })),
       projects: projects.map(item => {
@@ -1778,7 +1800,9 @@ function createOrchestrator(options) {
             ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
           const sub = row.subTasks?.find(sub => sub.id === part.subTaskId);
           const result = store.execution.results.find(result => result.attemptId === part.attemptId);
-          return { ...part, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
+          let diagnostic = null;
+          try { diagnostic = JSON.parse(fs.readFileSync(part.resultPath + '.diagnostic.json', 'utf8')); } catch {}
+          return { ...part, diagnostic, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
         });
         const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
           : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1849,8 +1873,20 @@ function createOrchestrator(options) {
     view.projects.forEach(row => {
       row.analysis = analysisOf(row);
     });
+    view.orchestratorFallbackFrom = lead?.fallbackFrom || null;
+    for (const research of view.researches) {
+      try { research.diagnostic = JSON.parse(fs.readFileSync(research.resultPath + '.diagnostic.json', 'utf8')); } catch {}
+    }
+    view.modelPolicySupported = true;
+    view.usageAlerts = [];
+    view.providerPolicySupported = true;
     view.plans = clone(plansLive);
-    view.providers = providerViews(providerDefinitions, view.models, plansLive, store);
+    view.providers = providerViews(providerDefinitions, view.models, plansLive, store).map(provider => {
+      const configured = providerPolicyFor(providerDefinitions.find(item => item.id === provider.id), models, store);
+      const effective = { minRemainingPercent: configured.policy.minRemainingPercent, warningRemainingPercent: configured.policy.warningRemainingPercent, fallbackModelId: null, alwaysApprove: configured.policy.alwaysApprove };
+      return { ...provider, policy: configured.policy, policySource: configured.source, usagePolicy: usagePolicy({ policy: effective, quotaPoolId: provider.quotaPoolId }, plansLive) };
+    });
+    view.usageAlerts = view.providers.filter(provider => ['warning', 'limit', 'unread'].includes(provider.usagePolicy.state)).map(provider => ({ providerId: provider.id, label: provider.label, ...provider.usagePolicy }));
     const researchRows = store.researches.map(record => ({ id: record.projectId, name: record.projectName, status: record.status,
       dispatch: [{ modelId: record.modelId, pid: record.pid, alive: record.alive, slice: 'Research: ' + record.title, activity: record.activity }] }));
     view.fleet = fleetOf(view.models, view.projects.concat(researchRows), view.orchestratorId, plansLive);
@@ -1885,14 +1921,16 @@ function createOrchestrator(options) {
     plansInflight = Promise.resolve()
       .then(() => loadPlans())
       .then(list => {
-        if (Array.isArray(list) && list.length) plansLive = list;
+        if (!Array.isArray(list) || !list.length) throw new Error('Provider usage response is unreadable.');
+        plansLive = list;
         plansAt = Date.now();
         plansInflight = null;
         return plansLive;
       })
       .catch(() => {
         plansInflight = null;
-        if (!plansAt) plansLive = emptyPlans();
+        plansLive = (plansLive.length ? plansLive : emptyPlans()).map(pool => ({ ...pool, readable: false, leftPct: null, pct: null, exhausted: false, windows: [], reason: 'Provider usage refresh failed; previous percentages cannot verify a current limit.' }));
+        plansAt = Date.now();
         return plansLive;
       });
     return plansInflight;
@@ -2199,10 +2237,29 @@ function createOrchestrator(options) {
     if (active && active.id === row.attemptId) attempts.closeAttempt({ attemptId: active.id, reason: 'complete' });
   }
 
+  function refreshRepositoryMetadata(plan, projectId) {
+    // Refresh metadata and inspection refs without merging or overwriting source files.
+    for (const item of notebookProjects(plan).filter(item => (!projectId || item.project.id === projectId) && item.project.github)) {
+      const row = entry(item.project.id);
+      const checked = Date.parse(row.repository?.checkedAt || '');
+      if (repositoryPending.has(item.project.id) || Number.isFinite(checked) && Date.now() - checked < (opts.repositoryPollMs ?? 300000)) continue;
+      const work = Promise.resolve().then(() => readRepository(item.project)).then(repository => {
+        if (shuttingDown) return;
+        row.repository = repository;
+        if (item.project.folder) row.facts = inspect(item.project.folder);
+        persist();
+      }).catch(error => {
+        row.repository = { folder: item.project.folder || null, github: item.project.github, checkedAt: now(), error: 'Repository refresh failed.', comparison: { status: 'unknown', ahead: null, behind: null } };
+      }).finally(() => repositoryPending.delete(item.project.id));
+      repositoryPending.set(item.project.id, work);
+    }
+  }
+
   async function tick(projectId) {
     await refreshPlans(false);
     let plan = await opts.readPlan();
     rememberStartup(plan);
+    refreshRepositoryMetadata(plan, projectId);
     if (!shuttingDown) for (const item of notebookProjects(plan).filter(item => !projectId || item.project.id === projectId)) decide(item);
     refreshPhase2Research(plan, !shuttingDown, projectId);
     refreshResearch();
@@ -2330,6 +2387,7 @@ function createOrchestrator(options) {
     if (Buffer.byteLength(q, 'utf8') > 1024 * 1024) return { ok: false, reason: 'message too long (maximum 1 MiB)' };
     const token = ++askToken;
     const askedAt = Date.now();
+    await refreshPlans(false);
     let snap = snapshot(await opts.readPlan(), projectId || store.selectedProjectId);
     if (projectId === undefined && store.selectedProjectId) projectId = store.selectedProjectId;
     if (projectId !== undefined && !(snap.projects || []).some(row => row.id === projectId)) return { ok: false, reason: 'Selected project no longer exists. Select a project before sending.' };
@@ -2360,6 +2418,8 @@ function createOrchestrator(options) {
       snap = prepared.snapshot;
     }
     let answer;
+    let diagnostic = null;
+    let invokedLead = null;
     let thinking = '';
     let ms = null;
     const actionResults = [];
@@ -2432,6 +2492,7 @@ function createOrchestrator(options) {
           ms: 0
         };
         try {
+          invokedLead = lead;
           const spoken = await opts.askModel({
             question: q,
             model: lead,
@@ -2465,7 +2526,8 @@ function createOrchestrator(options) {
           if (row) store.briefingBaselines[row.id] = { head: row.facts?.lastCommit || '', dirty: (row.facts?.dirty || []).slice(0, 12) };
           thinking = unpacked.thinking;
           ms = unpacked.ms;
-          const envelope = leadEnvelope(unpacked.answer, spoken && typeof spoken === 'object' ? spoken.actions : undefined);
+          diagnostic = spoken?.diagnostic || null;
+          const envelope = spoken?.failure ? { answer: unpacked.answer, actions: [] } : leadEnvelope(unpacked.answer, spoken && typeof spoken === 'object' ? spoken.actions : undefined);
           if (envelope.answer) answer = envelope.answer;
           else answer = `${lead.label} returned no answer. The provider CLI in the project folder produced nothing.`;
           if (envelope.error) answer += '\n\n' + envelope.error;
@@ -2493,7 +2555,8 @@ function createOrchestrator(options) {
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
-          answer = `${lead.label} failed: ${(error && error.message) || 'CLI error'}.`;
+          diagnostic = diagnoseProvider(lead, error?.message || 'CLI error');
+          answer = diagnostic.message;
         }
         thinkingLive = null;
         if (token !== askToken) return finishCancelled();
@@ -2505,11 +2568,12 @@ function createOrchestrator(options) {
     if (!Number.isFinite(ms)) ms = Date.now() - askedAt;
     if (currentTask) answer += `\n\nNew task prepared from this message: ${currentTask.title}. Approve this task to assign workers. No previous checkpoint was resumed.`;
     const row = pickAskedProject(snap, projectId, q);
-    const lead = leadModel();
+    const lead = invokedLead || leadModel();
     const item = {
       at: now(),
       question: q,
       answer,
+      diagnostic,
       thinking: thinking || null,
       ms: Number.isFinite(ms) ? ms : null,
       projectId: (row && row.id) || null,
@@ -2576,6 +2640,32 @@ function createOrchestrator(options) {
     if (store.orchestratorId === id && !withModelRoles(model, store.modelRoles[id]).roles.orchestrator) store.orchestratorId = null;
     persist();
     return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+  }
+
+  async function setProviderPolicy(id, input) {
+    const provider = providerDefinitions.find(provider => provider.id === id);
+    if (!provider) return { ok: false, reason: 'Provider not present.' };
+    try {
+      if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Invalid provider policy.');
+      const policy = validateProviderPolicy({ ...providerPolicyFor(provider, models, store).policy, ...migratePolicy(input) });
+      if (policy.fallbackProviderId && policy.fallbackProviderId !== '@automatic' && (policy.fallbackProviderId === id || !providerDefinitions.some(provider => provider.id === policy.fallbackProviderId))) throw new Error('Fallback must refer to another configured provider.');
+      store.providerPolicies[id] = policy;
+      persist();
+      return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+    } catch (error) { return { ok: false, reason: error.message }; }
+  }
+
+  async function setModelPolicy(id, input) {
+    const model = roster().find(model => model.id === id);
+    if (!model) return { ok: false, reason: 'Model not present.' };
+    try {
+      validatePolicy(input);
+      const policy = validatePolicy({ ...model.policy, ...migratePolicy(input) });
+      if (policy.fallbackModelId && (policy.fallbackModelId === id || !models.some(model => model.id === policy.fallbackModelId))) throw new Error('Fallback must refer to another configured model.');
+      store.modelPolicies[id] = policy;
+      persist();
+      return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+    } catch (error) { return { ok: false, reason: error.message }; }
   }
 
   async function setCatalogSettings(input) {
@@ -2934,7 +3024,7 @@ function createOrchestrator(options) {
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

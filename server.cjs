@@ -74,9 +74,21 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans } = {}) {
+function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, readRepository, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans } = {}) {
+  const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
+  const connectionFile = path.join(storeDir, 'provider-connections.json');
+  let connections = [];
+  try { connections = JSON.parse(require('node:fs').readFileSync(connectionFile, 'utf8')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; }
+  if (!Array.isArray(connections)) throw new Error('Invalid provider connections file.');
   const catalog = loadCatalog(providers ? { schema: 3, providers } : models === defaultModels ? require('./models.json') : models);
   models = catalog.models; providers = catalog.providers;
+  for (const saved of connections) {
+    const provider = require('./engine/provider-connections.cjs').connection(saved);
+    if (providers.some(item => item.id === provider.id)) throw new Error('Duplicate saved provider connection: ' + provider.id);
+    const extra = loadCatalog({ schema: 3, providers: [provider] });
+    providers.push(...extra.providers); models.push(...extra.models);
+  }
   const providerModels = createProviderModels(models, { providers, ...(discoverModels ? { discover: discoverModels } : {}) });
   const accountStates = new Map();
   let accountSync;
@@ -165,7 +177,6 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     queue = pending.catch(() => {});
     return pending;
   };
-  const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
   const attempts = createAttemptEngine({ dir: storeDir });
   let orchestra;
   const sentinel = createSentinel(attempts, {
@@ -222,6 +233,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     mattSkillsEnabled: () => skillsEnabled,
     dir: storeDir,
     inspectFolder,
+    readRepository,
     spawnWorker: typeof spawnWorker === 'function' ? info => spawnWorker({ ...info, job: { ...info.job, detail: [info.job?.detail || '', skillsPrompt(info.job?.kind === 'research' ? 'research' : info.job?.kind === 'audit' ? 'audit' : 'worker', `${info.job?.title || ''} ${info.job?.detail || ''}`)].join('\n\n') } }) : undefined,
     isProcessAlive,
     killWorker,
@@ -309,7 +321,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
   }
   if (initialSkillsSync) initialSkillsSync.catch(() => {});
   const initialModelsSync = syncAccounts().then(() => refreshModels ? providerModels.refresh(true) : undefined).catch(() => {});
-  const staticFiles = { '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  const staticFiles = { '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -365,7 +377,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         if (!project) throw new RequestError(404, 'Project not found.');
         const snapshot = await orchestra.snapshot(projectId);
         const bundle = exportProject(project, orchestra.executionView(projectId), { mode: snapshot.mode, orchestratorId: snapshot.orchestratorId,
-          modelRoles: Object.fromEntries(snapshot.models.map(model => [model.id, model.roles])), enabled: Object.fromEntries(snapshot.models.map(model => [model.id, model.enabled])), providerEnabled: Object.fromEntries(snapshot.providers.map(provider => [provider.id, provider.enabled])) });
+          providerPolicies: Object.fromEntries(snapshot.providers.map(provider => [provider.id, provider.policy])), modelPolicies: Object.fromEntries(snapshot.models.map(model => [model.id, model.policy])), modelRoles: Object.fromEntries(snapshot.models.map(model => [model.id, model.roles])), enabled: Object.fromEntries(snapshot.models.map(model => [model.id, model.enabled])), providerEnabled: Object.fromEntries(snapshot.providers.map(provider => [provider.id, provider.enabled])) });
         response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': 'attachment; filename="planwharf-project.json"', 'Cache-Control': 'no-store' });
         response.end(JSON.stringify(bundle, null, 2) + '\n'); return;
       }
@@ -569,6 +581,36 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         }
         throw new RequestError(400, 'Invalid data.');
       }
+      if (request.method === 'POST' && pathname === '/api/providers/connections') {
+        const input = await body(request);
+        let provider;
+        try { provider = require('./engine/provider-connections.cjs').connection(input); }
+        catch (error) { throw new RequestError(400, error.message); }
+        const result = await enqueue(async () => {
+          if (providers.some(item => item.id === provider.id)) throw new RequestError(400, 'Provider ID already exists. Use a new connection ID.');
+          const extra = loadCatalog({ schema: 3, providers: [provider] });
+          if (extra.models.some(model => models.some(existing => existing.id === model.id))) throw new RequestError(400, 'Model ID already exists.');
+          await fs.mkdir(storeDir, { recursive: true });
+          await writePlan(connectionFile, [...connections, input]);
+          connections.push(input); providers.push(...extra.providers); models.push(...extra.models);
+          return orchestra.snapshot();
+        });
+        return json(200, result);
+      }
+      if (request.method === 'POST' && pathname === '/api/providers/policy') {
+        const input = await body(request);
+        if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => !['id', 'policy'].includes(key))) throw new RequestError(400, 'Invalid provider policy settings.');
+        const result = await enqueue(() => orchestra.setProviderPolicy(input.id, input.policy));
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/models/policy') {
+        const input = await body(request);
+        if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => !['id', 'policy'].includes(key))) throw new RequestError(400, 'Invalid model policy settings.');
+        const result = await enqueue(() => orchestra.setModelPolicy(input.id, input.policy));
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result.snapshot);
+      }
       if (request.method === 'POST' && pathname === '/api/models/roles') {
         const input = await body(request);
         if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => !['id', 'roles'].includes(key))) throw new RequestError(400, 'Invalid model role settings.');
@@ -769,7 +811,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
           openFolder(project.project.folder);
         } else {
           if (!project.project.github) throw new RequestError(400, 'No GitHub for this project.');
-          if (!Plan.isGithubUrl(project.project.github)) throw new RequestError(400, 'GitHub must be an https://github.com/owner/repo URL.');
+          if (!Plan.isGithubUrl(project.project.github)) throw new RequestError(400, 'Repository must be an HTTPS GitHub or Gitea owner/repository URL.');
           openUrl(project.project.github);
         }
         return json(200, { ok: true });
@@ -861,6 +903,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       try {
         await initialModelsSync;
         await syncAccounts();
+        await orchestra.refreshRepositories();
         const state = await orchestra.snapshot();
         if (state.projects.some(row => row.status === 'watching') || (state.researches || []).some(row => row.status === 'watching')) await enqueue(() => orchestra.tick());
       } catch (error) { console.error('Execution monitoring failed:', error.message); }

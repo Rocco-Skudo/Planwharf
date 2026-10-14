@@ -23,7 +23,7 @@
     return value.startsWith('/') && value.length > 1;
   }
   function isGithubUrl(value) {
-    return typeof value === 'string' && /^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value);
+    return typeof value === 'string' && /^https:\/\/[A-Za-z0-9.-]+(?::[0-9]{1,5})?(?:\/[A-Za-z0-9_.-]+)*\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(value) && !value.split('/').some(part => part === '.' || part === '..');
   }
   function normalizeFolder(value) {
     let folder = value.trim().replace(/^["']+|["']+$/g, '').trim();
@@ -42,7 +42,7 @@
     const folder = typeof input?.folder === 'string' ? normalizeFolder(input.folder) : '';
     const github = typeof input?.github === 'string' ? normalizeGithub(input.github) : '';
     if (folder && !isFolderPath(folder)) throw new Error('Folder must be an absolute path on this PC.');
-    if (github && !isGithubUrl(github)) throw new Error('GitHub must be an https://github.com/owner/repo URL.');
+    if (github && !isGithubUrl(github)) throw new Error('Repository must be an HTTPS GitHub or Gitea owner/repository URL.');
     return { folder, github };
   }
   function projectRecord(id, name, place) {

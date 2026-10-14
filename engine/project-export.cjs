@@ -17,7 +17,7 @@ function exportProject(project, execution, settings = {}) {
   const summary = summarizeTimeline(data.timeline, data);
   return sanitize({ format: 'planwharf-project-export', schema: 1, exportedAt: new Date().toISOString(), restoreSupported: false,
     project: project.project, revisions: project.revisions, tasks: project.tasks, notes: project.home?.notes || [], execution: data, timeline: summary,
-    settings: { modelRoles: settings.modelRoles, accountModelRoles: settings.accountModelRoles, mode: settings.mode, orchestratorId: settings.orchestratorId, enabled: settings.enabled, providerEnabled: settings.providerEnabled },
+    settings: { providerPolicies: settings.providerPolicies, modelPolicies: settings.modelPolicies, modelRoles: settings.modelRoles, accountModelRoles: settings.accountModelRoles, mode: settings.mode, orchestratorId: settings.orchestratorId, enabled: settings.enabled, providerEnabled: settings.providerEnabled },
     markdown: `# ${project.project.name}\n\n${project.revisions.at(-1).direction}\n\n` + summary.map(event => `- ${event.createdAt}: ${event.summary}`).join('\n') });
 }
 module.exports = { exportProject, sanitize };

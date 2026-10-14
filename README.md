@@ -2,7 +2,7 @@
 
 A local project notebook and coordinator for AI coding workers across models and providers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution with the AI models you use.
 
-Planwharf aims to support all AI models and providers. Claude, DeepSeek, Qwen, Kimi and other model families are part of that goal. Integration and testing are ongoing: using a model today requires a compatible CLI adapter, CLI authentication and account access to that model. Not every integration is implemented or verified yet. If you cannot add, load or use your model, or its provider's CLI is not supported yet, please [report it through GitHub Issues](https://github.com/benitz94/Planwharf/issues). Include the OS, CLI name and version, exact provider/model ID, and error message; remove credentials and personal data before sharing logs.
+Planwharf includes native Codex, Grok and Antigravity CLI adapters, direct OpenAI-compatible and Anthropic Messages API connections, and a configurable CLI adapter for compatible structured protocols. Add connections from **Usage and permissions ? Add API / CLI connection**. DeepSeek, Kimi and other providers can use compatible APIs without pretending to be another provider. See [connection setup and limitations](docs/EXTERNAL-PROVIDERS.md). Exact model access, tool support and credentials remain account-specific; installing an arbitrary CLI does not guarantee protocol compatibility. Live access to every provider/model has not been verified. Please [report missing integrations](https://github.com/benitz94/Planwharf/issues) with the OS, CLI/protocol version, exact model ID and sanitized error.
 
 Planwharf is still under active development and is provided **as is**. Features and behavior may change, and bugs or limitations may remain. Feedback, development suggestions, and contributions are welcome. Please share bug reports and ideas through GitHub Issues.
 
@@ -14,7 +14,7 @@ Planwharf can use [Matt Pocock's open-source skills](https://github.com/mattpoco
 
 1. Download the complete application folder, install Node.js, and open `Planwharf.exe`.
 2. Choose **Add project**, write a concrete goal, and link a new or existing project folder.
-3. For AI work, install and authenticate a supported coding CLI with an account authorized to use the selected models through that CLI, then enable available lead/worker models. A chat-only plan is insufficient. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
+3. For AI work, authenticate a supported coding CLI or add an API connection with authorized exact model IDs, then enable available lead/worker models. Chat subscriptions do not automatically grant API or CLI access. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
 4. Review the proposed MegaTask, workers, and dependencies. Choose **Approve MegaTask**; Automatic mode also requires approval of new work.
 5. Follow **Progress**, **Now**, **Next**, and **Workers**, then test the output in the project folder. Completion does not automatically commit, push, or publish it.
 
@@ -134,7 +134,7 @@ Malformed JSON, unknown fields, and invalid types are rejected without changing 
 
 The comparison fetches the linked repository's current branch history into dedicated inspection refs. It does not merge, push, switch branches, or overwrite working files. When the local branch is unpublished, the comparison explicitly uses GitHub's default branch as its baseline. Diverged histories and failures remain visible; old tracking refs are not reported as a current GitHub check.
 
-The lead receives a compact briefing for the selected project, its active work, recent results, checkpoint, AI-relevant notes and repository delta. Older conversation exchanges stay in the local archive; only six bounded recent turns are sent. Registered project paths support explicit recipient selection; the lead must inspect only the selected project unless the current request names another. Its CLI has full filesystem/network permissions and runs without interactive approvals. Its prompt keeps it in a coordination role: workers implement jobs. A role instruction is not a filesystem sandbox.
+The lead receives a compact briefing for the selected project, its active work, recent results, checkpoint, AI-relevant notes and repository delta. Older conversation exchanges stay in the local archive; only six bounded recent turns are sent. Registered project paths support explicit recipient selection; the lead must inspect only the selected project unless the current request names another. By default its CLI retains the existing full filesystem/network permissions without interactive approvals; the per-provider Always approve / YOLO policy can restrict future launches. Its prompt keeps it in a coordination role: workers implement jobs. A role instruction is not a filesystem sandbox.
 
 The account must already have repository access. A URL alone cannot grant it. Check `gh auth status` or use `gh auth login` if authentication is missing. Credentials are not embedded in notebooks or model prompts.
 
@@ -142,7 +142,7 @@ The account must already have repository access. A URL alone cannot grant it. Ch
 
 `models.json` uses schema 3 with a `providers` array; each provider declares its adapter, quota pool, and model entries. Model entries retain explicit provider and CLI model IDs. The runner launches that adapter and exact model; it rejects incompatible combinations and never silently routes GPT or Gemini labels to Grok. The configuration examples below describe individual entries inside a provider's `models` array.
 
-Model recognition is extensible through configuration. The installed adapters are `codex`, `antigravity`, and `grok`; a model name such as Claude, Qwen, or Kimi is not an adapter. Native model families retain their compatibility guard. For a different exact model ID that your selected CLI has explicitly been configured to accept, add `"modelRouting": "configured"`. This removes the family-name restriction while retaining the exact provider and CLI ID. It does not install a provider, verify account access, or change a CLI's supported models. Unknown adapters remain unavailable with a clear error.
+Model recognition is extensible through configuration. The installed adapters are `codex`, `antigravity`, `grok`, `api`, and `configured-cli`; a model name such as Claude, Qwen, or Kimi is not an adapter. Native model families retain their compatibility guard. For a different exact model ID that your selected CLI has explicitly been configured to accept, add `"modelRouting": "configured"`. This removes the family-name restriction while retaining the exact provider and CLI ID. It does not install a provider, verify account access, or change a CLI's supported models. Unknown adapters remain unavailable with a clear error.
 
 For example, this is a disabled template for a Qwen route through a separately configured compatible Antigravity CLI. Replace the placeholder with the exact ID accepted by your CLI; use the same pattern for Kimi or any future model. Claude IDs already match Antigravity's native family guard, but still require actual account access. Leave unverified entries disabled and unavailable until you have checked the selected CLI and account:
 
@@ -242,3 +242,17 @@ A previous real orchestrator run produced a Windows calculator through Gemini wo
 Historical `handoff` payloads and execution logs preserve their original language as evidence. Current product documentation is in English. Personal notebook content and test fixture text are user/sample data, rather than translated product documentation.
 
 Phase 1 validation: `node validation/phase1-suite.cjs` runs every engine test, root verification script, browser folder/worker checks, and real app-window checks. Each run writes a new evidence directory and verifies that the personal notebook is unchanged. The isolated browser tests use mocked quotas and no model dispatch. Chromium sandbox restrictions in the validation environment require `--no-sandbox` for tests only; normal launch retains browser defaults.
+
+## Usage policies and repository integrations
+
+See [usage and integration policies](docs/USAGE-AND-INTEGRATION-POLICIES.md) for model usage thresholds, popup notices, explicit fallback routes, per-provider Always approve / YOLO controls, Gitea authentication, periodic commit checks, and provider error reports. Repository checks update information and inspection refs only; project source is preserved.
+
+## License
+
+Planwharf is free software licensed under the **GNU General Public License version 3 only (GPL-3.0-only)**. See [LICENSE](LICENSE) and [COPYRIGHT](COPYRIGHT).
+
+You may use, study, modify, and redistribute Planwharf, including for commercial use, paid distribution, and paid support, when you comply with GPL-3.0-only. No automatic royalty is required for compliant commercial distribution. Private modifications that are not conveyed do not by themselves require source publication.
+
+A separate license from the maintainer is required only to distribute Planwharf or a covered derivative without complying with the applicable GPL obligations, for example under incompatible proprietary terms. Possible commercial terms can be negotiated later; no such agreement or royalty rate is established here.
+
+External contributions require the applicable [Individual CLA](CLA.md) or [Entity CLA](CLA-ENTITY.md); contributors retain copyright, and the public project remains GPL. See [CONTRIBUTING.md](CONTRIBUTING.md) and [licensing details](docs/LICENSING-PROPOSAL.md). The GPL does not grant rights to present a fork as the official Planwharf project or as endorsed by its maintainer. Third-party notices and licenses remain applicable.

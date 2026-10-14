@@ -6,6 +6,7 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { launchSpec, providerEnvironment } = require('./providers.cjs');
 const { resolveCliModel } = require('./model-routing.cjs');
+const { diagnoseProvider } = require('./provider-diagnostics.cjs');
 const { readJSON, validateResult, resultContract, reportExists } = require('./worker-result.cjs');
 
 function which(cmd) {
@@ -171,11 +172,11 @@ function askPrompt(info) {
   return [
     `You are ${model}, the Planwharf orchestrator lead.`,
     'You coordinate. You do not implement. Workers write code, tests, and files. You never edit the project, never apply patches, never run the job yourself, never spawn subagents that change the repo.',
-    'You have full local tool access, network access and noninteractive CLI permissions. Use them to inspect the linked project files, git history, diffs, worker logs and GitHub repository. The coordinator role is a responsibility, not a filesystem or network restriction.',
+    (info.model?.policy?.alwaysApprove ?? info.model?.alwaysApprove) === false ? 'Your tool access is restricted by the configured model permission policy. Inspect only with permitted tools; report denied actions without bypassing restrictions.' : 'You have full local tool access, network access and noninteractive CLI permissions. Use them to inspect the linked project files, git history, diffs, worker logs and linked repository. The coordinator role is a responsibility, not a filesystem or network restriction.',
     'Use the existing gh login for private GitHub repositories (gh api / gh repo view / gh api contents). Git can use it with -c credential.helper= -c "credential.helper=!gh auth git-credential". Never print tokens or copy credentials into prompts, files or logs.',
     'Fetching git objects and updating inspection refs is allowed. Do not implement the job yourself. Do not push, merge, reset, checkout or overwrite work unless that specific action is requested. Report authentication or access failures precisely; do not claim a linked repo is unreadable without checking.',
     folder ? `Project folder: ${folder}. Inspect the complete project, including nested files and git worktrees.` : 'No accessible local folder is linked. GitHub inspection can still use the linked repository.',
-    github ? `GitHub repository: ${github}. Use authenticated access, including when it is private.` : 'No GitHub repository is linked.',
+    github ? (require('./repository.cjs').repositoryAddress(github)?.provider === 'gitea' ? `Gitea repository: ${github}. The notebook supplies authenticated repository comparison metadata; do not use gh for this host.` : `GitHub repository: ${github}. Use authenticated access, including when it is private.`) : 'No GitHub repository is linked.',
     'The briefing names registered projects for recipient selection. Inspect only the selected project unless the current request explicitly names another project. Local uncommitted changes are separate from commits ahead/behind GitHub. Compare the stated branch and refreshed remote SHA; never use old tracking refs as proof of current GitHub state.',
     focus ? `They are asking about ${focus}.` : '',
     'CURRENT REQUEST is authoritative for this turn: use its explicit project ID and exact text. If it contains a new task ID, that is a fresh task awaiting approval. Do not describe a previous job or checkpoint as if it performed the current request; verify task IDs and dispatch receipts. Resume applies only to an explicit resume command for the same job.',
@@ -228,6 +229,10 @@ function dropThinkingPrefix(answer, thinking) {
 function parseAskLine(acc, row) {
   if (!acc || typeof acc !== 'object') return acc;
   if (!row || typeof row !== 'object') return acc;
+  if (row.type === 'error' || row.type === 'turn.failed' || row.type === 'result' && row.is_error === true) {
+    acc.failure = 'provider';
+    acc.error = typeof row.message === 'string' ? row.message : typeof row.error?.message === 'string' ? row.error.message : typeof row.result === 'string' ? row.result : 'Provider reported a failed turn.';
+  }
   if (row.type === 'turn.completed' && row.usage && Number.isSafeInteger(row.usage.input_tokens) && Number.isSafeInteger(row.usage.output_tokens)) acc.tokens = { input: row.usage.input_tokens, output: row.usage.output_tokens, ...(Number.isSafeInteger(row.usage.cached_input_tokens) ? { cachedInput: row.usage.cached_input_tokens } : {}) };
   if (row.event === 'step_update' && row.step_update) {
     const step = row.step_update;
@@ -342,7 +347,7 @@ function askOrchestrator(info) {
   const work = cwd || fs.mkdtempSync(path.join(os.tmpdir(), 'pw-ask-'));
   let spec;
   try { spec = launchSpec(info.model, work, askPrompt(info), true); }
-  catch (error) { return Promise.resolve({ answer: error.message, thinking: '', ms: 0, failure: 'launch' }); }
+  catch (error) { const diagnostic = diagnoseProvider(info.model || {}, error.message); return Promise.resolve({ answer: diagnostic.message, diagnostic, thinking: '', ms: 0, failure: 'launch' }); }
   const onProgress = typeof info.onProgress === 'function' ? info.onProgress : null;
   const started = Date.now();
   return new Promise(resolve => {
@@ -381,6 +386,11 @@ function askOrchestrator(info) {
       if (!Number.isFinite(out.ms)) out.ms = Date.now() - started;
       out.processExit = Number.isInteger(errorOrCode) ? errorOrCode : null;
       if (errorOrCode || out.failure) out.failure ||= 'process';
+      if (!out.answer && !out.failure) out.failure = 'PROVIDER_PROTOCOL_CHANGED';
+      if (out.failure) {
+        out.diagnostic = diagnoseProvider(info.model, stderr || out.error || out.failure, out.processExit);
+        out.answer = out.diagnostic.message + (out.answer ? '\n\n' + out.answer : '');
+      }
       resolve(out);
     };
     child.on('error', done);
@@ -425,9 +435,11 @@ function run(argv = process.argv) {
   }
   if (opts.structuredResultPath) fs.writeFileSync(opts.exitPath + '.process.json', JSON.stringify({ pid: process.pid, attemptId: opts.attempt, createdAt: new Date().toISOString() }) + '\n');
   let spec;
-  try { spec = launchSpec(opts.model, opts.folder, promptFor(opts), false, opts.kind === 'research'); }
+  try { spec = launchSpec({ ...opts.model, apiResultOutputPath: opts.structuredResultPath, apiResultIdentity: { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId } }, opts.folder, promptFor(opts), false, opts.kind === 'research'); }
   catch (error) {
-    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message });
+    const diagnostic = diagnoseProvider(opts.model || {}, error.message);
+    fs.writeFileSync(opts.result + '.diagnostic.json', JSON.stringify(diagnostic, null, 2));
+    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: diagnostic.message });
     process.exitCode = 1;
     return;
   }
@@ -435,10 +447,20 @@ function run(argv = process.argv) {
   let finalStatus = null;
   let settled = false;
   let pending = '';
-  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: providerEnvironment(spec.adapter || spec.provider), windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'inherit'] });
+  let providerStderr = '';
+  const apiUsageStream = spec.adapter === 'api' ? createAskStream() : null;
+  const agyProtocol = (spec.adapter || spec.provider) === 'antigravity' || spec.outputProtocol === 'antigravity-jsonl';
+  const saveDiagnostic = (reason, exitCode) => {
+    const diagnostic = diagnoseProvider(opts.model, reason, exitCode);
+    fs.writeFileSync(opts.result + '.diagnostic.json', JSON.stringify(diagnostic, null, 2));
+    return diagnostic.message;
+  };
+  const child = spawn(spec.command, spec.args, { cwd: spec.cwd, env: providerEnvironment(spec.adapter || spec.provider), windowsHide: true, stdio: [typeof spec.stdin === 'string' ? 'pipe' : 'ignore', 'pipe', 'pipe'] });
+  child.stderr.on('data', chunk => { process.stderr.write(chunk); providerStderr = (providerStderr + chunk).slice(-4000); });
   child.stdout.on('data', chunk => {
     process.stdout.write(chunk);
-    if ((spec.adapter || spec.provider) !== 'antigravity') return;
+    apiUsageStream?.push(chunk);
+    if (!agyProtocol) return;
     pending += String(chunk);
     const lines = pending.split(/\r?\n/); pending = lines.pop() || '';
     for (const line of lines) {
@@ -448,7 +470,7 @@ function run(argv = process.argv) {
   const fail = error => {
     if (settled) return;
     settled = true;
-    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: error.message || 'spawn failed' });
+    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, reason: saveDiagnostic(error.message || 'spawn failed', null) });
     process.exitCode = 1;
   };
   child.on('error', fail);
@@ -456,7 +478,9 @@ function run(argv = process.argv) {
     if (settled) return;
     settled = true;
     if (pending.trim()) { try { const row = JSON.parse(pending); if (row.event === 'result' && row.result) finalStatus = row.result.status; } catch (_) {} }
-    const reportedFailure = (spec.adapter || spec.provider) === 'antigravity' && finalStatus !== 'SUCCESS';
+    const reportedFailure = agyProtocol && finalStatus !== 'SUCCESS';
+    const usage = apiUsageStream?.finish().tokens;
+    if (usage) fs.writeFileSync(opts.result + '.usage.json', JSON.stringify(usage) + '\n');
     const exitCode = code == null || (code === 0 && reportedFailure) ? 1 : code;
     if (opts.structuredResultPath) {
       const result = readJSON(opts.structuredResultPath);
@@ -464,7 +488,7 @@ function run(argv = process.argv) {
       const valid = validateResult(result, identity) && (opts.kind !== 'research' || result.status !== 'COMPLETE' || reportExists(result, opts.folder));
       fs.writeFileSync(opts.exitPath, JSON.stringify({ attemptId: opts.attempt, exitCode, signal, provider: spec.provider, model: spec.model, createdAt: new Date().toISOString() }) + '\n');
       const status = valid && (result.status !== 'COMPLETE' || exitCode === 0) ? result.status : 'FAILED';
-      patchStatus(opts.result, status, { worker: opts.worker, attempt: opts.attempt, exitCode, reason: valid ? 'Structured result and provider exit recorded.' : 'Missing or invalid structured worker result.' });
+      patchStatus(opts.result, status, { worker: opts.worker, attempt: opts.attempt, exitCode, reason: status !== 'FAILED' ? 'Structured result and provider exit recorded.' : saveDiagnostic(providerStderr || (valid ? 'Provider execution failed.' : 'Missing or invalid structured worker result.'), exitCode) });
       process.exitCode = status === 'COMPLETE' ? 0 : 1;
       return;
     }
@@ -473,7 +497,7 @@ function run(argv = process.argv) {
       process.exitCode = 0;
       return;
     }
-    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: signal ? `signal ${signal}` : (reportedFailure ? `Antigravity result ${finalStatus || 'missing'}` : `worker exit ${exitCode}`) });
+    patchStatus(opts.result, 'FAILED', { worker: opts.worker, attempt: opts.attempt, exitCode, reason: saveDiagnostic(providerStderr || (signal ? `signal ${signal}` : (reportedFailure ? `Antigravity result ${finalStatus || 'missing'}` : `worker exit ${exitCode}`)), exitCode) });
     process.exitCode = exitCode;
   });
   writePrompt(child, spec, fail);

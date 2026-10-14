@@ -28,6 +28,8 @@ class FakeProvider {
     Console.OutputEncoding = new UTF8Encoding(false);
     if (File.Exists("early-exit")) { Console.Error.Write("isolated early exit"); return 7; }
     var json = new JavaScriptSerializer(); json.MaxJsonLength = int.MaxValue;
+    if (File.Exists("cli-change")) { Console.Error.Write("unknown flag --removed"); return 2; }
+    if (File.Exists("protocol-change")) { Console.WriteLine(json.Serialize(new { future_protocol = true })); return 0; }
     int file = Array.IndexOf(args, "--prompt-file");
     int stream = Array.IndexOf(args, "--input-format");
     string input = "", prompt = "";
@@ -55,6 +57,8 @@ const scriptSource = `#!/usr/bin/env node
 const fs = require('node:fs'), crypto = require('node:crypto');
 const args = process.argv.slice(2);
 if (fs.existsSync('early-exit')) { process.stderr.write('isolated early exit'); process.exit(7); }
+if (fs.existsSync('cli-change')) { process.stderr.write('unknown flag --removed'); process.exit(2); }
+if (fs.existsSync('protocol-change')) { console.log(JSON.stringify({future_protocol:true})); process.exit(0); }
 const file = args.indexOf('--prompt-file'), stream = args.indexOf('--input-format');
 const input = file < 0 ? fs.readFileSync(0, 'utf8') : '';
 const prompt = file >= 0 ? fs.readFileSync(args[file + 1], 'utf8') : stream >= 0 ? JSON.parse(input).message.content : input;
@@ -113,6 +117,13 @@ async function main() {
     assert.equal(worker.error, undefined); assert.equal(worker.status, 0, provider + ': ' + worker.stderr);
     assert.match(fs.readFileSync(opts.result, 'utf8'), /STATUS: COMPLETE/);
     assert.equal(receipt(folder).prompt, promptFor(opts), provider + ' receives the entire worker prompt');
+    for (const [marker, category] of [['cli-change', 'PROVIDER_CLI_INCOMPATIBLE'], ['protocol-change', 'PROVIDER_PROTOCOL_CHANGED']]) {
+      fs.writeFileSync(path.join(folder, marker), 'fixture');
+      const changed = await askOrchestrator({ model, folder, question: 'Isolated interface drift probe.' });
+      assert.equal(changed.diagnostic.code, category, provider + ': drift diagnostic');
+      assert.ok(changed.failure);
+      fs.rmSync(path.join(folder, marker));
+    }
     if (provider === 'antigravity') {
       fs.writeFileSync(path.join(folder, 'early-exit'), 'fixture');
       const early = await askOrchestrator({ model, folder, question: 'x'.repeat(4 * 1024 * 1024) });

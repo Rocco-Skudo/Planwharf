@@ -1,6 +1,6 @@
 'use strict';
 const { adapterFor } = require('./provider-adapters.cjs');
-function executable(provider) { return adapterFor(provider)?.executable() || null; }
+function executable(provider) { return adapterFor(provider)?.executable(provider) || null; }
 function providerEnvironment(provider, inherited = process.env, platform = process.platform) {
   return adapterFor(provider)?.environment(inherited, platform) || { ...inherited };
 }

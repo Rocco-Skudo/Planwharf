@@ -1089,6 +1089,7 @@ html[data-watch] .orch-dash { display: grid; gap: 16px; margin-top: 12px; }
 .dash-zone-plans,
 .dash-zone-workers,
 .dash-zone-models,
+.dash-zone-policy,
 .dash-zone-procs,
 .dash-zone-iv {
   padding: 12px;
@@ -1099,6 +1100,7 @@ html[data-watch] .orch-dash { display: grid; gap: 16px; margin-top: 12px; }
 }
 .dash-zone-plans { --zone: var(--violet); }
 .dash-zone-models { --zone: var(--blue); }
+.dash-zone-policy { --zone: var(--violet); }
 .quota-window {
   margin: 0;
   font-size: 11px;
@@ -1392,3 +1394,49 @@ select[data-quota-band="grey"] { color: var(--muted); }
 .model-role-flags label { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; }
 .model-role-flags input[type="checkbox"] { width: auto; margin: 0; }
 .model-role-flags label:has(input:disabled) { opacity: .55; }
+
+/* Keep model controls and long provider identities inside their dashboard cards. */
+.orch-board, .orch-chat, .dash-section, .dash-models, .dash-workers { min-width: 0; }
+.dash-models { grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr)); align-items: start; }
+.dash-model, .dash-proc, .dash-worker {
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  overflow-wrap: anywhere;
+}
+.dash-model > *, .dash-worker > *, .dash-proc > * { min-width: 0; }
+.dash-model header, .dash-worker header, .dash-proc header, .workers-heading { flex-wrap: wrap; }
+.dash-model header strong, .dash-worker header strong, .dash-proc header strong { min-width: 0; flex: 1 1 140px; }
+.dash-model .badge, .dash-worker .badge, .workers-heading .badge { max-width: 100%; white-space: normal; }
+.model-role-flags { min-inline-size: 0; }
+.model-role-flags label { min-width: 0; margin: 0; line-height: 1.5; }
+.model-policy-selector { min-width: 0; display: grid; gap: 6px; font-size: 13px; }
+.model-policy-selector select { min-width: 0; width: 100%; max-width: 100%; }
+.model-policy-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.model-policy-form { min-width: 0; margin-top: 12px; }
+.model-policy-form fieldset {
+  min-inline-size: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 12px;
+}
+.model-policy-form legend { padding: 0 0 12px; font-size: 12px; color: var(--muted); }
+.model-policy-form label { min-width: 0; margin: 0; line-height: 1.5; }
+.model-policy-form input:not([type="checkbox"]), .model-policy-form select { min-width: 0; width: 100%; max-width: 100%; }
+.model-policy-form .model-policy-toggle { display: flex; align-items: flex-start; gap: 8px; }
+.model-policy-toggle input[type="checkbox"] { flex: 0 0 auto; width: auto; margin: 3px 0 0; }
+.model-policy-form button { justify-self: start; max-width: 100%; white-space: normal; }
+.quota-line { flex-wrap: wrap; }
+@media (max-width: 600px) {
+  .orch-top { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .orch-lead-now { min-width: 0; margin: 0; }
+  .orch-top-actions { min-width: 0; margin-left: 0; justify-content: flex-start; }
+}
+/* Keep connection setup readable on narrow dashboards. */
+.provider-connection-dialog { width: min(680px, calc(100vw - 32px)); max-height: calc(100dvh - 40px); overflow: auto; box-sizing: border-box; }
+.provider-connection-dialog form, .provider-connection-dialog fieldset, .provider-connection-dialog label { min-width: 0; }
+.provider-connection-dialog input:not([type=checkbox]), .provider-connection-dialog textarea, .provider-connection-dialog select { width: 100%; max-width: 100%; box-sizing: border-box; }
+.provider-connection-dialog [hidden] { display: none; }

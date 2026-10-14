@@ -86,6 +86,9 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
   }
   if (research && !require('./provider-adapters.cjs').adapterFor(model)?.sourceProtectedResearch) throw new Error('Research source protection is not supported by the requested adapter: ' + adapter);
   const cli = model.cli;
+  const alwaysApprove = model.policy?.alwaysApprove ?? model.alwaysApprove ?? true;
+  if (typeof alwaysApprove !== 'boolean') throw new Error('Invalid alwaysApprove model policy.');
+  if (!alwaysApprove && adapter === 'antigravity') throw new Error('PERMISSION_MODE_UNSUPPORTED: Antigravity has no verified unattended approval bridge. Enable Always approve / YOLO explicitly or select another adapter.');
   const command = executable(adapter);
   if (!command) throw new Error(provider + ' executable not found (native executable required)');
   let args;
@@ -93,7 +96,8 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
   let promptFile;
   if (adapter === 'grok') {
     args = ['--cwd', folder, '-m', cli, '--no-subagents', '--max-turns', lead ? '8' : '50',
-      '--permission-mode', 'auto', '--always-approve', '--output-format', lead ? 'streaming-messages-json' : 'plain'];
+      '--permission-mode', alwaysApprove ? 'auto' : 'dontAsk', '--output-format', lead ? 'streaming-messages-json' : 'plain'];
+    if (alwaysApprove) args.push('--always-approve');
     if (lead) args.push('--include-partial-messages');
     // Native --prompt-file preserves the complete prompt without OS argv limits.
     const inputDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-grok-prompt-'));
@@ -108,7 +112,8 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
   } else {
     args = ['exec', '--skip-git-repo-check', '-C', folder, '-m', cli];
     if (research) args.push('--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'sandbox_workspace_write.writable_roots=[]');
-    else args.push('--dangerously-bypass-approvals-and-sandbox');
+    else if (alwaysApprove) args.push('--dangerously-bypass-approvals-and-sandbox');
+    else args.push('--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '-c', 'sandbox_workspace_write.writable_roots=[]');
     if (lead) args.push('--json');
     // Keep conversation text off the OS command line (Windows has a 32K limit).
     args.push('-');

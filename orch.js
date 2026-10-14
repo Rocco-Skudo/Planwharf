@@ -4,6 +4,9 @@
   const $ = id => document.getElementById(embedded && id !== 'toast' ? `dashboard-${id}` : id);
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const themeKey = 'planwharf_theme';
+  const policyDrafts = new Map();
+  let selectedPolicyProviderId = null;
+  const usageNotices = globalThis.PlanwharfModelPolicyUI?.createAlerts();
   let orchestra = { mode: 'manual', models: [], projects: [], asks: [], fleet: [] };
   let version = null;
   let projectId = null;
@@ -113,7 +116,7 @@
     const models = Array.isArray(orchestra.orchestrators) && orchestra.orchestrators.length
       ? orchestra.orchestrators
       : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
-    const current = orchestra.orchestratorId || '';
+    const current = orchestra.selectedOrchestratorId || orchestra.orchestratorId || '';
     if (typeof el.setAttribute === 'function') el.setAttribute('data-quota-band', PlanwharfQuota.describe((orchestra.plans || []).find(p => p.id === (orchestra.models || []).find(m => m.id === current)?.plan)).band);
     const groups = [];
     const seen = new Map();
@@ -148,6 +151,11 @@
       + (sending ? `|pending:${pendingText}|${elapsed}|${live.thinking || ''}|${live.draft || ''}|${live.ms || 0}` : '');
   }
 
+  function diagnosticHtml(diagnostic) {
+    if (!diagnostic || !String(diagnostic.reportUrl || '').startsWith('https://github.com/benitz94/Planwharf/issues/new?')) return '';
+    return `<p class="notice">${escape(diagnostic.message)} <a href="${escape(diagnostic.reportUrl)}" target="_blank" rel="noopener noreferrer">Review an issue draft</a></p>`;
+  }
+
   function renderChat() {
     const el = $('orch-ask-thread');
     if (!el) return;
@@ -170,7 +178,7 @@
     el.innerHTML = items.map(item => {
       const order = item.order ? `<span class="chat-order">${escape(item.order)}</span>` : '';
       const elapsed = Number.isFinite(item.ms) ? ` · ${formatMs(item.ms)}` : '';
-      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p></div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p><button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
+      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p></div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p>${diagnosticHtml(item.diagnostic)}<button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
     }).join('') + pending;
     if (nearBottom || sending || !items.length) el.scrollTop = el.scrollHeight;
   }
@@ -223,7 +231,7 @@
     });
     (orchestra.researches || []).forEach(job => {
       const row = { id: job.id, projectId: job.projectId, research: true, name: job.projectName || 'Research', jobTitle: job.title, attemptId: job.attemptId, status: job.status, label: job.status, workerTail: job.workerTail || '', progressAt: job.updatedAt, reportAvailable: job.reportAvailable };
-      workers.push({ row, part: { modelId: job.modelId, label: job.workerLabel, provider: job.provider, cli: job.cli, pid: job.pid, alive: job.alive, activity: job.activity || job.reason || '', slice: 'Research', sessionId: job.sessionId, startedAt: job.startedAt || job.createdAt }, index: 0 });
+      workers.push({ row, part: { diagnostic: job.diagnostic, modelId: job.modelId, label: job.workerLabel, provider: job.provider, cli: job.cli, pid: job.pid, alive: job.alive, activity: job.activity || job.reason || '', slice: 'Research', sessionId: job.sessionId, startedAt: job.startedAt || job.createdAt }, index: 0 });
     });
     const globalRunning = workers.filter(({ row, part }) => workerState(row, part) === 'Running').length;
     const projectFilter = $('worker-project-filter')?.value || (projectId ? 'current' : 'all');
@@ -247,11 +255,20 @@
       const log = row.workerTail ? `<details class="monitor-log" data-worker-log="${escape(key)}"><summary>${(row.dispatch || []).length > 1 ? 'Project worker logs (all slices)' : 'Worker output'}</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '<p class="muted">No log output yet.</p>';
       const report = researchReports.get(row.id);
       const actions = row.research ? `<div class="now-actions">${row.status === 'needs_approval' ? `<button type="button" class="primary compact" data-research-approve="${escape(row.id)}">Approve research MegaTask</button>` : ''}${row.reportAvailable || row.status === 'complete' ? `<button type="button" class="secondary compact" data-research-report="${escape(row.id)}">Read research report</button>` : ''}${state === 'Running' ? `<button type="button" class="secondary compact" data-research-stop="${escape(row.id)}">Stop</button>` : ''}${row.status === 'checkpointed' ? `<button type="button" class="secondary compact" data-research-resume="${escape(row.id)}">Resume</button>` : ''}</div>${report != null ? `<details class="monitor-log" data-worker-log="${escape(key)}:report" open><summary>Research report</summary><pre class="worker-tail">${escape(report)}</pre></details>` : ''}` : (state === 'Running' ? `<div class="now-actions"><button type="button" class="secondary compact" data-worker-stop="${escape(row.id)}" data-worker-pid="${escape(part.pid)}">Stop worker</button></div>` : '');
-      return `<article class="dash-worker${state === 'Running' ? ' is-running' : ''}" data-worker-state="${escape(state)}"><header><strong>${escape(part.label || model.label || part.modelId || 'Unknown worker')}</strong><span class="badge${state === 'Running' ? ' green' : ''}">${escape(state)}</span></header><p class="worker-model">Provider: ${escape(part.provider || model.provider || 'unknown')} · Model: ${escape(part.cli || model.cli || part.modelId || 'unknown')} · ID: ${escape(part.modelId || 'unknown')}</p><p><strong>${escape(row.name)}</strong>${row.jobTitle ? ` · ${escape(row.jobTitle)}` : ''}</p><p class="muted">${escape(part.slice || 'Whole job')} · ${part.pid ? `PID ${escape(part.pid)} · ${part.observedAlive && !part.alive ? 'recorded PID exists; this attempt is inactive' : part.alive ? 'alive' : 'not alive'}` : (state === 'Awaiting launch' ? 'No process launched' : 'No live process')} · Project: ${escape(row.label || row.status || 'unknown')}</p><p class="worker-activity">${escape(activity)}</p>${progress ? `<p class="muted">Last ${row.research ? 'research update' : 'project progress'}: ${escape(progress)}</p>` : ''}${log}${actions}</article>`;
+      return `<article class="dash-worker${state === 'Running' ? ' is-running' : ''}" data-worker-state="${escape(state)}"><header><strong>${escape(part.label || model.label || part.modelId || 'Unknown worker')}</strong><span class="badge${state === 'Running' ? ' green' : ''}">${escape(state)}</span></header><p class="worker-model">Provider: ${escape(part.provider || model.provider || 'unknown')} · Model: ${escape(part.cli || model.cli || part.modelId || 'unknown')} · ID: ${escape(part.modelId || 'unknown')}</p><p><strong>${escape(row.name)}</strong>${row.jobTitle ? ` · ${escape(row.jobTitle)}` : ''}</p><p class="muted">${escape(part.slice || 'Whole job')} · ${part.pid ? `PID ${escape(part.pid)} · ${part.observedAlive && !part.alive ? 'recorded PID exists; this attempt is inactive' : part.alive ? 'alive' : 'not alive'}` : (state === 'Awaiting launch' ? 'No process launched' : 'No live process')} · Project: ${escape(row.label || row.status || 'unknown')}</p><p class="worker-activity">${escape(activity)}</p>${progress ? `<p class="muted">Last ${row.research ? 'research update' : 'project progress'}: ${escape(progress)}</p>` : ''}${diagnosticHtml(part.diagnostic)}${log}${actions}</article>`;
     }).join('') || '<p class="workers-empty">No workers launched in the selected filters. Previous sessions remain available under All sessions.</p>'}</div></section>`;
   }
 
+  function renderPolicySection() {
+    const el = $('orchestrator')?.querySelector('.dash-zone-policy');
+    if (!el) return;
+    const keepSelectorFocus = document.activeElement === el.querySelector('[data-policy-provider-select]');
+    el.outerHTML = PlanwharfModelPolicyUI.section(orchestra.providers || [], selectedPolicyProviderId, policyDrafts.get(selectedPolicyProviderId));
+    if (keepSelectorFocus) $('orchestrator').querySelector('[data-policy-provider-select]').focus();
+  }
+
   function renderBoard() {
+    if (document.activeElement?.closest?.('form[data-provider-policy], [data-policy-provider-select]')) return;
     const live = $('orch-live');
     const el = $('orchestrator');
     if (!el) return;
@@ -332,16 +349,21 @@
       ? `<ol class="dash-iv">${interventions.map(item => `<li><time>${escape(clock(item.at))}</time> ${escape(item.project)} · ${escape(item.text)}</li>`).join('')}</ol>`
       : '<p class="muted">No interventions yet. I switch workers on stall, death, or FAILED.</p>'}</section>`;
     const openLogs = new Set(Array.from(el.querySelectorAll('details[data-worker-log][open]')).map(detail => detail.getAttribute('data-worker-log')));
+    const policyProviders = orchestra.providers || [];
+    if (!policyProviders.some(provider => provider.id === selectedPolicyProviderId)) selectedPolicyProviderId = policyProviders[0]?.id || null;
+    const policySection = orchestra.providerPolicySupported ? PlanwharfModelPolicyUI.section(policyProviders, selectedPolicyProviderId, policyDrafts.get(selectedPolicyProviderId)) : '';
     const usage = orchestra.aiUsage || { orchestrator: [], workers: [], recent: [] };
-    const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
+    const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts${group.tokenReadings ? ' | ' + group.inputTokens + ' input / ' + group.outputTokens + ' output tokens (reported)' : ''} | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
     const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
-    el.innerHTML = `${workersHtml(rows)}${usageHtml}${planCards}${models}${processes}${iv}`;
+    el.innerHTML = `${workersHtml(rows)}${usageHtml}${planCards}${policySection}${models}${processes}${iv}`;
+
     el.querySelectorAll('details[data-worker-log]').forEach(detail => {
       if (openLogs.has(detail.getAttribute('data-worker-log'))) detail.open = true;
     });
   }
 
   function render() {
+    usageNotices?.(orchestra);
     if (typeof window !== 'undefined' && typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-evidence', { detail: orchestra.execution?.timeline || [] }));
     const recipient = $('orch-project');
     const projects = orchestra.projects || [];
@@ -536,7 +558,31 @@
   }
 
   if ($('orchestrator')) {
+    $('orchestrator').addEventListener('input', event => {
+      const form = event.target.closest('form[data-provider-policy]');
+      if (form) {
+        policyDrafts.set(form.dataset.providerPolicy, PlanwharfModelPolicyUI.read(form));
+        form.querySelector('[data-policy-edit-status]').textContent = 'Unsaved changes for this provider.';
+        form.querySelector('[data-policy-discard]').disabled = false;
+      }
+    });
+    $('orchestrator').addEventListener('submit', async event => {
+      const form = event.target.closest('form[data-provider-policy]');
+      if (!form) return;
+      event.preventDefault();
+      const id = form.dataset.providerPolicy;
+      try {
+        orchestra = await post('/api/providers/policy', { id, policy: PlanwharfModelPolicyUI.read(form) });
+        policyDrafts.delete(id); renderPolicySection(); notice('Provider policy saved. Applies to every model in this provider.');
+      } catch (error) { notice(error.message); }
+    });
     $('orchestrator').addEventListener('change', async event => {
+      const selector = event.target.closest('[data-policy-provider-select]');
+      if (selector) {
+        selectedPolicyProviderId = selector.value;
+        renderPolicySection();
+        return;
+      }
       const control = event.target.closest('[data-model-role]');
       if (!control) return;
       const enabled = control.checked; control.disabled = true;
@@ -545,6 +591,16 @@
       finally { control.disabled = false; }
     });
     $('orchestrator').addEventListener('click', async event => {
+      if (event.target.closest('[data-add-provider]')) {
+        PlanwharfModelPolicyUI.openConnection(async input => {
+          orchestra = await post('/api/providers/connections', input);
+          selectedPolicyProviderId = input.id; renderBoard(); notice('Connection saved. Account access and model inference have not been verified.');
+        });
+        return;
+      }
+      if (event.target.closest('[data-policy-discard]')) {
+        policyDrafts.delete(selectedPolicyProviderId); renderPolicySection(); return;
+      }
       const researchReport = event.target && event.target.getAttribute && event.target.getAttribute('data-research-report');
       const researchStop = event.target && event.target.getAttribute && event.target.getAttribute('data-research-stop');
       const researchApprove = event.target && event.target.getAttribute && event.target.getAttribute('data-research-approve');

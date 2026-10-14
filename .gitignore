@@ -31,3 +31,4 @@ validation/worker-board-[0-9]*/
 
 validation/phase2-browser-*/
 validation/launcher-smoke-*/
+validation/model-policy-[0-9]*/

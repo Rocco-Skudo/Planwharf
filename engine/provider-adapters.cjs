@@ -41,4 +41,5 @@ function registerAdapter(id, adapter) {
   adapters[id] = Object.freeze({ ...adapter });
 }
 function adapterFor(value) { const id = typeof value === 'string' ? value : value?.adapter || value?.provider; return Object.hasOwn(adapters, id) ? adapters[id] : undefined; }
+require('./external-adapters.cjs').registerExternalAdapters(registerAdapter);
 module.exports = { adapters, adapterFor, registerAdapter };

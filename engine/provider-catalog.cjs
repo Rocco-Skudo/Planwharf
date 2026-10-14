@@ -1,6 +1,10 @@
 'use strict';
 const { adapterFor } = require('./provider-adapters.cjs');
 const defaults = { codex: ['ChatGPT', 'ChatGPT'], grok: ['Grok', 'Grok'], antigravity: ['Gemini', 'Gemini'] };
+function providerConfiguration(provider) {
+  const keys = ['baseUrl', 'authEnv', 'subscriptionIncluded', 'apiProtocol', 'maxOutputTokens', 'maxTurns', 'requestTimeoutMs', 'cliCommand', 'cliArgs', 'yoloArgs', 'restrictedArgs', 'outputProtocol'];
+  return Object.fromEntries(keys.filter(key => provider[key] !== undefined).map(key => [key, provider[key]]));
+}
 function loadCatalog(config) {
   const explicit = !Array.isArray(config);
   if (explicit && (!config || config.schema !== 3 || !Array.isArray(config.providers))) throw new Error('Invalid provider catalog: expected schema 3 providers.');
@@ -21,7 +25,7 @@ function loadCatalog(config) {
       const model = { ...original, providerId: provider.id, provider: explicit || original.provider ? provider.id : undefined, adapter: provider.adapter, quotaPoolId: provider.quotaPoolId, plan: provider.quotaPoolId,
         orchestratorEligible: original.orchestratorEligible ?? original.capabilities?.orchestratorEligible ?? original.capabilities?.canOrchestrate ?? (original.kind !== 'local'), workerEligible: original.workerEligible ?? original.capabilities?.workerEligible ?? true,
         reviewerEligible: original.reviewerEligible ?? original.capabilities?.reviewerEligible ?? (original.workerEligible !== false),
-        providerCatalog: explicit || original.providerCatalog === true, capabilities: { ...(adapterFor(provider)?.capabilities || {}), ...(original.capabilities || {}) }, providerConfig: { baseUrl: provider.baseUrl, authEnv: provider.authEnv, subscriptionIncluded: provider.subscriptionIncluded } };
+        providerCatalog: explicit || original.providerCatalog === true, capabilities: { ...(adapterFor(provider)?.capabilities || {}), ...(original.capabilities || {}) }, providerConfig: providerConfiguration(provider) };
       if (explicit) { model.kind ||= 'default'; model.cost ??= 1; model.limit ??= Number.MAX_SAFE_INTEGER; }
       model.capabilities.orchestratorEligible = model.orchestratorEligible; model.capabilities.workerEligible = model.workerEligible; model.capabilities.reviewerEligible = model.reviewerEligible;
       models.push(model);
@@ -43,4 +47,4 @@ function providerViews(providers, models, plans = [], settings = {}) {
       quota: pool || { id: provider.quotaPoolId, label: provider.label, readable: false, leftPct: null, exhausted: false }, showAll: settings.catalogVisibility?.[provider.id] === true, models: rows };
   });
 }
-module.exports = { loadCatalog, providerViews };
+module.exports = { loadCatalog, providerViews, providerConfiguration };
