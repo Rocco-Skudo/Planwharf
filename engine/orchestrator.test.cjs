@@ -123,7 +123,10 @@ function make(plan, inspectFolder, extra) {
   assert.equal(parseOrder('Continue Demo', { models: [], projects: [{ id: 'demo', name: 'Demo', status: 'watching' }] }), null);
   assert.equal(parseOrder('Implement the parser on Demo', { models: [], projects: [{ id: 'demo', name: 'Demo', status: 'checkpointed' }] }), null);
   assert.equal(pickWorker(models, { job: { title: 'Check the repo', detail: 'Inspect.' } }).id, 'gemini');
-  const full = require("./provider-catalog.cjs").loadCatalog(require("../models.json")).models;
+  const configuredFull = require("./provider-catalog.cjs").loadCatalog(require("../models.json")).models;
+  assert.ok(configuredFull.filter(model => model.adapter === 'antigravity').every(model => model.available === false), 'Configured Antigravity IDs require fresh CLI verification');
+  // Quota routing uses simulated verified access; this fixture never invokes a provider.
+  const full = configuredFull.map(model => model.adapter === 'antigravity' ? { ...model, available: true, unavailableReason: null, availabilityVerified: true } : model);
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).plan, 'Gemini');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).id, 'gemini-flash');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' } }).id, 'luna');

@@ -15,8 +15,8 @@ function listGrok() {
     });
   });
 }
-function createProviderModels(models, { discover = listGrok, providers, now = Date.now, ttl = 60000 } = {}) {
-  if (providers) return createCatalogDiscovery(models, providers, { discover, now, ttl });
+function createProviderModels(models, { discover = listGrok, providers, now = Date.now, ttl = 60000, cacheFile } = {}) {
+  if (providers) return createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFile });
   let state = { status: 'unknown', checkedAt: null, reason: null, ids: [] }, inflight;
   async function refresh(force = false) {
     if (inflight) return inflight;
@@ -40,12 +40,57 @@ function createProviderModels(models, { discover = listGrok, providers, now = Da
   }
   return { refresh, snapshot: () => ({ ...state, checking: Boolean(inflight) }) };
 }
-function createCatalogDiscovery(models, providers, { discover, now, ttl }) {
-  const states = new Map(); let inflight;
+function catalogEntries(result) {
+  const rows = Array.isArray(result.models) ? result.models : Array.isArray(result.ids) ? result.ids.map(cli => ({ cli })) : null;
+  if (!rows || rows.some(m => !m || typeof m.cli !== 'string' || !m.cli || m.cli.trim() !== m.cli || /[\x00-\x1f\x7f]/.test(m.cli))) return null;
+  return rows.map(m => ({ cli: m.cli, ...(typeof m.label === 'string' ? { label: m.label } : {}),
+    ...Object.fromEntries(['orchestratorEligible', 'workerEligible'].filter(key => typeof m[key] === 'boolean').map(key => [key, m[key]])),
+    capabilities: Object.fromEntries(Object.entries(m.capabilities || {}).filter(([, value]) => typeof value === 'boolean')) }));
+}
+function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFile }) {
+  const states = new Map(), restored = new Set(); let inflight;
+  let cache = {};
+  if (cacheFile) try {
+    const saved = JSON.parse(require('node:fs').readFileSync(cacheFile, 'utf8'));
+    if (saved.schema === 1 && saved.catalogs && typeof saved.catalogs === 'object') cache = saved.catalogs;
+  } catch { /* A missing or unreadable cache cannot verify provider access. */ }
+  function cacheKey(provider) {
+    return require('node:crypto').createHash('sha256').update(JSON.stringify([provider.id, provider.adapter, provider.account?.key || null, require('./provider-catalog.cjs').providerConfiguration(provider)])).digest('hex');
+  }
+  function applyCatalog(provider, entries, checkedAt, verified) {
+    for (const model of models.filter(m => m.providerId === provider.id)) {
+      model.available = entries.some(m => m.cli === model.cli);
+      model.catalogExcluded = !model.available;
+      model.unavailableReason = model.available ? null : `The ${provider.label || provider.id} catalog does not list exact model ${model.cli}. Configuration retained; no substitute selected.`;
+    }
+    for (const entry of entries) if (!models.some(m => m.providerId === provider.id && m.cli === entry.cli)) {
+      models.push({ ...entry, id: provider.id + ':' + entry.cli, providerId: provider.id, provider: provider.id, adapter: provider.adapter, quotaPoolId: provider.quotaPoolId, plan: provider.quotaPoolId,
+        label: entry.label || entry.cli, enabled: false, available: true, catalogExcluded: false, availabilityVerified: verified, availabilityCheckedAt: checkedAt, availabilityWarning: null, providerCatalog: true, orchestratorEligible: entry.orchestratorEligible ?? entry.capabilities?.canOrchestrate ?? true,
+        workerEligible: entry.workerEligible ?? entry.capabilities?.canCode ?? true, capabilities: { ...entry.capabilities }, providerConfig: require('./provider-catalog.cjs').providerConfiguration(provider) });
+    }
+  }
+  async function saveCache() {
+    if (!cacheFile) return;
+    const fs = require('node:fs/promises');
+    try {
+      await fs.mkdir(require('node:path').dirname(cacheFile), { recursive: true });
+      await fs.writeFile(cacheFile + '.tmp', JSON.stringify({ schema: 1, catalogs: cache }), 'utf8');
+      await fs.rename(cacheFile + '.tmp', cacheFile);
+    } catch { /* Keep the current verified catalog if cache persistence fails. */ }
+  }
   async function refresh(force = false, providerId) {
     if (inflight) return inflight;
     inflight = (async () => {
       for (const provider of providers.filter(p => (!providerId || p.id === providerId) && p.enabled !== false)) {
+        const key = cacheKey(provider);
+        if (!restored.has(key)) {
+          restored.add(key);
+          const saved = cache[key], entries = saved && catalogEntries({ models: saved.models });
+          if (entries && typeof saved.checkedAt === 'string') {
+            applyCatalog(provider, entries, saved.checkedAt, false);
+            states.set(provider.id, { providerId: provider.id, label: provider.label || provider.id, status: 'unread', checkedAt: saved.checkedAt, reason: 'Using the last verified catalog until startup discovery completes.', ids: entries.map(m => m.cli), preservingPreviousAvailability: true });
+          }
+        }
         const previous = states.get(provider.id);
         if (!force && previous && now() - Date.parse(previous.checkedAt) < ttl) continue;
         let result;
@@ -54,23 +99,18 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl }) {
           result = discover !== listGrok ? await discover(provider) : await adapter?.discover?.(provider);
         } catch { result = { ok: false, reason: 'Provider catalog could not be read; previous model configuration is preserved.' }; }
         result ||= { ok: false, reason: 'Model enumeration unavailable for this adapter.' };
+        const entries = catalogEntries(result);
+        if (result.ok && !entries) result = { ok: false, reason: 'Provider returned an invalid model catalog; previous availability is retained.' };
         const checkedAt = new Date(now()).toISOString();
+        if (result.ok) applyCatalog(provider, entries, checkedAt, true);
         for (const model of models.filter(m => m.providerId === provider.id)) {
           model.availabilityVerified = result.ok === true;
           model.availabilityCheckedAt = checkedAt;
           model.availabilityWarning = result.ok ? null : result.reason || 'Model catalog check failed; previous availability is retained.';
         }
-        const entries = (result.models || (result.ids || []).map(cli => ({ cli }))).filter(m => typeof m.cli === 'string' && m.cli.trim() === m.cli && m.cli && !/[\x00-\x1f\x7f]/.test(m.cli));
         if (result.ok) {
-          for (const model of models.filter(m => m.providerId === provider.id)) {
-            model.available = entries.some(m => m.cli === model.cli);
-            model.unavailableReason = model.available ? null : `The ${provider.label} catalog does not list exact model ${model.cli}. Configuration retained; no substitute selected.`;
-          }
-          for (const entry of entries) if (!models.some(m => m.providerId === provider.id && m.cli === entry.cli)) {
-            models.push({ ...entry, id: provider.id + ':' + entry.cli, providerId: provider.id, provider: provider.id, adapter: provider.adapter, quotaPoolId: provider.quotaPoolId, plan: provider.quotaPoolId,
-              label: entry.label || entry.cli, enabled: false, available: true, availabilityVerified: true, availabilityCheckedAt: checkedAt, availabilityWarning: null, providerCatalog: true, orchestratorEligible: entry.orchestratorEligible ?? entry.capabilities?.canOrchestrate ?? true,
-              workerEligible: entry.workerEligible ?? entry.capabilities?.canCode ?? true, capabilities: { ...entry.capabilities }, providerConfig: require('./provider-catalog.cjs').providerConfiguration(provider) });
-          }
+          cache[key] = { checkedAt, models: entries };
+          await saveCache();
         }
         states.set(provider.id, { providerId: provider.id, label: provider.label || provider.id, status: result.ok ? 'current' : 'unread', checkedAt, reason: result.ok ? null : result.reason, preservingPreviousAvailability: !result.ok, ids: result.ok ? entries.map(m => m.cli) : previous?.ids || [] });
       }

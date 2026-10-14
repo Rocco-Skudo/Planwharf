@@ -89,7 +89,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     const extra = loadCatalog({ schema: 3, providers: [provider] });
     providers.push(...extra.providers); models.push(...extra.models);
   }
-  const providerModels = createProviderModels(models, { providers, ...(discoverModels ? { discover: discoverModels } : {}) });
+  const providerModels = createProviderModels(models, { providers, cacheFile: path.join(storeDir, 'provider-model-catalogs.json'), ...(discoverModels ? { discover: discoverModels } : {}) });
   const accountStates = new Map();
   let accountSync;
   async function syncAccounts() {
@@ -237,7 +237,20 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     spawnWorker: typeof spawnWorker === 'function' ? info => spawnWorker({ ...info, job: { ...info.job, detail: [info.job?.detail || '', skillsPrompt(info.job?.kind === 'research' ? 'research' : info.job?.kind === 'audit' ? 'audit' : 'worker', `${info.job?.title || ''} ${info.job?.detail || ''}`)].join('\n\n') } }) : undefined,
     isProcessAlive,
     killWorker,
-    askModel: typeof askModel === 'function' ? async info => { await readySkills(); return askModel({ ...info, skillsPrompt: skillsPrompt('lead', info.question) }); } : undefined,
+    askModel: typeof askModel === 'function' ? async info => {
+      await readySkills();
+      let prompt = skillsPrompt('lead', info.grillKind ? 'grilling ' + info.question : info.question);
+      if (info.grillKind) {
+        if (!skillsEnabled) throw new Error('Matt skills are disabled. Enable Use Matt skills to start Matt grilling.');
+        const grilling = skillsCache.read?.('skills/productivity/grilling/SKILL.md');
+        if (!grilling) throw new Error('Matt grilling skill is unavailable. Check skills updates before starting Grill me.');
+        const docs = info.grillKind === 'docs' ? skillsCache.read?.('skills/engineering/grill-with-docs/SKILL.md') : '';
+        if (info.grillKind === 'docs' && !docs) throw new Error('Matt Grill with docs skill is unavailable. Check skills updates.');
+        prompt += '\n\nACTIVE MATT GRILLING SESSION:\n' + grilling + (docs ? '\n\n' + docs : '')
+          + '\nConduct the interview in this chat. Use the selected project goal, existing decisions and prior answers. Inspect available project facts with your lead tools. Ask the currently answerable frontier, then wait for the user. Do not create implementation tasks, modify project source or dispatch workers. Only an explicit Start or approval after clarification may prepare execution.';
+      }
+      return askModel({ ...info, skillsPrompt: prompt });
+    } : undefined,
     abortAsk,
     fetchPlans,
     readSkill: relative => (skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
@@ -305,7 +318,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
           : Plan.startGrill(updated, undefined, ctx);
         if (grilled !== updated) updated = grilled;
       }
-      if (prepared.job) { updated = Plan.createTask(updated, prepared.job); if (prepared.job.goldModel) updated.tasks.at(-1).goldModel = prepared.job.goldModel; if (phase2) Object.assign(updated.tasks.at(-1), { executionVersion: 2, id: 'task-' + crypto.randomUUID() }); }
+      if (prepared.job) { updated = Plan.createTask(updated, prepared.job); if (prepared.job.source === 'chat') updated.tasks.at(-1).source = 'chat'; if (prepared.job.goldModel) updated.tasks.at(-1).goldModel = prepared.job.goldModel; if (phase2) Object.assign(updated.tasks.at(-1), { executionVersion: 2, id: 'task-' + crypto.randomUUID() }); }
     } catch (error) {
       return { ok: false, reason: error.message };
     }
@@ -535,7 +548,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         if (!result.ok) throw new RequestError(400, result.reason);
         return json(200, result.snapshot);
       }
-      if (request.method === 'GET' && pathname === '/models.json') return json(200, models);
+      if (request.method === 'GET' && pathname === '/models.json') { await initialModelsSync; return json(200, models); }
       if (request.method === 'POST' && pathname === '/api/orchestrator/lead') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request);
@@ -564,8 +577,8 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request, 1024 * 1024, 'Chat request too large (maximum 1 MiB).');
-        if (!input || typeof input.question !== 'string' || input.chatSessionId !== undefined && (typeof input.chatSessionId !== 'string' || !/^[\w-]{1,100}$/.test(input.chatSessionId)) || Object.keys(input).some(key => !['question', 'projectId', 'chatSessionId', 'requestMode'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined, input.chatSessionId, input.requestMode);
+        if (!input || typeof input.question !== 'string' || input.chatSessionId !== undefined && (typeof input.chatSessionId !== 'string' || !/^[\w-]{1,100}$/.test(input.chatSessionId)) || Object.keys(input).some(key => !['question', 'projectId', 'chatSessionId', 'requestMode', 'grillKind'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined, input.chatSessionId, input.requestMode, input.grillKind);
         if (!asked.ok) throw new RequestError(400, asked.reason || 'Invalid data.');
         return json(200, asked);
       }

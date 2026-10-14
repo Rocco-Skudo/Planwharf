@@ -109,14 +109,25 @@
     toastTimer = setTimeout(() => { el.textContent = ''; }, 6000);
   }
 
+  function leadUnavailableReason(item) {
+    if (item.roles?.orchestrator === false) return 'Orchestrator role disabled';
+    if (item.roleEligibility?.orchestrator === false) return 'Incompatible with the Orchestrator role';
+    if (item.providerEnabled === false) return 'Provider disabled';
+    if (item.available === false) return item.unavailableReason || 'Exact CLI model unavailable. Refresh models to verify access.';
+    if (!item.enabled) return 'Model disabled';
+    return '';
+  }
+
   function fillLead() {
     const el = $('orch-lead');
     if (!el) return;
     if (document.activeElement === el) return;
-    const models = Array.isArray(orchestra.orchestrators) && orchestra.orchestrators.length
-      ? orchestra.orchestrators
-      : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
     const current = orchestra.selectedOrchestratorId || orchestra.orchestratorId || '';
+    const runnable = new Set((orchestra.orchestrators || []).map(item => item.id));
+    const models = (orchestra.models || []).filter(item => !item.catalogExcluded && (item.id === current || (
+      item.roles?.orchestrator !== false &&
+      (item.roleEligibility?.orchestrator ?? (runnable.has(item.id) || item.kind === 'premium' || item.kind === 'default'))
+    )));
     if (typeof el.setAttribute === 'function') el.setAttribute('data-quota-band', PlanwharfQuota.describe((orchestra.plans || []).find(p => p.id === (orchestra.models || []).find(m => m.id === current)?.plan)).band);
     const groups = [];
     const seen = new Map();
@@ -132,7 +143,10 @@
     const options = groups.map(plan => `<optgroup label="${escape(plan)} | ${PlanwharfQuota.describe(planById(plan)).text}">${seen.get(plan).map(item => {
       const meter = planById(item.plan || plan);
       const tag = ` | ${PlanwharfQuota.describe(meter).text}`;
-      return `<option class="quota-${PlanwharfQuota.describe(meter).band}" value="${escape(item.id)}"${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag)}</option>`;
+      const reason = leadUnavailableReason(item);
+      const identity = `${item.providerId || item.provider || 'unknown'}/${item.cli || item.id}`;
+      const status = reason ? ` | Unavailable: ${reason}` : '';
+      return `<option class="quota-${PlanwharfQuota.describe(meter).band}" value="${escape(item.id)}" title="${escape(identity + status)}"${reason ? ' disabled' : ''}${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag + status)}</option>`;
     }).join('')}</optgroup>`).join('');
     el.innerHTML = `<option value="">Choose orchestrator</option>${options}`;
     const now = $('orch-lead-now');
@@ -140,7 +154,7 @@
       const lead = roster.find(item => item.id === current);
       const meter = lead ? planById(lead.plan) : null;
       const tag = ` | ${PlanwharfQuota.describe(meter).text}`;
-      now.textContent = lead ? `Lead: ${lead.label}${tag}` : 'Lead: none yet. Pick a model.';
+      now.textContent = lead ? `Lead: ${lead.label}${tag}${leadUnavailableReason(lead) ? ' | Unavailable: ' + leadUnavailableReason(lead) : ''}` : 'Lead: none yet. Pick a model.';
     }
   }
 
@@ -201,8 +215,8 @@
     const stop = row.canStop ? `<button type="button" class="primary" data-stop="${escape(id)}">Stop</button>` : '';
     const propose = orchestra.grillPropose !== false;
     const kind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
-    const docsOk = row.canGrillDocs !== false;
-    const busy = row.status === 'watching' || row.status === 'waiting_on_you' || row.status === 'propose_grill';
+    const docsOk = row.canGrillDocs !== false || Boolean(row.github);
+    const busy = row.status === 'watching';
     const grillTriggers = approve || resume || stop || busy
       ? ''
       : `<button type="button" class="${kind === 'me' ? 'primary' : 'secondary'}" data-grill-kind="me" data-grill-start="${escape(id)}">Grill me</button><button type="button" class="${kind === 'docs' ? 'primary' : 'secondary'}" data-grill-kind="docs" data-grill-start="${escape(id)}"${docsOk ? '' : ' disabled'}>Grill with the docs</button>`;
@@ -311,7 +325,9 @@
     const rolesSupported = fleet.every(item => item.roles && item.roleEligibility);
     const roleSupportNotice = rolesSupported ? '' : '<p class="notice" role="status">Backend update required for model roles. Use Quit application, then relaunch Planwharf. Model role changes are unavailable until the backend is updated.</p>';
     const providerList = orchestra.providers || [];
+    const excludedFleet = fleet.filter(item => item.catalogExcluded);
     const visibleFleet = fleet.filter(item => {
+      if (item.catalogExcluded) return false;
       if (modelRoleFilter !== 'all' && item.roles?.[modelRoleFilter] !== true) return false;
       if (catalogSearch) return [item.id, item.label, item.provider, item.cli].some(value => String(value || '').toLowerCase().includes(catalogSearch));
       if (modelRoleFilter !== 'all') return true;
@@ -320,7 +336,7 @@
       return !provider || provider.showAll || siblings.length <= 12 || item.enabled || item.lead || siblings.indexOf(item) < 8;
     });
     const providerControls = providerList.map(provider => `<article class="dash-model"><strong>${escape(provider.label)}</strong><p>${provider.models.length} configured models | ${escape(provider.availability)}</p><button class="secondary compact" data-provider="${escape(provider.id)}" data-provider-enabled="${!provider.enabled}">${provider.enabled ? 'Disable provider' : 'Enable provider'}</button><button class="secondary compact" data-provider-show="${escape(provider.id)}" data-provider-show-all="${!provider.showAll}">${provider.showAll ? 'Show selected models' : 'Show all models'}</button></article>`).join('');
-    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${['orchestrator', 'worker', 'reviewer'].map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes every configured model.</p><div class="dash-models">${visibleFleet.map(item => {
+    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${['orchestrator', 'worker', 'reviewer'].map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes current models. ${excludedFleet.length} models no longer listed by their provider are hidden; saved roles and execution history are retained.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
       const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
       const availabilityText = item.availabilityWarning
@@ -356,7 +372,7 @@
     const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts${group.tokenReadings ? ' | ' + group.inputTokens + ' input / ' + group.outputTokens + ' output tokens (reported)' : ''} | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
     const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
     const gold = fleet.find(model => model.id === orchestra.goldModelId);
-    const goldSection = rolesSupported ? `<section class="dash-section" aria-label="Gold model"><h3>Gold model</h3><label>Preferred worker<select data-gold-model><option value="">Choose Gold model</option>${fleet.filter(model => model.roleEligibility?.worker).map(model => `<option value="${escape(model.id)}" ${model.id === orchestra.goldModelId ? 'selected' : ''}>${escape(model.label)} | ${escape(model.providerId || model.provider)}/${escape(model.cli)} (${escape(model.id)})${model.roles?.worker ? '' : ' - Worker role disabled'}</option>`).join('')}${orchestra.goldModelId && !gold ? `<option selected value="${escape(orchestra.goldModelId)}">${escape(orchestra.goldModelId)} - no longer configured</option>` : ''}</select></label><p class="muted">Use Gold model below the chat for one request. Its implementation and research jobs keep this exact model through approval, pause and resume. Worker permission and quota limits still apply; unavailable work pauses without substitution. Reviewers keep their settings.</p></section>` : '';
+    const goldSection = rolesSupported ? `<section class="dash-section" aria-label="Gold model"><h3>Gold model</h3><label>Preferred worker<select data-gold-model><option value="">Choose Gold model</option>${fleet.filter(model => model.roleEligibility?.worker && !model.catalogExcluded).map(model => `<option value="${escape(model.id)}" ${model.id === orchestra.goldModelId ? 'selected' : ''}>${escape(model.label)} | ${escape(model.providerId || model.provider)}/${escape(model.cli)} (${escape(model.id)})${model.roles?.worker ? '' : ' - Worker role disabled'}</option>`).join('')}${orchestra.goldModelId && (!gold || gold.catalogExcluded) ? `<option selected disabled value="${escape(orchestra.goldModelId)}">Configured Gold model unavailable: ${escape(gold?.label || orchestra.goldModelId)}</option>` : ''}</select></label><p class="muted">Use Gold model below the chat for one request. Its implementation and research jobs keep this exact model through approval, pause and resume. Worker permission and quota limits still apply; unavailable work pauses without substitution. Reviewers keep their settings.</p></section>` : '';
     el.innerHTML = `${goldSection}${workersHtml(rows)}${usageHtml}${planCards}${policySection}${models}${processes}${iv}`;
 
     el.querySelectorAll('details[data-worker-log]').forEach(detail => {
@@ -369,7 +385,7 @@
     if (!control || !hint) return;
     const model = (orchestra.models || []).find(model => model.id === orchestra.goldModelId);
     hint.textContent = control.value === 'gold'
-      ? model ? `Gold: ${model.providerId || model.provider}/${model.cli} (${model.id}). Exact worker for this request; no fallback. Returns to Default after sending.` : 'Choose a Gold model in the dashboard before sending.'
+      ? model?.catalogExcluded ? 'The configured Gold model is no longer available from its provider. Choose another model before sending.' : model ? `Gold: ${model.providerId || model.provider}/${model.cli} (${model.id}). Exact worker for this request; no fallback. Returns to Default after sending.` : 'Choose a Gold model in the dashboard before sending.'
       : 'Default: the orchestrator chooses workers normally.';
   }
   if ($('orch-request-mode')) $('orch-request-mode').addEventListener('change', renderRequestMode);
@@ -384,6 +400,12 @@
     if (recipient) recipient.innerHTML = '<option value="">Select a project</option>' + projects.map(row => `<option value="${escape(row.id)}"${row.id === projectId ? ' selected' : ''}>${escape(row.name)}</option>`).join('');
     fillLead();
     renderRequestMode();
+    const grillStatus = $('orch-grill-status');
+    const lastTurn = (orchestra.asks || []).find(turn => turn.projectId === projectId && (!window.PlanwharfChatSessionId || turn.chatSessionId === window.PlanwharfChatSessionId));
+    if (grillStatus) {
+      grillStatus.hidden = !lastTurn?.grillKind;
+      grillStatus.textContent = lastTurn?.grillKind ? `${lastTurn.grillKind === 'docs' ? 'Grill with docs' : 'Grill me'} in chat. Reply here; use Start when the plan is agreed, or Stop grill to end the interview.` : '';
+    }
     renderChat();
     renderBoard();
   }
@@ -485,7 +507,7 @@
     if (input) input.focus();
   }
 
-  async function sendChat() {
+  async function sendChat(options = {}) {
     const input = $('orch-ask-input');
     const question = input && input.value ? input.value.trim() : '';
     if (sending) {
@@ -528,7 +550,7 @@
     try {
       try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
       if (!projectId || !(orchestra.projects || []).some(row => row.id === projectId)) throw new Error('Select the project recipient before sending.');
-      const body = await post('/api/orchestrator/ask', { question: text, projectId, requestMode: $('orch-request-mode')?.value || 'default', ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
+      const body = await post('/api/orchestrator/ask', { question: text, projectId, requestMode: options.grillKind ? 'default' : $('orch-request-mode')?.value || 'default', ...(options.grillKind ? { grillKind: options.grillKind } : {}), ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
       if (myGen !== sendGen) return;
       if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
       if ($('orch-request-mode')) $('orch-request-mode').value = 'default';
@@ -544,6 +566,21 @@
       if (input) input.focus();
     }
   }
+
+  async function startGrillChat(id, kind = 'me') {
+    if (sending) { notice('The orchestrator is already responding. Stop or wait before starting another Grill session.'); return; }
+    if (!(orchestra.projects || []).some(row => row.id === id)) throw new Error('Select a registered project before starting Grill.');
+    const input = $('orch-ask-input');
+    if (!input) throw new Error('Orchestrator chat is unavailable in this window.');
+    if (input.value.trim()) { notice('Send or clear your draft before starting Grill.'); input.focus(); return; }
+    projectId = id;
+    try { localStorage.setItem('planwharf_chat_project', id); } catch { /* The explicit request still targets this project. */ }
+    window.dispatchEvent(new CustomEvent('planwharf-project', { detail: id }));
+    window.PlanwharfShowView?.('orchestrator');
+    input.value = kind === 'docs' ? 'Grill with the docs' : 'Grill me';
+    await sendChat({ grillKind: kind });
+  }
+  if (typeof window !== 'undefined') window.PlanwharfStartGrillChat = startGrillChat;
 
   if ($('orch-ask-form')) {
     $('orch-ask-form').addEventListener('submit', event => {
@@ -713,13 +750,7 @@
           return;
         }
         if (grillStartId && (grillStartKind === 'me' || grillStartKind === 'docs')) {
-          orchestra = await post('/api/orchestrator/grill', { propose: true, kind: grillStartKind });
-          if (!version) await loadPlan();
-          const body = await post('/api/orchestrator/start', { version, projectId: grillStartId, timing: 'discretion' });
-          if (body.snapshot) orchestra = body.snapshot;
-          if (body.version) version = body.version;
-          render();
-          notice(body.phase === 'grill' ? 'Grill first, then work can start.' : 'Plan ready. Approve to assign.');
+          await startGrillChat(grillStartId, grillStartKind);
         }
       } catch (error) {
         notice(error.message);

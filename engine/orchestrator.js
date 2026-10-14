@@ -774,6 +774,7 @@ function fleetOf(models, projects, leadId, plans) {
       enabled: Boolean(item.enabled),
       available: item.available !== false,
       unavailableReason: item.unavailableReason || null,
+      catalogExcluded: item.catalogExcluded === true,
       availabilityVerified: item.availabilityVerified === true,
       availabilityCheckedAt: item.availabilityCheckedAt || null,
       availabilityWarning: item.availabilityWarning || null,
@@ -2324,6 +2325,7 @@ function createOrchestrator(options) {
     if (!order || !order.action) return { ok: false, reason: 'invalid order' };
     if (order.action === 'quota') { await refreshPlans(); return { ok: true, snapshot: snapshot(await opts.readPlan()) }; }
     if (order.action === 'state') return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+    if (order.action === 'endGrill') return { ok: true, snapshot: snapshot(await opts.readPlan(), order.projectId) };
     if (order.action === 'model') return setModelEnabled(order.id, order.enabled);
     if (order.action === 'lead') return setOrchestrator(order.id);
     if (order.action === 'mode') {
@@ -2343,8 +2345,8 @@ function createOrchestrator(options) {
       return skipGrill(order.projectId);
     }
     if (order.action === 'start') {
-      if (typeof opts.applyStart === 'function') return opts.applyStart(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}) });
-      const prepared = await startAutoTask(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}) });
+      if (typeof opts.applyStart === 'function') return opts.applyStart(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}), ...(order.grillContext ? { grillContext: order.grillContext } : {}) });
+      const prepared = await startAutoTask(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}), ...(order.grillContext ? { grillContext: order.grillContext } : {}) });
       return { ...prepared, snapshot: prepared.snapshot || await tick() };
     }
     if (order.action === 'watching') {
@@ -2390,7 +2392,8 @@ function createOrchestrator(options) {
     return { ok: true, aborted: Boolean(live), asks: clone(store.asks || []), snapshot: await tick() };
   }
 
-  async function ask(question, projectId, chatSessionId, requestMode = 'default') {
+  async function ask(question, projectId, chatSessionId, requestMode = 'default', requestedGrillKind = null) {
+    if (requestedGrillKind !== null && !['me', 'docs'].includes(requestedGrillKind)) return { ok: false, reason: 'Invalid Grill kind.' };
     if (!['default', 'gold'].includes(requestMode)) return { ok: false, reason: 'Invalid request mode.' };
     const selectedGold = requestMode === 'gold' ? roster().find(model => model.id === store.goldModelId) : null;
     if (requestMode === 'gold' && (!selectedGold || !selectedGold.enabled || selectedGold.available === false || selectedGold.providerEnabled === false || !permitsAssignment(selectedGold, {}))) return { ok: false, reason: 'Choose an available Gold model with the Worker role enabled. No substitute will be used.' };
@@ -2414,17 +2417,25 @@ function createOrchestrator(options) {
     if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
     const conversation = chatSessionId ? store.asks.filter(item => item.chatSessionId === chatSessionId && item.projectId === projectId) : store.asks;
-    const researchRequested = researchIntent(q, conversation);
+    const typedGrill = /^grill me[.!?]*$/i.test(q) ? 'me' : /^grill with (?:the )?docs[.!?]*$/i.test(q) ? 'docs' : null;
+    const previousGrill = conversation.find(turn => turn.projectId === projectId)?.grillKind || null;
+    const requestedGrill = requestedGrillKind || typedGrill;
+    const preliminaryOrder = requestedGrill ? null : /^(?:stop|finish|end) grill(?:ing)?[.!?]*$/i.test(q) ? { action: 'endGrill', projectId } : parseOrder(q, snap, projectId);
+    const grillKind = requestedGrill || (!preliminaryOrder ? previousGrill : null);
+    if (grillKind && !pickAskedProject(snap, projectId, q)) return { ok: false, reason: 'Select the project before starting Grill.' };
+    const researchRequested = !grillKind && researchIntent(q, conversation);
     if (researchRequested && !pickAskedProject(snap, projectId, q)) return { ok: false, reason: 'Select a project or name it explicitly before dispatching research.' };
     const statusKind = /^(?:quota(?: remaining)?|remaining quota|how much quota is left\??|provider status|model status)$/i.test(q) ? 'quota'
       : /^(?:status|current (?:process )?state|current checkpoint(?: identity)?|selected project)$/i.test(q) ? 'state' : null;
-    const order = researchRequested ? null : statusKind ? { action: statusKind, projectId } : parseOrder(q, snap, projectId);
+    const order = grillKind || researchRequested ? null : statusKind ? { action: statusKind, projectId } : preliminaryOrder;
     if (order && ['start', 'stop', 'resume', 'approve', 'skip', 'watching'].includes(order.action) && !order.projectId) return { ok: false, reason: 'Select a project or name it explicitly before issuing a command.' };
     if (goldModel && order && order.action !== 'start') return { ok: false, reason: 'Gold applies to new work requests or Start. Use Default to approve or resume the existing task; its saved model constraint stays active.' };
     if (order) order.goldModel = goldModel;
+    if (order?.action === 'start' && previousGrill) order.grillContext = conversation.filter(turn => turn.projectId === projectId && turn.grillKind).slice(0, 12).reverse().map(turn => `User: ${turn.question}
+Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     if (order?.action === 'approve') order.megaTaskId = snap.projects.find(row => row.id === order.projectId)?.megaTaskId;
     let currentTask = null;
-    if (!order && !researchRequested && freshTaskIntent(q) && typeof opts.prepareTask === 'function') {
+    if (!order && !grillKind && !researchRequested && freshTaskIntent(q) && typeof opts.prepareTask === 'function') {
       const target = pickAskedProject(snap, projectId, q);
       if (!target) return { ok: false, reason: 'Select the project for this new task.' };
       const prepared = await opts.prepareTask(target.id, q, () => token === askToken, goldModel);
@@ -2453,6 +2464,8 @@ function createOrchestrator(options) {
         answer = `${who}: orchestrator lead is now ${order.label || order.id}.`;
       } else if (acted.ok && order.action === 'mode') {
         answer = `${who}: mode is now ${order.mode === 'auto' ? 'Automatic' : 'Manual'}.`;
+      } else if (acted.ok && order.action === 'endGrill') {
+        answer = 'Grill session ended. Use Grill me to begin a new conversation.';
       } else if (acted.ok && order.action === 'grillPropose') {
         const kind = order.kind === 'docs' ? 'Grill with the docs' : (order.kind === 'me' ? 'Grill me' : 'Grill');
         answer = `${who}: ${kind} is now ${order.enabled ? 'on' : 'off'}. The orchestrator skips grill when both are off.`;
@@ -2493,7 +2506,11 @@ function createOrchestrator(options) {
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
       const history = recentContext(conversation || []);
-      if (typeof opts.askModel === 'function' && !lead) {
+      if (grillKind && opts.mattSkillsEnabled?.() === false) {
+        answer = 'Matt skills are disabled. Enable Use Matt skills to start Matt grilling.';
+      } else if (grillKind && typeof opts.askModel !== 'function') {
+        answer = 'An orchestrator model connection is required for Matt grilling. Select an available lead and retry.';
+      } else if (typeof opts.askModel === 'function' && !lead) {
         answer = 'Pick an orchestrator model first (GPT-6 Astra, Grok 4.7, …). I coordinate workers; I do not do the job.';
       } else if (typeof opts.askModel === 'function' && lead) {
         if (token !== askToken) return finishCancelled();
@@ -2511,10 +2528,11 @@ function createOrchestrator(options) {
           const spoken = await opts.askModel({
             question: q,
             model: lead,
+            ...(grillKind ? { grillKind, allowActions: false } : {}),
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel } }),
+            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
@@ -2542,6 +2560,10 @@ function createOrchestrator(options) {
           thinking = unpacked.thinking;
           ms = unpacked.ms;
           diagnostic = spoken?.diagnostic || null;
+          if (diagnostic?.code === 'PROVIDER_MODEL_UNAVAILABLE') {
+            const rejected = models.find(model => model.id === lead.id);
+            if (rejected) { rejected.available = false; rejected.unavailableReason = diagnostic.message; }
+          }
           const envelope = spoken?.failure ? { answer: unpacked.answer, actions: [] } : leadEnvelope(unpacked.answer, spoken && typeof spoken === 'object' ? spoken.actions : undefined);
           if (envelope.answer) answer = envelope.answer;
           else answer = `${lead.label} returned no answer. The provider CLI in the project folder produced nothing.`;
@@ -2572,8 +2594,8 @@ function createOrchestrator(options) {
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
-          diagnostic = diagnoseProvider(lead, error?.message || 'CLI error');
-          answer = diagnostic.message;
+          diagnostic = grillKind && /Matt .*skill/i.test(error?.message || '') ? null : diagnoseProvider(lead, error?.message || 'CLI error');
+          answer = diagnostic ? diagnostic.message : error.message;
         }
         thinkingLive = null;
         if (token !== askToken) return finishCancelled();
@@ -2596,7 +2618,7 @@ function createOrchestrator(options) {
       projectId: (row && row.id) || null,
       sessionId,
       chatSessionId: chatSessionId || null,
-      requestMode, goldModel,
+      requestMode, goldModel, grillKind,
       orchestratorId: lead ? lead.id : null,
       order: order ? order.action : null
     };
@@ -2847,8 +2869,8 @@ function createOrchestrator(options) {
     const open = latest && Array.isArray(latest.open) ? latest.open : [];
     const genericOpen = Plan.isGenericFrontier(open);
     const liveOpen = open.length && !genericOpen;
-    const sessionGrill = store.grillPropose !== false && store.grillKind !== 'off' && !row.grillSkipped;
-    if (liveOpen) {
+    const sessionGrill = store.grillPropose !== false && store.grillKind !== 'off' && !row.grillSkipped && !source?.grillContext;
+    if (liveOpen && !source?.grillContext) {
       note(projectId, 'Auto start: waiting on Matt grilling answers.');
       persist();
       await tick(projectId);
@@ -2883,7 +2905,7 @@ function createOrchestrator(options) {
     row.pendingAutoStart = null;
     note(projectId, 'Read the repo and latest changes. Plan ready for approval.');
     persist();
-    const payload = { title: job.title, detail: job.detail, revision_id: latest.id, timing: timing.timing, ...(goldModel ? { goldModel } : {}) };
+    const payload = { title: job.title, detail: source?.grillContext ? job.detail + '\n\nGrill discussion for this task:\n' + source.grillContext : job.detail, ...(source?.grillContext ? { source: 'chat' } : {}), revision_id: latest.id, timing: timing.timing, ...(goldModel ? { goldModel } : {}) };
     if (timing.timing === 'deadline') payload.deadlineAt = timing.deadlineAt;
     return { ok: true, phase: 'plan', job: payload, facts, clearJob };
   }

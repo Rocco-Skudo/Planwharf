@@ -50,6 +50,7 @@
     }
     window.dispatchEvent(new CustomEvent('planwharf-view', { detail: activeView }));
   }
+  window.PlanwharfShowView = showView;
   control?.addEventListener('click', async () => { if (nativeWindow) { try { await post(view === 'planwharf' ? '/api/orchestrator/window' : '/api/planwharf/window', {}); } catch (error) { document.getElementById('toast').textContent = error.message; } } else showView(activeView === 'planwharf' ? 'orchestrator' : 'planwharf'); });
   window.addEventListener('hashchange', () => showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true));
   showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true);

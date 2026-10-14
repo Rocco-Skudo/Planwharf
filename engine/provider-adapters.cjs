@@ -14,7 +14,8 @@ const adapters = {
       const response = await fetch('https://chatgpt.com/backend-api/codex/models?client_version=0.162.1', { headers: { Authorization: 'Bearer ' + token, 'ChatGPT-Account-Id': auth.tokens.account_id || '' }, signal: AbortSignal.timeout(10000) });
       if (!response.ok) return { ok: false, reason: 'Codex model catalog HTTP ' + response.status };
       const body = await response.json();
-      return { ok: true, models: (body.models || []).map(model => ({ cli: model.slug || model.id, label: model.display_name || model.slug || model.id, capabilities: { canUseTools: true, canCode: true, canOrchestrate: true, canResearch: true } })) };
+      if (!Array.isArray(body.models)) return { ok: false, reason: 'Codex returned an invalid model catalog.' };
+      return { ok: true, models: body.models.map(model => ({ cli: model.slug || model.id, label: model.display_name || model.slug || model.id, capabilities: { canUseTools: true, canCode: true, canOrchestrate: true, canResearch: true } })) };
     } },
   grok: { nativeModel: /^grok-/, sourceProtectedResearch: false,
     account: provider => require('./provider-accounts.cjs').grokAccount(provider),
@@ -23,7 +24,7 @@ const adapters = {
   antigravity: { nativeModel: /^(gemini-|claude-|gpt-oss-)/, sourceProtectedResearch: false,
     account: () => require('./provider-accounts.cjs').unknownAccount(),
     quota: () => require('./antigravity.cjs').readAntigravity(),
-    discover: async () => ({ ok: false, reason: 'This adapter uses the configured exact model catalog; no verified non-inference enumeration command.' }) },
+    discover: () => require('./antigravity.cjs').listAntigravity() },
 };
 for (const [id, adapter] of Object.entries(adapters)) {
   adapter.executable = () => require('./provider-runtime.cjs').executable(id);

@@ -437,7 +437,7 @@
     const modesEl = $('run-modes');
     if (!el) return;
     const mode = orchestra.mode === 'auto' ? 'auto' : 'manual';
-    const list = orchestra.models || [];
+    const list = (orchestra.models || []).filter(item => !item.catalogExcluded);
     const propose = orchestra.grillPropose !== false;
     const grillKind = orchestra.grillKind === 'docs' ? 'docs' : (propose ? 'me' : 'off');
     const onCount = list.filter(item => item.enabled).length;
@@ -638,14 +638,25 @@
     return `Notebook: Planwharf. Orchestrator: ${top.orchestratorDoing || 'on duty'}.${monitor} Workers: ${names}.`;
   }
 
+  function leadUnavailableReason(item) {
+    if (item.roles?.orchestrator === false) return 'Orchestrator role disabled';
+    if (item.roleEligibility?.orchestrator === false) return 'Incompatible with the Orchestrator role';
+    if (item.providerEnabled === false) return 'Provider disabled';
+    if (item.available === false) return item.unavailableReason || 'Exact CLI model unavailable. Refresh models to verify access.';
+    if (!item.enabled) return 'Model disabled';
+    return '';
+  }
+
   function fillOrchLead() {
     const el = $('orch-lead');
     if (!el) return;
     if (document.activeElement === el) return;
-    const models = Array.isArray(orchestra.orchestrators) && orchestra.orchestrators.length
-      ? orchestra.orchestrators
-      : (orchestra.models || []).filter(item => item.enabled && (item.kind === 'premium' || item.kind === 'default'));
     const current = orchestra.selectedOrchestratorId || orchestra.orchestratorId || '';
+    const runnable = new Set((orchestra.orchestrators || []).map(item => item.id));
+    const models = (orchestra.models || []).filter(item => !item.catalogExcluded && (item.id === current || (
+      item.roles?.orchestrator !== false &&
+      (item.roleEligibility?.orchestrator ?? (runnable.has(item.id) || item.kind === 'premium' || item.kind === 'default'))
+    )));
     if (typeof el.setAttribute === 'function') el.setAttribute('data-quota-band', PlanwharfQuota.describe((orchestra.plans || []).find(p => p.id === (orchestra.models || []).find(m => m.id === current)?.plan)).band);
     const groups = [];
     const seen = new Map();
@@ -660,7 +671,10 @@
     const options = groups.map(plan => `<optgroup label="${escape(plan)} | ${PlanwharfQuota.describe((orchestra.plans || []).find(row => row.id === plan)).text}">${seen.get(plan).map(item => {
       const meter = (orchestra.plans || []).find(row => row.id === (item.plan || plan));
       const tag = ` | ${PlanwharfQuota.describe(meter).text}`;
-      return `<option class="quota-${PlanwharfQuota.describe(meter).band}" value="${escape(item.id)}"${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag)}</option>`;
+      const reason = leadUnavailableReason(item);
+      const identity = `${item.providerId || item.provider || 'unknown'}/${item.cli || item.id}`;
+      const status = reason ? ` | Unavailable: ${reason}` : '';
+      return `<option class="quota-${PlanwharfQuota.describe(meter).band}" value="${escape(item.id)}" title="${escape(identity + status)}"${reason ? ' disabled' : ''}${item.id === current ? ' selected' : ''}>${escape(item.label)}${escape(tag + status)}</option>`;
     }).join('')}</optgroup>`).join('');
     el.innerHTML = `<option value="">Choose orchestrator</option>${options}`;
   }
@@ -713,9 +727,9 @@
     const el = $('orchestrator');
     if (!el) return;
     const rows = orchestra.projects || [];
-    const fleet = Array.isArray(orchestra.fleet) && orchestra.fleet.length
+    const fleet = (Array.isArray(orchestra.fleet) && orchestra.fleet.length
       ? orchestra.fleet
-      : (orchestra.models || []).map(item => ({ ...item, state: item.enabled ? 'idle' : 'off', role: item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Orchestrator' : 'Worker', assignments: [] }));
+      : (orchestra.models || []).map(item => ({ ...item, state: item.enabled ? 'idle' : 'off', role: item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Orchestrator' : 'Worker', assignments: [] }))).filter(item => !item.catalogExcluded);
     const interventions = Array.isArray(orchestra.interventions) ? orchestra.interventions : [];
     const looked = clock(orchestra.updatedAt);
     const lead = orchestra.orchestratorLabel || 'Orchestrator';
@@ -871,7 +885,7 @@
       const res = await fetch('models.json');
       if (res && res.ok) {
         const list = await res.json();
-        if (Array.isArray(list) && list.length > 0) {
+        if (Array.isArray(list)) {
           models = list;
           renderClaims();
         }
@@ -915,12 +929,13 @@
     const modelsApi = getModelsApi();
     const engine = getEngine();
 
-    const enabledList = modelsApi ? modelsApi.getEnabledModels(models) : models.filter(m => m && m.enabled === true);
+    const enabledList = modelsApi ? modelsApi.getEnabledModels(models) : models.filter(m => m && m.enabled === true && m.available !== false);
     const allDisabled = enabledList.length === 0;
 
+    const currentModels = models.filter(m => !m.catalogExcluded);
     const summaryEl = $('models-summary');
     if (summaryEl) {
-      summaryEl.textContent = allDisabled ? 'no model enabled' : `${enabledList.length} enabled of ${models.length}`;
+      summaryEl.textContent = allDisabled ? 'no model enabled' : `${enabledList.length} enabled of ${currentModels.length}`;
     }
     const noModelsNotice = $('no-models-notice');
     if (noModelsNotice) {
@@ -932,8 +947,8 @@
       }
     }
 
-    modelsListEl.innerHTML = models.map(m => {
-      const isEnabled = Boolean(m && m.enabled === true);
+    modelsListEl.innerHTML = models.filter(m => !m.catalogExcluded).map(m => {
+      const isEnabled = Boolean(m && m.enabled === true && m.available !== false);
       const statusBadge = isEnabled
         ? '<span class="badge green compact">enabled</span>'
         : '<span class="badge compact off">disabled</span>';
@@ -951,13 +966,13 @@
     const modelSelect = $('claim-model-select');
     if (modelSelect) {
       const currentSelected = modelSelect.value;
-      if (models.length === 0) {
+      if (currentModels.length === 0) {
         modelSelect.innerHTML = '<option value="" disabled selected>No models available</option>';
         modelSelect.disabled = true;
       } else {
         modelSelect.disabled = allDisabled;
-        modelSelect.innerHTML = models.map(m => {
-          const isEnabled = Boolean(m && m.enabled === true);
+        modelSelect.innerHTML = '<option value="">Choose model</option>' + models.filter(m => !m.catalogExcluded).map(m => {
+          const isEnabled = Boolean(m && m.enabled === true && m.available !== false);
           const sel = (m.id === currentSelected && isEnabled) ? 'selected' : '';
           return `<option value="${escape(m.id)}" ${isEnabled ? '' : 'disabled'} ${sel}>` +
             `${escape(m.label || m.id)} ${isEnabled ? '(enabled)' : '(disabled)'}` +
@@ -1072,19 +1087,7 @@
         return;
       }
       if (grillKindFlag === 'me' || grillKindFlag === 'docs') {
-        const on = orchestra.grillPropose !== false;
-        const current = orchestra.grillKind === 'docs' ? 'docs' : (on ? 'me' : 'off');
-        const turningOff = current === grillKindFlag;
-        const payload = turningOff ? { propose: false } : { propose: true, kind: grillKindFlag };
-        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || 'Save failed.');
-        orchestra = body;
-        render();
-        $('toast').textContent = turningOff
-          ? 'Grill is off. Auto start skips grill.'
-          : (grillKindFlag === 'docs' ? 'Grill with the docs is on. Auto start will grill from the docs.' : 'Grill me is on. Auto start will grill first.');
-        clearTimeout(toastTimer); toastTimer = setTimeout(() => { $('toast').textContent = ''; }, 5000);
+        await window.PlanwharfStartGrillChat(projectId, grillKindFlag);
         return;
       }
       if (mode) {
@@ -1176,18 +1179,8 @@
     const grillStartKind = event.target && event.target.getAttribute && event.target.getAttribute('data-grill-kind');
     if (grillStartId && (grillStartKind === 'me' || grillStartKind === 'docs')) {
       event.stopPropagation();
-      openProject(grillStartId);
-      try {
-        const response = await fetch('/api/orchestrator/grill', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ propose: true, kind: grillStartKind }) });
-        const body = await response.json();
-        if (!response.ok) throw new Error(body.error || 'Save failed.');
-        orchestra = body;
-        renderOrchestra();
-        fillYard();
-        openAutoStart(grillStartId);
-      } catch (error) {
-        notice(translateError(error.message));
-      }
+      try { await window.PlanwharfStartGrillChat(grillStartId, grillStartKind); }
+      catch (error) { notice(error.message); }
       return;
     }
     const pauseId = event.target && event.target.getAttribute && event.target.getAttribute('data-pause');

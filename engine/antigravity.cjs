@@ -29,4 +29,20 @@ async function readAntigravity({ command = executable('antigravity'), run = exec
     });
   });
 }
-module.exports = { parseUsage, readAntigravity };
+function parseModels(output) {
+  const text = String(output || '').replace(/\x1b\[[0-9;]*m/g, '');
+  const ids = [...new Set(text.match(/\b(?:gemini|claude|gpt-oss)-[a-zA-Z0-9][a-zA-Z0-9._:-]*/g) || [])];
+  return ids.length ? { ok: true, ids } : { ok: false, reason: 'Antigravity returned no exact model IDs. Configured routes remain unverified; no aliases were guessed.' };
+}
+async function listAntigravity({ command = executable('antigravity'), run = execFile } = {}) {
+  if (!command) return { ok: false, reason: 'Antigravity agy executable not found.' };
+  return new Promise(resolve => {
+    run(command, ['models'], { windowsHide: true, timeout: 20000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      if (error) return resolve({ ok: false, reason: /sign in|not logged|not authenticated/i.test(stdout + stderr)
+        ? 'Antigravity CLI cannot list models for this login. Sign in to agy, then refresh models.'
+        : 'Antigravity CLI model listing failed. Check CLI access and permissions, then refresh models.' });
+      resolve(parseModels(stdout));
+    });
+  });
+}
+module.exports = { parseUsage, readAntigravity, parseModels, listAntigravity };

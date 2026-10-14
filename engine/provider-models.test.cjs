@@ -52,10 +52,46 @@ const { createProviderModels } = require('./provider-models.cjs');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-startup-models-'));
   const planFile = path.join(dir, 'notebook.json');
   fs.copyFileSync(path.join(__dirname, '../fixtures/notebook.json'), planFile);
+  const cacheFile = path.join(dir, 'catalogs.json');
+  const fixtureProviders = ['codex', 'grok', 'antigravity'].map(adapter => ({ id: adapter + '-cache', adapter, account: { key: 'isolated-account' }, label: adapter }));
+  const freshModels = () => fixtureProviders.flatMap(provider => [
+    { id: provider.id + '-retired', providerId: provider.id, cli: provider.adapter + '-retired', available: true, enabled: true, roles: { orchestrator: true, worker: false, reviewer: true } },
+    { id: provider.id + '-current', providerId: provider.id, cli: provider.adapter + '-current', available: false, enabled: true }
+  ]);
+  const firstModels = freshModels();
+  const firstBoot = createProviderModels(firstModels, { providers: fixtureProviders, cacheFile, discover: async provider => ({ ok: true, ids: [provider.adapter + '-current', provider.adapter + '-new'] }) });
+  await firstBoot.refresh(true);
+  assert.ok(firstModels.filter(model => model.id.endsWith('-retired')).every(model => model.catalogExcluded && !model.available));
+  assert.ok(firstModels.filter(model => model.cli.endsWith('-new')).every(model => model.enabled === false && model.available), 'New exact IDs require explicit user role selection');
+  const cachedText = fs.readFileSync(cacheFile, 'utf8');
+  assert.ok(!cachedText.includes('isolated-account'), 'Account identity is hashed in catalog cache keys');
+  const restartedModels = freshModels();
+  const offlineBoot = createProviderModels(restartedModels, { providers: fixtureProviders, cacheFile, discover: async () => ({ ok: false, reason: 'Isolated network failure' }) });
+  await offlineBoot.refresh(true);
+  assert.ok(restartedModels.filter(model => model.id.endsWith('-retired')).every(model => model.catalogExcluded && !model.available), 'Offline restart cannot resurrect retired models');
+  assert.ok(restartedModels.filter(model => model.cli.endsWith('-new')).every(model => model.available && !model.enabled), 'Previously discovered IDs survive restart without automatic roles');
+  assert.ok(restartedModels.every(model => !model.availabilityVerified));
+  assert.deepEqual(restartedModels[0].roles, { orchestrator: true, worker: false, reviewer: true });
+  const changedAccountModels = freshModels();
+  const changedAccount = createProviderModels(changedAccountModels, { providers: fixtureProviders.map(provider => ({ ...provider, account: { key: 'different-account' } })), cacheFile, discover: async () => ({ ok: false, reason: 'Isolated sign-in failure' }) });
+  await changedAccount.refresh(true);
+  assert.ok(!changedAccountModels.some(model => model.cli.endsWith('-new')), 'A different account cannot inherit discovered access from a cached login');
+  let catalogReply = { ok: true, models: [{ cli: '' }] };
+  const validation = createProviderModels(restartedModels, { providers: fixtureProviders, discover: async () => catalogReply });
+  await validation.refresh(true);
+  assert.equal(validation.snapshot().providers[0].status, 'unread');
+  assert.ok(restartedModels.find(model => model.cli === 'codex-current').available, 'Malformed success cannot revoke current access');
+  catalogReply = { ok: true, ids: [] };
+  await validation.refresh(true);
+  assert.ok(restartedModels.every(model => model.catalogExcluded && !model.available), 'Explicit empty catalogs revoke every listed route');
+  catalogReply = { ok: true, ids: ['codex-retired'] };
+  await validation.refresh(true, 'codex-cache');
+  assert.equal(restartedModels[0].catalogExcluded, false, 'A returned exact ID becomes selectable again');
+  assert.deepEqual(restartedModels[0].roles, { orchestrator: true, worker: false, reviewer: true });
   let releaseDiscovery, startupCalls = 0;
   const pending = new Promise(resolve => { releaseDiscovery = resolve; });
   const server = createServer({ planFile, attemptsDir: path.join(dir, 'attempts'), skillsEnabled: false, fetchPlans: null, refreshModels: true,
-    models: [{ id: 'gpt-5', cli: 'gpt-5', provider: 'codex', enabled: false, available: false, unavailableReason: 'Old rejected model probe' }],
+    models: [{ id: 'gpt-5', cli: 'gpt-5', provider: 'codex', enabled: false, available: false, unavailableReason: 'Old rejected model probe' }, { id: 'retired-startup', cli: 'gpt-retired', provider: 'codex', enabled: true, available: true }],
     discoverModels: () => { startupCalls++; return pending; } });
   try {
     await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -70,6 +106,8 @@ const { createProviderModels } = require('./provider-models.cjs');
     const model = checked.models.find(item => item.id === 'gpt-5');
     assert.equal(model.available, true); assert.equal(model.unavailableReason, null);
     assert.equal(model.availabilityVerified, true);
+    assert.equal(checked.models.find(item => item.id === 'retired-startup').catalogExcluded, true);
+    assert.equal(checked.models.find(item => item.id === 'retired-startup').available, false);
     assert.equal(checked.providerModels.checking, false);
     assert.equal(startupCalls, 1, 'Startup and UI polling perform only one catalog check');
   } finally {
