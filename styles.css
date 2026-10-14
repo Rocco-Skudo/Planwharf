@@ -1440,3 +1440,9 @@ select[data-quota-band="grey"] { color: var(--muted); }
 .provider-connection-dialog form, .provider-connection-dialog fieldset, .provider-connection-dialog label { min-width: 0; }
 .provider-connection-dialog input:not([type=checkbox]), .provider-connection-dialog textarea, .provider-connection-dialog select { width: 100%; max-width: 100%; box-sizing: border-box; }
 .provider-connection-dialog [hidden] { display: none; }
+
+.model-role-bulk { display: flex; flex-wrap: wrap; gap: 12px; }
+.model-role-bulk fieldset { min-width: 0; margin: 0; }
+.model-role-bulk button { margin: 4px; }
+.request-mode-control { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+[data-gold-model] { width: 100%; min-width: 0; }

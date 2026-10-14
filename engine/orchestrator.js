@@ -994,7 +994,7 @@ function emptyEntry() {
 }
 
 function jobFingerprint(job) {
-  return crypto.createHash('sha256').update(JSON.stringify([job.id, job.title, job.detail, job.revision_id || null])).digest('hex');
+  return crypto.createHash('sha256').update(JSON.stringify([job.id, job.title, job.detail, job.revision_id || null, ...(job.goldModel ? [job.goldModel] : [])])).digest('hex');
 }
 function checkpointMatches(checkpoint, job) {
   if (!checkpoint || !job) return false;
@@ -1086,6 +1086,7 @@ function createOrchestrator(options) {
           briefingBaselines: parsed.briefingBaselines || {},
           selectedProjectId: parsed.selectedProjectId || null,
           sessions: Array.isArray(parsed.sessions) ? parsed.sessions : [],
+          goldModelId: typeof parsed.goldModelId === 'string' ? parsed.goldModelId : null,
           orchestratorId: typeof parsed.orchestratorId === 'string' && parsed.orchestratorId.trim() ? parsed.orchestratorId : null
         };
       }
@@ -1122,7 +1123,7 @@ function createOrchestrator(options) {
 
   const bridge = createExecutionBridge({ store, attempts, dir, rowFor: (id, megaTaskId) => store.researches.find(record => record.megaTaskId === megaTaskId) || entry(id), inspect, spawnWorker: opts.spawnWorker,
     isProcessAlive: opts.isProcessAlive, killWorker: opts.killWorker, models: roster,
-    resolveWorker: (worker, sub) => sub?.type === 'RESEARCH' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
+    resolveWorker: (worker, sub) => sub?.type === 'RESEARCH' || sub?.goldModel && assignmentRole(sub) === 'worker' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
     workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !usagePolicy(worker, plansLive).blocked && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
     now, persist, sessionId, leadId: () => leadModel()?.id || null });
 
@@ -1645,7 +1646,7 @@ function createOrchestrator(options) {
     } catch (error) { finishResearch(record, 'failed', error.message); throw error; }
   }
 
-  async function dispatchResearch(action, stillAuthorized = () => true) {
+  async function dispatchResearch(action, stillAuthorized = () => true, goldModel = null) {
     try {
       if (!action || typeof action !== 'object' || Object.keys(action).some(key => !['type', 'projectId', 'modelId', 'title', 'detail'].includes(key)) || action.type !== 'dispatch_research') throw new Error('Invalid research dispatch action.');
       for (const key of ['projectId', 'modelId', 'title', 'detail']) if (typeof action[key] !== 'string' || !action[key].trim()) throw new Error('Research action requires ' + key + '.');
@@ -1663,7 +1664,7 @@ function createOrchestrator(options) {
         title: action.title, detail: action.detail, sourceFolder: project.project.folder || null, github: project.project.github || null, createdAt: now(), attempts: [] };
       store.researches.push(record);
       if (opts.phase2) {
-        Object.assign(record, { executionVersion: 2, job: { id: record.id, title: record.title, detail: record.detail, revision_id: project.revisions.at(-1).id, kind: 'research', detached: true },
+        Object.assign(record, { executionVersion: 2, job: { id: record.id, title: record.title, detail: record.detail, revision_id: project.revisions.at(-1).id, kind: 'research', detached: true, ...(goldModel ? { goldModel } : {}) },
           status: 'needs_approval', workerLabel: researchModel(action.modelId).label, provider: researchModel(action.modelId).provider, cli: researchModel(action.modelId).cli, sessionId, startedAt: null });
         const mega = bridge.propose(project, record.job, [{ modelId: action.modelId, slice: action.title, detail: action.detail, type: 'RESEARCH', dependsOn: [] }]);
         record.megaTaskId = mega.id; bridge.paint(mega); persist();
@@ -1785,6 +1786,7 @@ function createOrchestrator(options) {
       asking: Boolean(thinkingLive),
       orchestratorId: lead ? lead.id : null,
       selectedOrchestratorId: store.orchestratorId || null,
+      goldModelId: store.goldModelId || null,
       orchestratorUnavailableReason: store.orchestratorId && !lead ? 'Selected orchestrator is unavailable or blocked by its usage policy. Choose an eligible model or configure an explicit fallback.' : null,
       orchestratorLabel: lead ? lead.label : ORCH_NAME,
       orchestrators: roster().filter(canOrchestrate).map(item => ({ id: item.id, label: item.label, providerId: item.providerId || item.provider, plan: item.plan })),
@@ -1822,6 +1824,7 @@ function createOrchestrator(options) {
           doing: opts.phase2 && !row.megaTaskId && row.status === 'complete' ? 'Historical completion recorded. This run predates structured Phase 2 results.' : row.doing,
           plan: clone(row.plan || []),
           facts: row.facts ? clone(row.facts) : null,
+          goldModel: (item.tasks || []).find(task => task.id === row.jobId)?.goldModel || null,
           jobTitle: row.jobTitle,
           jobId: row.jobId,
           attemptId: row.attemptId,
@@ -1947,7 +1950,7 @@ function createOrchestrator(options) {
         const existing = bridge.find(id, job.id);
         // Unapproved or paused work has no reason to inspect its source on every poll.
         const facts = existing && existing.status !== 'RUNNING' && row.facts ? row.facts : inspect(item.project.folder); row.facts = facts;
-        const parts = job.proposedSubTasks?.length ? job.proposedSubTasks.map(sub => ({ ...sub, modelId: sub.assignedModelId, slice: sub.title }))
+        const parts = job.proposedSubTasks?.length ? job.proposedSubTasks.map(sub => ({ ...sub, modelId: job.goldModel && assignmentRole(sub) === 'worker' ? job.goldModel.id : sub.assignedModelId, slice: sub.title }))
           : dispatchPlan(pickWorkers(roster(), { job, usage: store.usage, facts, plans: plansLive }), job, facts);
         return bridge.advance(item, job, parts);
       } catch (error) { row.status = 'blocked_no_worker'; row.doing = error.message; row.next = error.message; return row; }
@@ -2334,8 +2337,8 @@ function createOrchestrator(options) {
       return skipGrill(order.projectId);
     }
     if (order.action === 'start') {
-      if (typeof opts.applyStart === 'function') return opts.applyStart(order.projectId, { timing: 'discretion' });
-      const prepared = await startAutoTask(order.projectId, { timing: 'discretion' });
+      if (typeof opts.applyStart === 'function') return opts.applyStart(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}) });
+      const prepared = await startAutoTask(order.projectId, { timing: 'discretion', ...(order.goldModel ? { goldModel: order.goldModel } : {}) });
       return { ...prepared, snapshot: prepared.snapshot || await tick() };
     }
     if (order.action === 'watching') {
@@ -2381,7 +2384,11 @@ function createOrchestrator(options) {
     return { ok: true, aborted: Boolean(live), asks: clone(store.asks || []), snapshot: await tick() };
   }
 
-  async function ask(question, projectId, chatSessionId) {
+  async function ask(question, projectId, chatSessionId, requestMode = 'default') {
+    if (!['default', 'gold'].includes(requestMode)) return { ok: false, reason: 'Invalid request mode.' };
+    const selectedGold = requestMode === 'gold' ? roster().find(model => model.id === store.goldModelId) : null;
+    if (requestMode === 'gold' && (!selectedGold || !selectedGold.enabled || selectedGold.available === false || selectedGold.providerEnabled === false || !permitsAssignment(selectedGold, {}))) return { ok: false, reason: 'Choose an available Gold model with the Worker role enabled. No substitute will be used.' };
+    const goldModel = selectedGold ? { id: selectedGold.id, provider: selectedGold.providerId || selectedGold.provider, cli: selectedGold.cli } : null;
     const q = String(question || '').trim();
     if (!q) return { ok: false, reason: 'empty question' };
     if (Buffer.byteLength(q, 'utf8') > 1024 * 1024) return { ok: false, reason: 'message too long (maximum 1 MiB)' };
@@ -2407,12 +2414,14 @@ function createOrchestrator(options) {
       : /^(?:status|current (?:process )?state|current checkpoint(?: identity)?|selected project)$/i.test(q) ? 'state' : null;
     const order = researchRequested ? null : statusKind ? { action: statusKind, projectId } : parseOrder(q, snap, projectId);
     if (order && ['start', 'stop', 'resume', 'approve', 'skip', 'watching'].includes(order.action) && !order.projectId) return { ok: false, reason: 'Select a project or name it explicitly before issuing a command.' };
+    if (goldModel && order && order.action !== 'start') return { ok: false, reason: 'Gold applies to new work requests or Start. Use Default to approve or resume the existing task; its saved model constraint stays active.' };
+    if (order) order.goldModel = goldModel;
     if (order?.action === 'approve') order.megaTaskId = snap.projects.find(row => row.id === order.projectId)?.megaTaskId;
     let currentTask = null;
     if (!order && !researchRequested && freshTaskIntent(q) && typeof opts.prepareTask === 'function') {
       const target = pickAskedProject(snap, projectId, q);
       if (!target) return { ok: false, reason: 'Select the project for this new task.' };
-      const prepared = await opts.prepareTask(target.id, q, () => token === askToken);
+      const prepared = await opts.prepareTask(target.id, q, () => token === askToken, goldModel);
       if (!prepared.ok) return prepared;
       currentTask = prepared.task;
       snap = prepared.snapshot;
@@ -2499,7 +2508,7 @@ function createOrchestrator(options) {
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null } }),
+            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
@@ -2541,11 +2550,13 @@ function createOrchestrator(options) {
               if (token !== askToken) return finishCancelled();
               const mentioned = roster().filter(model => [model.label, model.cli].some(name => typeof name === 'string' && q.toLowerCase().includes(name.toLowerCase())));
               const requested = mentioned.length > 1 ? mentioned.filter(model => model.id !== lead.id) : mentioned;
-              const receipt = requested.length === 1 && action && action.modelId !== requested[0].id
+              const receipt = goldModel && action?.modelId !== goldModel.id
+                ? { ok: false, reason: 'Gold model requires the exact worker ' + goldModel.id + '. No model was substituted.' }
+                : requested.length === 1 && action && action.modelId !== requested[0].id
                 ? { ok: false, reason: 'The action chose a different model from the requested worker: ' + requested[0].id + '. No model was substituted.' }
                 : action && row && action.projectId !== row.id
                   ? { ok: false, reason: 'Research action targets a different project from the selected recipient.' }
-                  : await dispatchResearch(action, () => token === askToken);
+                  : await dispatchResearch(action, () => token === askToken, goldModel);
               actionResults.push(receipt);
               answer += receipt.ok
                 ? receipt.proposal ? `\n\nResearch MegaTask ${receipt.research.megaTaskId} proposed for ${receipt.research.projectName}. Review the objective and approve this MegaTask before any worker starts.` : `\n\nNotebook: ${receipt.duplicate ? 'already running' : 'started'} ${receipt.research.workerLabel} (${receipt.research.provider}/${receipt.research.cli}), process ${receipt.research.pid}, for research "${receipt.research.title}". Source files are protected; findings will be saved to report.md.`
@@ -2579,6 +2590,7 @@ function createOrchestrator(options) {
       projectId: (row && row.id) || null,
       sessionId,
       chatSessionId: chatSessionId || null,
+      requestMode, goldModel,
       orchestratorId: lead ? lead.id : null,
       order: order ? order.action : null
     };
@@ -2627,6 +2639,24 @@ function createOrchestrator(options) {
     if (model.accountScope) store.accountModelRoles[model.accountScope][id] = { ...store.modelRoles[id] };
     persist();
     return { ok: true, snapshot: await tick() };
+  }
+
+  async function setGoldModel(id) {
+    const model = roster().find(model => model.id === id);
+    if (id !== null && (!model || !roleEligibility(model).worker)) return { ok: false, reason: 'Choose a configured model compatible with the Worker role.' };
+    store.goldModelId = id; persist();
+    return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+  }
+
+  async function setRoleForAll(role, enabled) {
+    if (!ROLE_IDS.includes(role) || typeof enabled !== 'boolean') return { ok: false, reason: 'Invalid bulk role settings.' };
+    for (const model of roster()) {
+      store.modelRoles[model.id] = { ...model.roles, [role]: enabled && roleEligibility(model)[role] };
+      if (model.accountScope) store.accountModelRoles[model.accountScope][model.id] = { ...store.modelRoles[model.id] };
+    }
+    if (role === 'orchestrator' && !enabled) store.orchestratorId = null;
+    persist();
+    return { ok: true, snapshot: snapshot(await opts.readPlan()) };
   }
 
   async function setModelRoles(id, roles) {
@@ -2804,7 +2834,8 @@ function createOrchestrator(options) {
     const clearJob = releaseRunningJob(projectId, item, facts);
     const latest = item.revisions.at(-1);
     const continuing = Boolean(row.pendingAutoStart);
-    row.pendingAutoStart = { timing: timing.timing, deadlineAt: timing.deadlineAt };
+    const goldModel = source?.goldModel || row.pendingAutoStart?.goldModel || null;
+    row.pendingAutoStart = { timing: timing.timing, deadlineAt: timing.deadlineAt, ...(goldModel ? { goldModel } : {}) };
     row.facts = facts;
     if (!continuing) row.grillAsked = false;
     const open = latest && Array.isArray(latest.open) ? latest.open : [];
@@ -2846,7 +2877,7 @@ function createOrchestrator(options) {
     row.pendingAutoStart = null;
     note(projectId, 'Read the repo and latest changes. Plan ready for approval.');
     persist();
-    const payload = { title: job.title, detail: job.detail, revision_id: latest.id, timing: timing.timing };
+    const payload = { title: job.title, detail: job.detail, revision_id: latest.id, timing: timing.timing, ...(goldModel ? { goldModel } : {}) };
     if (timing.timing === 'deadline') payload.deadlineAt = timing.deadlineAt;
     return { ok: true, phase: 'plan', job: payload, facts, clearJob };
   }
@@ -3024,7 +3055,7 @@ function createOrchestrator(options) {
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

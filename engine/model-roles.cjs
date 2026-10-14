@@ -19,6 +19,7 @@ function assignmentRole(job = {}) {
 function permitsAssignment(model, job) {
   const role = assignmentRole(job);
   const resolved = withModelRoles(model);
+  if (role === 'worker' && job?.goldModel && (model.id !== job.goldModel.id || (model.providerId || model.provider) !== job.goldModel.provider || model.cli !== job.goldModel.cli)) return false;
   return resolved.roles[role] === true;
 }
 module.exports = { ROLE_IDS, roleEligibility, withModelRoles, assignmentRole, permitsAssignment };

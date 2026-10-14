@@ -48,6 +48,10 @@
       <form id="orch-ask-form" class="orch-composer">
         <label for="orch-ask-input" class="sr-only">Message the orchestrator</label>
         <textarea id="orch-ask-input" rows="3" placeholder="Command the orchestrator for the selected project. Start. Resume. Stop. Skip grill. Switch to automatic. How much quota is left?"></textarea>
+        <label class="request-mode-control">Request mode
+          <select id="orch-request-mode"><option value="default">Default</option><option value="gold">Gold model</option></select>
+        </label>
+        <p id="orch-gold-hint" class="muted">Default: the orchestrator chooses workers normally.</p>
         <div class="orch-composer-actions">
           <button type="submit" class="primary" id="orch-ask-submit">Send</button>
           <button type="button" class="secondary" id="orch-ask-stop" hidden>Stop</button>

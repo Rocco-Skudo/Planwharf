@@ -178,7 +178,7 @@
     el.innerHTML = items.map(item => {
       const order = item.order ? `<span class="chat-order">${escape(item.order)}</span>` : '';
       const elapsed = Number.isFinite(item.ms) ? ` · ${formatMs(item.ms)}` : '';
-      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p></div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p>${diagnosticHtml(item.diagnostic)}<button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
+      return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p>${item.goldModel ? `<p class="muted">Gold model: ${escape(item.goldModel.provider)}/${escape(item.goldModel.cli)} (${escape(item.goldModel.id)})</p>` : ''}</div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p>${diagnosticHtml(item.diagnostic)}<button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
     }).join('') + pending;
     if (nearBottom || sending || !items.length) el.scrollTop = el.scrollHeight;
   }
@@ -320,7 +320,7 @@
       return !provider || provider.showAll || siblings.length <= 12 || item.enabled || item.lead || siblings.indexOf(item) < 8;
     });
     const providerControls = providerList.map(provider => `<article class="dash-model"><strong>${escape(provider.label)}</strong><p>${provider.models.length} configured models | ${escape(provider.availability)}</p><button class="secondary compact" data-provider="${escape(provider.id)}" data-provider-enabled="${!provider.enabled}">${provider.enabled ? 'Disable provider' : 'Enable provider'}</button><button class="secondary compact" data-provider-show="${escape(provider.id)}" data-provider-show-all="${!provider.showAll}">${provider.showAll ? 'Show selected models' : 'Show all models'}</button></article>`).join('');
-    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes every configured model.</p><div class="dash-models">${visibleFleet.map(item => {
+    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${['orchestrator', 'worker', 'reviewer'].map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes every configured model.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
       const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
       const availabilityText = item.availabilityWarning
@@ -355,12 +355,24 @@
     const usage = orchestra.aiUsage || { orchestrator: [], workers: [], recent: [] };
     const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts${group.tokenReadings ? ' | ' + group.inputTokens + ' input / ' + group.outputTokens + ' output tokens (reported)' : ''} | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
     const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
-    el.innerHTML = `${workersHtml(rows)}${usageHtml}${planCards}${policySection}${models}${processes}${iv}`;
+    const gold = fleet.find(model => model.id === orchestra.goldModelId);
+    const goldSection = rolesSupported ? `<section class="dash-section" aria-label="Gold model"><h3>Gold model</h3><label>Preferred worker<select data-gold-model><option value="">Choose Gold model</option>${fleet.filter(model => model.roleEligibility?.worker).map(model => `<option value="${escape(model.id)}" ${model.id === orchestra.goldModelId ? 'selected' : ''}>${escape(model.label)} | ${escape(model.providerId || model.provider)}/${escape(model.cli)} (${escape(model.id)})${model.roles?.worker ? '' : ' - Worker role disabled'}</option>`).join('')}${orchestra.goldModelId && !gold ? `<option selected value="${escape(orchestra.goldModelId)}">${escape(orchestra.goldModelId)} - no longer configured</option>` : ''}</select></label><p class="muted">Use Gold model below the chat for one request. Its implementation and research jobs keep this exact model through approval, pause and resume. Worker permission and quota limits still apply; unavailable work pauses without substitution. Reviewers keep their settings.</p></section>` : '';
+    el.innerHTML = `${goldSection}${workersHtml(rows)}${usageHtml}${planCards}${policySection}${models}${processes}${iv}`;
 
     el.querySelectorAll('details[data-worker-log]').forEach(detail => {
       if (openLogs.has(detail.getAttribute('data-worker-log'))) detail.open = true;
     });
   }
+
+  function renderRequestMode() {
+    const control = $('orch-request-mode'), hint = $('orch-gold-hint');
+    if (!control || !hint) return;
+    const model = (orchestra.models || []).find(model => model.id === orchestra.goldModelId);
+    hint.textContent = control.value === 'gold'
+      ? model ? `Gold: ${model.providerId || model.provider}/${model.cli} (${model.id}). Exact worker for this request; no fallback. Returns to Default after sending.` : 'Choose a Gold model in the dashboard before sending.'
+      : 'Default: the orchestrator chooses workers normally.';
+  }
+  if ($('orch-request-mode')) $('orch-request-mode').addEventListener('change', renderRequestMode);
 
   function render() {
     usageNotices?.(orchestra);
@@ -371,6 +383,7 @@
     if (!projects.some(row => row.id === projectId)) projectId = null;
     if (recipient) recipient.innerHTML = '<option value="">Select a project</option>' + projects.map(row => `<option value="${escape(row.id)}"${row.id === projectId ? ' selected' : ''}>${escape(row.name)}</option>`).join('');
     fillLead();
+    renderRequestMode();
     renderChat();
     renderBoard();
   }
@@ -515,9 +528,10 @@
     try {
       try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
       if (!projectId || !(orchestra.projects || []).some(row => row.id === projectId)) throw new Error('Select the project recipient before sending.');
-      const body = await post('/api/orchestrator/ask', { question: text, projectId, ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
+      const body = await post('/api/orchestrator/ask', { question: text, projectId, requestMode: $('orch-request-mode')?.value || 'default', ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
       if (myGen !== sendGen) return;
       if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
+      if ($('orch-request-mode')) $('orch-request-mode').value = 'default';
       orchestra.asks = body.asks || orchestra.asks || [];
       orchestra.thinking = null;
     } catch (error) {
@@ -583,6 +597,14 @@
         renderPolicySection();
         return;
       }
+      const gold = event.target.closest('[data-gold-model]');
+      if (gold) {
+        gold.disabled = true;
+        try { orchestra = await post('/api/models/gold', { id: gold.value || null }); render(); }
+        catch (error) { notice(error.message); render(); }
+        finally { gold.disabled = false; }
+        return;
+      }
       const control = event.target.closest('[data-model-role]');
       if (!control) return;
       const enabled = control.checked; control.disabled = true;
@@ -591,6 +613,14 @@
       finally { control.disabled = false; }
     });
     $('orchestrator').addEventListener('click', async event => {
+      const bulk = event.target.closest('[data-role-bulk]');
+      if (bulk) {
+        bulk.disabled = true;
+        try { orchestra = await post('/api/models/roles/bulk', { role: bulk.dataset.roleBulk, enabled: bulk.dataset.roleEnabled === 'true' }); render(); }
+        catch (error) { notice(error.message); }
+        finally { bulk.disabled = false; }
+        return;
+      }
       if (event.target.closest('[data-add-provider]')) {
         PlanwharfModelPolicyUI.openConnection(async input => {
           orchestra = await post('/api/providers/connections', input);

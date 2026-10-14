@@ -8,7 +8,7 @@ const { executionNext } = require('./execution-next.cjs');
 const { adapterFor } = require('./provider-adapters.cjs');
 const { checkpointDiff } = require('./project-history.cjs');
 const clone = value => structuredClone(value);
-const fingerprint = job => crypto.createHash('sha256').update(JSON.stringify([job.id, job.title, job.detail, job.revision_id || null])).digest('hex');
+const fingerprint = job => crypto.createHash('sha256').update(JSON.stringify([job.id, job.title, job.detail, job.revision_id || null, ...(job.goldModel ? [job.goldModel] : [])])).digest('hex');
 
 function observedCommits(folder, before, after) {
   if (!folder || before === after || !/^[a-f0-9]{40,64}$/.test(before || '') || !/^[a-f0-9]{40,64}$/.test(after || '')) return [];
@@ -66,7 +66,7 @@ function createExecutionBridge(options) {
       if (mega.timing === undefined) { mega.timing = job.timing || 'discretion'; mega.deadlineAt = job.timing === 'deadline' ? job.deadlineAt : null; }
       return mega;
     }
-    if (!parts.length) throw new Error('No eligible workers for the proposed MegaTask.');
+    if (!parts.length) throw new Error(job.goldModel ? `Gold model ${job.goldModel.provider}/${job.goldModel.cli} (${job.goldModel.id}) is unavailable, disabled or blocked by quota. No substitute will be used.` : 'No eligible workers for the proposed MegaTask.');
     const id = 'MT-' + crypto.randomUUID(), facts = inspectProject(item);
     if (!item.project.folder && job.kind !== 'research' && !parts.every(part => part.type === 'RESEARCH')) throw new Error('Set a local source folder before proposing implementation work.');
     if (facts?.error) throw new Error(facts.error);
@@ -76,6 +76,7 @@ function createExecutionBridge(options) {
     mega.timing = job.timing || 'discretion'; mega.deadlineAt = job.timing === 'deadline' ? job.deadlineAt : null;
     const ids = parts.map((_, index) => `${id}-ST-${String(index + 1).padStart(2, '0')}`);
     const subs = parts.map((part, index) => ({ id: ids[index], megaTaskId: id, title: part.slice || part.title, detail: part.detail || part.slice || job.detail, status: 'PENDING', assignedModelId: part.modelId,
+      ...(job.goldModel ? { goldModel: { ...job.goldModel } } : {}),
       attemptIds: [], resultId: null, createdAt: now(), completedAt: null, type: part.type || (job.kind === 'research' ? 'RESEARCH' : job.kind === 'audit' ? 'AUDIT' : 'IMPLEMENTATION'),
       dependencies: part.dependsOn ? part.dependsOn.map(index => ids[index]) : part.dependencies || (index ? [ids[index - 1]] : []),
       proposedProvider: models().find(model => model.id === part.modelId)?.provider || null, proposedCli: models().find(model => model.id === part.modelId)?.cli || null, provider: null, cli: null }));

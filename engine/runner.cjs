@@ -188,6 +188,7 @@ function askPrompt(info) {
     info && info.allowActions === false ? 'This request is an internal planning/Grill query: actions are disabled. Follow the requested answer format exactly; do not wrap it in a dispatch envelope.' : '',
     info && info.skillsPrompt ? info.skillsPrompt : '',
     'Do not invent workers that are not in the briefing.',
+    'When CURRENT REQUEST includes goldModel, every implementation or research worker must use that exact model ID, provider and CLI model. Never substitute another worker. Reviewers keep their configured roles. Gold is a request exception, not a change to the orchestrator.',
     'Respect each model allowed roles in the briefing. Orchestrator-only models coordinate; Worker permission is required for implementation or research; Reviewer permission is required for audits. Technical suitability never overrides the user role permissions.',
     'Explicit project commands are executed before you speak. Ordinary work requests and mentions of start/resume inside discussion do not automatically dispatch implementation workers.',
     'BRIEFING:',

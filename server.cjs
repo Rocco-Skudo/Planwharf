@@ -241,14 +241,14 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     abortAsk,
     fetchPlans,
     readSkill: relative => (skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
-    prepareTask: (projectId, question, stillAuthorized) => enqueue(async () => {
+    prepareTask: (projectId, question, stillAuthorized, goldModel) => enqueue(async () => {
       const current = await readPlan(planFile);
       const item = (current.schema === 2 ? current.projects : [current]).find(item => item.project.id === projectId);
       if (!item) return { ok: false, reason: 'Selected project no longer exists.' };
       const live = (await orchestra.snapshot(projectId)).projects.find(row => row.id === projectId);
       if (live && live.workerAlive) return { ok: false, reason: 'This project has active workers. Stop its current job before preparing a new task.' };
       if (!stillAuthorized()) return { ok: false, reason: 'Request cancelled before creating the task.' };
-      const task = { id: 'chat-' + crypto.randomUUID(), projectId, revision_id: item.revisions.at(-1).id, title: question.split('\n')[0].slice(0, 120), detail: question, status: 'running', ...(phase2 ? { executionVersion: 2 } : {}), source: 'chat', createdAt: new Date().toISOString(), timing: 'discretion', kind: /\b(audit|review)\b/i.test(question) && !/\b(implement|fix|sistema)\b/i.test(question) ? 'audit' : 'implementation' };
+      const task = { id: 'chat-' + crypto.randomUUID(), projectId, revision_id: item.revisions.at(-1).id, title: question.split('\n')[0].slice(0, 120), detail: question, status: 'running', ...(phase2 ? { executionVersion: 2 } : {}), source: 'chat', ...(goldModel ? { goldModel } : {}), createdAt: new Date().toISOString(), timing: 'discretion', kind: /\b(audit|review)\b/i.test(question) && !/\b(implement|fix|sistema)\b/i.test(question) ? 'audit' : 'implementation' };
       const updated = { ...item, tasks: [...item.tasks.map(task => task.status === 'running' ? { ...task, status: 'superseded' } : task), task] };
       const next = current.schema === 2 ? { ...current, projects: current.projects.map(item => item.project.id === projectId ? updated : item) } : updated;
       if (!Plan.validate(next)) return { ok: false, reason: 'New task failed notebook validation.' };
@@ -305,7 +305,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
           : Plan.startGrill(updated, undefined, ctx);
         if (grilled !== updated) updated = grilled;
       }
-      if (prepared.job) { updated = Plan.createTask(updated, prepared.job); if (phase2) Object.assign(updated.tasks.at(-1), { executionVersion: 2, id: 'task-' + crypto.randomUUID() }); }
+      if (prepared.job) { updated = Plan.createTask(updated, prepared.job); if (prepared.job.goldModel) updated.tasks.at(-1).goldModel = prepared.job.goldModel; if (phase2) Object.assign(updated.tasks.at(-1), { executionVersion: 2, id: 'task-' + crypto.randomUUID() }); }
     } catch (error) {
       return { ok: false, reason: error.message };
     }
@@ -551,8 +551,8 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask') {
         if (request.headers['content-type'] !== 'application/json') throw new RequestError(415, 'Use JSON for the revision.');
         const input = await body(request, 1024 * 1024, 'Chat request too large (maximum 1 MiB).');
-        if (!input || typeof input.question !== 'string' || input.chatSessionId !== undefined && (typeof input.chatSessionId !== 'string' || !/^[\w-]{1,100}$/.test(input.chatSessionId)) || Object.keys(input).some(key => !['question', 'projectId', 'chatSessionId'].includes(key))) throw new RequestError(400, 'Invalid data.');
-        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined, input.chatSessionId);
+        if (!input || typeof input.question !== 'string' || input.chatSessionId !== undefined && (typeof input.chatSessionId !== 'string' || !/^[\w-]{1,100}$/.test(input.chatSessionId)) || Object.keys(input).some(key => !['question', 'projectId', 'chatSessionId', 'requestMode'].includes(key))) throw new RequestError(400, 'Invalid data.');
+        const asked = await orchestra.ask(input.question, typeof input.projectId === 'string' ? input.projectId : undefined, input.chatSessionId, input.requestMode);
         if (!asked.ok) throw new RequestError(400, asked.reason || 'Invalid data.');
         return json(200, asked);
       }
@@ -608,6 +608,20 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         const input = await body(request);
         if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => !['id', 'policy'].includes(key))) throw new RequestError(400, 'Invalid model policy settings.');
         const result = await enqueue(() => orchestra.setModelPolicy(input.id, input.policy));
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/models/roles/bulk') {
+        const input = await body(request);
+        if (!input || Object.keys(input).some(key => !['role', 'enabled'].includes(key))) throw new RequestError(400, 'Invalid bulk role settings.');
+        const result = await enqueue(() => orchestra.setRoleForAll(input.role, input.enabled));
+        if (!result.ok) throw new RequestError(400, result.reason);
+        return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/models/gold') {
+        const input = await body(request);
+        if (!input || !Object.hasOwn(input, 'id') || Object.keys(input).some(key => key !== 'id')) throw new RequestError(400, 'Invalid Gold model settings.');
+        const result = await enqueue(() => orchestra.setGoldModel(input.id));
         if (!result.ok) throw new RequestError(400, result.reason);
         return json(200, result.snapshot);
       }

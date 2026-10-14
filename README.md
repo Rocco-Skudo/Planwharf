@@ -256,3 +256,7 @@ You may use, study, modify, and redistribute Planwharf, including for commercial
 A separate license from the maintainer is required only to distribute Planwharf or a covered derivative without complying with the applicable GPL obligations, for example under incompatible proprietary terms. Possible commercial terms can be negotiated later; no such agreement or royalty rate is established here.
 
 External contributions require the applicable [Individual CLA](CLA.md) or [Entity CLA](CLA-ENTITY.md); contributors retain copyright, and the public project remains GPL. See [CONTRIBUTING.md](CONTRIBUTING.md) and [licensing details](docs/LICENSING-PROPOSAL.md). The GPL does not grant rights to present a fork as the official Planwharf project or as endorsed by its maintainer. Third-party notices and licenses remain applicable.
+
+Model roles offer Select all and Deselect all for Orchestrator, Worker and Reviewer. These controls include models hidden by dashboard filters and skip incompatible roles.
+
+Choose a preferred worker in the Gold model section, then select Gold model below the orchestrator chat for a new work request or Start. The selector returns to Default after a successful send. Gold saves the exact provider/model with that task and its implementation or research jobs, including across approval, pause and restart; it never falls back to another worker. Worker permission and provider quota limits still apply. Reviewers retain their configured settings. Use Default to approve or resume an existing task; its saved Gold constraint remains active.
