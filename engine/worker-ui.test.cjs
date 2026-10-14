@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const embedded = process.env.PLANWHARF_TEST_EMBEDDED === '1';
 const nodes = new Map();
 const intervals = [];
 const requests = [];
@@ -12,13 +13,16 @@ function node(id) {
   if (!nodes.has(id)) nodes.set(id, { innerHTML: '', textContent: '', value: '', childElementCount: 0, listeners: {}, addEventListener(event, handler) { this.listeners[event] = handler; }, focus() {}, setAttribute() {}, querySelectorAll() { return []; } });
   return nodes.get(id);
 }
-const context = vm.createContext({ window: { addEventListener() {}, dispatchEvent() {} }, document: { getElementById: node, documentElement: { getAttribute() { return 'dark'; }, setAttribute() {} }, querySelector() { return null; }, body: { setAttribute() {} } }, localStorage: { setItem() {}, getItem(key) { return key === 'planwharf_chat_project' ? 'test' : null; } }, fetch: async (url, options) => { if (options) requests.push({ url, body: JSON.parse(options.body) }); return { ok: true, json: async () => url === '/api/plan' ? { version: 'isolated', plan: {} } : url === '/api/orchestrator/ask' ? { snapshot, asks: [] } : snapshot }; }, setInterval: fn => { intervals.push(fn); return intervals.length; }, clearInterval() {}, setTimeout() {}, clearTimeout() {}, Date });
+const context = vm.createContext({ window: { addEventListener() {}, dispatchEvent() {} }, document: { getElementById: id => node(embedded ? id.replace(/^dashboard-/, '') : id), documentElement: { hasAttribute() { return embedded; }, getAttribute() { return 'dark'; }, setAttribute() {} }, querySelector() { return null; }, body: { setAttribute() {} } }, localStorage: { setItem() {}, getItem(key) { return key === 'planwharf_chat_project' ? 'test' : null; } }, fetch: async (url, options) => { if (options) requests.push({ url, body: JSON.parse(options.body) }); return { ok: true, json: async () => url === '/api/plan' ? { version: 'isolated', plan: {} } : url === '/api/orchestrator/ask' ? { snapshot, asks: [] } : snapshot }; }, setInterval: fn => { intervals.push(fn); return intervals.length; }, clearInterval() {}, setTimeout() {}, clearTimeout() {}, Date });
 const flush = () => new Promise(resolve => setImmediate(resolve));
 const workerSection = () => node('orchestrator').innerHTML.split('<section class="dash-section dash-zone-plans">')[0];
 node('worker-project-filter').value = 'all';
 node('worker-session-filter').value = 'all';
 node('worker-state-filter').value = 'all';
 (async () => {
+  const page = fs.readFileSync(path.join(__dirname, '..', embedded ? 'index.html' : 'orchestrator.html'), 'utf8');
+  assert.ok(page.includes(`id="${embedded ? 'dashboard-' : ''}orch-request-mode"`));
+  assert.ok(page.includes(`id="${embedded ? 'dashboard-' : ''}orch-gold-hint"`));
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'quota.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'orch.js'), 'utf8'), context);
   await flush();
