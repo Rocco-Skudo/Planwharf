@@ -1,6 +1,6 @@
 # Planwharf
 
-A local project notebook and coordinator for real coding workers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution across Codex, Antigravity, and Grok.
+A local project notebook and coordinator for real coding workers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution across models accessible through the supported Codex, Antigravity, and Grok CLI adapters.
 
 Planwharf is still under active development and is provided **as is**. Features and behavior may change, and bugs or limitations may remain. Feedback, development suggestions, and contributions are welcome. Please share bug reports and ideas through GitHub Issues.
 
@@ -12,7 +12,7 @@ Planwharf can use [Matt Pocock's open-source skills](https://github.com/mattpoco
 
 1. Download the complete application folder, install Node.js, and open `Planwharf.exe`.
 2. Choose **Add project**, write a concrete goal, and link a new or existing project folder.
-3. For AI work, authenticate a supported coding CLI and enable available lead/worker models. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
+3. For AI work, install and authenticate a supported coding CLI with an account authorized to use the selected models through that CLI, then enable available lead/worker models. A chat-only plan is insufficient. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
 4. Review the proposed MegaTask, workers, and dependencies. Choose **Approve MegaTask**; Automatic mode also requires approval of new work.
 5. Follow **Progress**, **Now**, **Next**, and **Workers**, then test the output in the project folder. Completion does not automatically commit, push, or publish it.
 
@@ -22,7 +22,9 @@ The [first project guide](docs/HOW-TO.md) explains each step, a separate practic
 
 **Planwharf** answers "What is happening with my project?" Its Home shows the goal, completed work, current state, next action, notes and concise history. **Orchestrator** answers "What are the AIs doing?" It shows approved work, worker processes, exact provider/model identities, remaining quota and AI usage. Both read the same durable state.
 
-Supported local coding providers are Codex / ChatGPT, Grok CLI and Antigravity / Gemini. Use the providers you have: no provider is preferred behind the scenes. In Orchestrator, enable a provider and set each exact model's Allowed roles (Orchestrator, Worker, Reviewer), and choose an eligible orchestrator. These role flags are assignment restrictions: a Reviewer-only model cannot implement code, and an Orchestrator-only model cannot be dispatched as a worker or reviewer. Unsupported Orchestrator roles cannot be selected. The Model role filter shows each class or All roles. Search finds models even in a large catalog; **Show all models** expands a provider. These choices survive restart. An unavailable model is reported explicitly and never silently replaced.
+Supported local coding CLI adapters are Codex, Grok and Antigravity. Model recognition is extensible: Codex and Grok can discover exact model IDs from the active account's catalog; Antigravity uses configured exact IDs, with native routing for Gemini, Claude and GPT-OSS families. Additional model IDs can be configured when the selected CLI supports them; this does not provide automatic support for every model or a separate CLI for every model family. See [Providers and execution](#providers-and-execution).
+
+Use the providers you have: no provider is preferred behind the scenes. In Orchestrator, enable a provider and set each exact model's Allowed roles (Orchestrator, Worker, Reviewer), and choose an eligible orchestrator. These role flags are assignment restrictions: a Reviewer-only model cannot implement code, and an Orchestrator-only model cannot be dispatched as a worker or reviewer. Unsupported Orchestrator roles cannot be selected. The Model role filter shows each class or All roles. Search finds models even in a large catalog; **Show all models** expands a provider. These choices survive restart. An unavailable model is reported explicitly and never silently replaced.
 
 Quota always means **REMAINING** in the provider's shared pool. Every model sharing that pool sees the same value. Green is 75?100%, orange 50?74%, yellow 25?49%, and red 1?24%. Zero is red and **EXHAUSTED**; grey **REMAINING UNREAD** means the provider could not report a reliable value. Reset times appear when available. **AI usage** shows observed calls, attempts, durations and results; it is not a monetary estimate.
 
@@ -40,6 +42,8 @@ Use **Quit application** to checkpoint and shut down safely. After updating appl
 
 Install Node.js and a Chromium browser such as Edge or Chrome. Planwharf has no npm dependencies. Install and authenticate the coding CLIs you want to use separately.
 
+**CLI authentication and model access are required for AI work.** Complete sign-in or credential setup in each supported CLI before using it in Planwharf. Signing in to a provider's chat website or app does not authenticate its CLI. Your account must also include access to the requested model through that CLI: a plan that includes only chat access is insufficient. Listing or configuring a model in Planwharf does not grant access, credits or quota. Planwharf uses the CLI's existing authentication; it does not turn a chat subscription into CLI access.
+
 For a first Windows launch after downloading from GitHub:
 
 1. Clone the repository or use **Code → Download ZIP** and extract the entire archive.
@@ -55,7 +59,28 @@ On Windows, double-click `Planwharf.exe` or `planwharf.cmd`, or run:
 node .\planwharf.cjs
 ```
 
-To rebuild the Windows launcher, run `launch\build-exe.cmd`; it requires the .NET Framework compiler. On Linux/macOS, run `node planwharf.cjs` or `sh planwharf.sh`. Windows is the verified platform. If a browser cannot be launched, open the printed local address. Opening `index.html` directly does not start file persistence.
+To rebuild the Windows launcher, run `launch\build-exe.cmd`; it requires the .NET Framework compiler.
+
+### Windows, macOS and Linux
+
+| OS | Launch from the application folder | Verification status |
+| --- | --- | --- |
+| Windows | Double-click `Planwharf.exe` or `planwharf.cmd`, or run `node .\planwharf.cjs` in PowerShell. | Verified platform; includes the Windows executable launcher. |
+| macOS | Run `node ./planwharf.cjs` or `sh ./planwharf.sh` in Terminal. | Launch paths are implemented; end-to-end operation has not been verified on macOS. |
+| Linux | Run `node ./planwharf.cjs` or `sh ./planwharf.sh` in a terminal. | Launch paths are implemented; end-to-end operation has not been verified on Linux. |
+
+On macOS and Linux, install Node.js, extract or clone the complete application folder, then launch from that folder:
+
+```sh
+cd /path/to/Planwharf
+sh ./planwharf.sh
+```
+
+No `npm install` step is required. The shell launcher forwards command-line options, including `--plan`, `--attempts-dir` and `--port`. The Windows `.exe` and `.cmd` launchers are specific to Windows.
+
+On every OS, install and authenticate each coding CLI in the same user environment that starts Planwharf. On macOS/Linux, CLI discovery looks for `codex`, `grok` and `agy` on `PATH`; for a custom location, set `PLANWHARF_CODEX`, `PLANWHARF_GROK` or `PLANWHARF_ANTIGRAVITY` to the executable's absolute path before launch. Each CLI must support the requested model and Planwharf's execution options on that OS; model recognition alone does not establish OS compatibility.
+
+Planwharf attempts to open a Chromium application window and falls back to the default browser (`open` on macOS, `xdg-open` on Linux). If a browser cannot be launched, open the printed local address, normally `http://127.0.0.1:4173`, in a browser on the same computer. Opening `index.html` directly does not start file persistence. Keep the server process running while using the notebook; use **Quit application** or Ctrl+C to shut down safely.
 
 `Planwharf.exe` is a launcher: keep it with the complete application folder, including `planwharf.cjs`, `engine`, and `fixtures`, and install Node.js on each computer. Startup diagnostics are saved per launch under `%LOCALAPPDATA%\Planwharf\logs`; an error dialog includes the log path. `PLANWHARF_LAUNCH_LOG_DIR` can select another log directory. Browser launch failures attempt to open the same notebook in the default browser.
 
