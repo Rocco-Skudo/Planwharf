@@ -34,3 +34,8 @@ validation/launcher-smoke-*/
 validation/model-policy-[0-9]*/
 
 validation/layout-browser-*/
+.planwharf-updates/
+
+.planwharf-update-result.json
+
+validation/update-browser-*/

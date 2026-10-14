@@ -1500,3 +1500,9 @@ body[data-layout-resizing] { cursor: col-resize; user-select: none; }
 .layout-height-section > .layout-height-splitter { margin-top: 8px; }
 body[data-layout-height-resizing] { cursor: row-resize; user-select: none; }
 @media (max-width: 900px) { .layout-height-splitter { display: none; } }
+
+.app-update-controls { display: inline-flex; flex-wrap: wrap; gap: 6px; }
+.app-update-controls [hidden] { display: none; }
+.app-update-dialog { width: min(560px, calc(100vw - 32px)); }
+.app-update-dialog p { line-height: 1.6; }
+.app-update-dialog .dialog-actions { flex-wrap: wrap; }

@@ -129,7 +129,7 @@ function findEdge() { return findBrowser(); }
 function listen(opts) {
   const windows = opts.windows || createAppWindows({ onWindowClosed: () => server.quitApp && server.quitApp(), open: (url, view) => openWindow(url, path.join(opts.attemptsDir, 'windows', view)) });
   const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, models: opts.models, fetchPlans: opts.fetchPlans, syncSkills: opts.syncSkills !== false, skillsEnabled: opts.skillsEnabled !== false, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk,
-    appWindows: windows, quitApp: () => server.quitApp && server.quitApp(),
+    updateManager: opts.updateManager, restartAfterUpdate: opts.restartAfterUpdate, appWindows: windows, quitApp: () => server.quitApp && server.quitApp(),
     openWatchWindow: url => windows.openView('orchestrator', url), openPlanWindow: url => windows.openView('planwharf', url) });
   server.windows = windows;
   server.on('close', () => windows.closeAll());
@@ -280,6 +280,19 @@ async function runApp(opts) {
     try { if (JSON.parse(fs.readFileSync(ownership.lockFile, 'utf8')).ownerId === ownership.ownerId) fs.unlinkSync(ownership.lockFile); } catch {}
   };
   try {
+    opts.restartAfterUpdate = async info => {
+      const args = [path.join(root, 'planwharf.cjs'), '--plan', opts.planFile, '--attempts-dir', opts.attemptsDir, '--port', String(server.address().port), ...(opts.noWindow ? ['--no-window'] : [])];
+      const jobFile = path.join(info.stage, 'job.json');
+      fs.writeFileSync(jobFile, JSON.stringify({ ...info, parentPid: process.pid, node: process.execPath, args }), { flag: 'wx' });
+      const log = fs.openSync(path.join(info.stage, 'updater.log'), 'a');
+      let child;
+      try {
+        child = spawn(process.execPath, [info.helper, jobFile], { cwd: info.stage, detached: true, stdio: ['ignore', log, log], windowsHide: true });
+        await new Promise((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject); });
+        child.unref();
+      } finally { fs.closeSync(log); }
+      setImmediate(() => server.quitApp());
+    };
     ({ server, url } = await listen(opts));
     const temporary = `${ownership.lockFile}.${ownership.ownerId}.tmp`;
     try {
@@ -303,6 +316,7 @@ async function runApp(opts) {
   process.on('exit', release);
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
+  server.updates.check().catch(error => console.error('Update check failed:', error.message));
   if (!opts.noWindow) server.windows.openApp(url);
   console.log(`Planwharf\n${url}\nOrchestrator: ${url}/#orchestrator\nPlan: ${opts.planFile}\nDesktop launch opens one window. Use Show Orchestrator / Show Planwharf to switch views. Closing the desktop window saves checkpoints and quits. Quit application or Ctrl+C also shuts down.`);
   return { server, url };

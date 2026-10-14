@@ -74,7 +74,7 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, readRepository, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans } = {}) {
+function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, readRepository, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans, updateManager, restartAfterUpdate } = {}) {
   const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
   const connectionFile = path.join(storeDir, 'provider-connections.json');
   let connections = [];
@@ -321,7 +321,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
   }
   if (initialSkillsSync) initialSkillsSync.catch(() => {});
   const initialModelsSync = syncAccounts().then(() => refreshModels ? providerModels.refresh(true) : undefined).catch(() => {});
-  const staticFiles = { '/layout-ui.js': ['layout-ui.js', 'text/javascript'], '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  const staticFiles = { '/update-ui.js': ['update-ui.js', 'text/javascript'], '/layout-ui.js': ['layout-ui.js', 'text/javascript'], '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -332,6 +332,19 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (request.headers.host !== expectedHost || (request.headers.origin && request.headers.origin !== `http://${expectedHost}`)) throw new RequestError(403, 'Open the interface from its local address.');
       const loc = new URL(request.url, `http://${expectedHost}`);
       const pathname = loc.pathname;
+      if (updates.busy && pathname.startsWith('/api/') && !['/api/app/updates', '/api/app/heartbeat', '/api/app'].includes(pathname)) throw new RequestError(503, 'Planwharf is preparing an update. Task state is being preserved.');
+      if (request.method === 'GET' && pathname === '/api/app/updates') return json(200, { ...updates.snapshot(), activeTasks: await updateActiveCount() });
+      if (request.method === 'POST' && pathname === '/api/app/updates/check') {
+        const input = await body(request);
+        if (!input || Object.keys(input).length) throw new RequestError(400, 'Invalid update check.');
+        return json(200, { ...await updates.check(), activeTasks: await updateActiveCount() });
+      }
+      if (request.method === 'POST' && pathname === '/api/app/updates/install') {
+        const input = await body(request);
+        if (!input || input.confirmRunning !== undefined && typeof input.confirmRunning !== 'boolean' || Object.keys(input).some(key => key !== 'confirmRunning')) throw new RequestError(400, 'Invalid update request.');
+        const result = await enqueue(() => updates.install(input.confirmRunning === true));
+        return json(result.requiresConfirmation ? 409 : 200, result);
+      }
       if (pathname === '/api/orchestrator' || request.method === 'POST' && !/\/(?:stop|abort)(?:\/|$)/.test(pathname) && /^\/api\/(?:orchestrator|models|catalog)\//.test(pathname)) {
         await initialModelsSync;
         await syncAccounts();
@@ -908,18 +921,26 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       json(error.status || 500, { error: error.status ? error.message : 'Failed to read or save file. No revision was added.' });
     }
   });
+  async function updateActiveCount() {
+    const plan = await readPlan(planFile), state = await orchestra.snapshot();
+    return (plan.schema === 2 ? plan.projects : [plan]).reduce((sum, project) => sum + project.tasks.filter(task => task.status === 'running').length, 0)
+      + (state.researches || []).filter(row => ['watching', 'needs_approval'].includes(row.status)).length + (state.asking ? 1 : 0);
+  }
+  const updates = updateManager || require('./engine/app-updates.cjs').createUpdateManager({ root: __dirname,
+    checkpoint: () => orchestra.checkpointForUpdate(), activeCount: updateActiveCount, restart: restartAfterUpdate });
+  server.updates = updates;
   let closing;
   let monitorTimer, monitoring = false;
   server.on('listening', () => {
     monitorTimer = setInterval(async () => {
-      if (closing || monitoring) return;
+      if (closing || monitoring || updates.busy) return;
       monitoring = true;
       try {
         await initialModelsSync;
         await syncAccounts();
         await orchestra.refreshRepositories();
         const state = await orchestra.snapshot();
-        if (state.projects.some(row => row.status === 'watching') || (state.researches || []).some(row => row.status === 'watching')) await enqueue(() => orchestra.tick());
+        if (state.projects.some(row => row.status === 'watching') || (state.researches || []).some(row => row.status === 'watching')) await enqueue(() => updates.busy ? orchestra.snapshot() : orchestra.tick());
       } catch (error) { console.error('Execution monitoring failed:', error.message); }
       finally { monitoring = false; }
     }, monitorIntervalMs);

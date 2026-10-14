@@ -607,6 +607,12 @@ function freshTaskIntent(question) {
 
 function checkpointTalk(reason) {
   const why = reason || 'deadline';
+  if (why === 'application update') {
+    return { activity: 'Paused for an application update. Checkpoint saved.',
+      note: 'Paused for an application update. Checkpoint saved. Press Resume after restart.',
+      orch: 'Saved unfinished work before updating.',
+      doing: (name, title) => `Paused ${name}: ${title}. Update checkpoint saved.` };
+  }
   if (why === 'stop' || why === 'shutdown') {
     return {
       activity: 'Stopped. Checkpoint saved.',
@@ -2981,6 +2987,46 @@ function createOrchestrator(options) {
     return { ok: true, snapshot: await tick(projectId) };
   }
 
+  async function checkpointForUpdate() {
+    const previous = shuttingDown;
+    shuttingDown = true; askToken += 1; thinkingLive = null;
+    if (typeof opts.abortAsk === 'function') opts.abortAsk();
+    try {
+      const plan = await opts.readPlan();
+      const failures = [];
+      for (const item of notebookProjects(plan)) {
+        for (const job of (item.tasks || []).filter(task => task.status === 'running')) {
+          const row = entry(item.project.id);
+          row.approved = false; row.holdApproval = true; row.resumeRequested = false;
+          try {
+            const mega = job.executionVersion === 2 ? bridge.find(item.project.id, job.id) : null;
+            if (mega) bridge.checkpointForUpdate(item, job, mega.id);
+            else {
+              for (const pid of collectPids(row)) {
+                const stopped = opts.killWorker?.(pid);
+                if (opts.isProcessAlive?.(pid) || stopped !== true && typeof opts.isProcessAlive !== 'function') throw new Error('Worker process could not be stopped: ' + pid);
+              }
+              applyCheckpoint(item.project.id, item, job, row.facts, 'application update');
+            }
+          } catch (error) { failures.push(`${item.project.id}/${job.id}: ${error.message}`); }
+        }
+      }
+      for (const record of store.researches.filter(row => ['watching', 'needs_approval'].includes(row.status))) {
+        try {
+          if (record.executionVersion === 2) {
+            bridge.checkpointForUpdate({ project: { id: record.projectId, name: record.projectName, folder: record.sourceFolder } }, record.job, record.megaTaskId);
+          } else {
+            if (record.alive && (!opts.killWorker?.(record.pid) || opts.isProcessAlive?.(record.pid))) throw new Error('Research worker could not be stopped: ' + record.pid);
+            record.alive = false; finishResearch(record, 'checkpointed', 'Application update; research evidence preserved.');
+          }
+        } catch (error) { failures.push(`${record.id}: ${error.message}`); }
+      }
+      persist();
+      if (failures.length) throw new Error('Checkpoint failed: ' + failures.join('; '));
+      return { ok: true };
+    } finally { shuttingDown = previous; }
+  }
+
   async function shutdown() {
     shuttingDown = true;
     askToken += 1;
@@ -3055,7 +3101,7 @@ function createOrchestrator(options) {
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

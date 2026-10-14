@@ -49,4 +49,5 @@ jobs:
             patch="${rest#*.}"
             next="v${major}.${minor}.$((patch + 1))"
           done
-          gh release create "$next" --target "$GITHUB_SHA" --title "Planwharf $next" --generate-notes
+          node engine/package-release.cjs "$next" "$RUNNER_TEMP/planwharf-release"
+          gh release create "$next" "$RUNNER_TEMP/planwharf-release/Planwharf-$next.zip" "$RUNNER_TEMP/planwharf-release/planwharf-update.json.gz" --target "$GITHUB_SHA" --title "Planwharf $next" --generate-notes

@@ -362,6 +362,14 @@ function createExecutionBridge(options) {
     return clone({ megaTasks: megas, subTasks: data.subTasks.filter(sub => ids.has(sub.megaTaskId)), results: data.results.filter(result => ids.has(result.megaTaskId)),
       checkpoints: data.checkpoints.filter(cp => cp.projectId === projectId), timeline: data.timeline.filter(item => item.projectId === projectId) });
   }
-  return { propose, approve, advance, stop, stopWorker, resume, view, find, target, observe, event, reconcile, paint };
+  function checkpointForUpdate(item, job, megaTaskId) {
+    const mega = target(item.project.id, megaTaskId);
+    if (mega.taskId !== job.id) throw new Error('Update checkpoint belongs to another task.');
+    if (mega.status === 'RUNNING') return stop(item, job, megaTaskId, false, 'application update');
+    if (mega.status === 'COMPLETE') return mega;
+    if (!mega.currentCheckpointId) checkpoint(item, job, mega, 'application update');
+    paint(mega); persist(); return mega;
+  }
+  return { propose, approve, advance, stop, stopWorker, resume, view, find, target, observe, event, reconcile, paint, checkpointForUpdate };
 }
 module.exports = { createExecutionBridge, repoState };
