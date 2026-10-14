@@ -4,7 +4,9 @@ Planwharf is a local project notebook and coordinator for coding AIs. **Planwhar
 
 ## 1. Open the application
 
-Download or clone the complete repository. Install Node.js and a Chromium browser, such as Edge or Chrome. Keep `Planwharf.exe` with the other application files and double-click it on Windows. Alternatively, run `node planwharf.cjs`. No `npm install` is required.
+For a normal installation, open the [latest GitHub Release](https://github.com/benitz94/Planwharf/releases/latest) and download the packaged asset `Planwharf-vX.Y.Z.zip` under **Assets**. The same ZIP is used on Windows, macOS and Linux. Extract the complete folder before launching it. The `planwharf-update.json.gz` asset is update metadata, not the application package; GitHub's **Source code** archives are repository snapshots rather than the recommended packaged release.
+
+Install Node.js and a Chromium browser, such as Edge or Chrome. On Windows, keep `Planwharf.exe` with the other application files and double-click it. On macOS/Linux, run `sh ./planwharf.sh` or `node ./planwharf.cjs` from the extracted folder. No `npm install` is required. Cloning the repository remains an alternative for development.
 
 Normal desktop launch opens one full-screen window. **Show Orchestrator** / **Show Planwharf** switches views in that window. Both views share one backend.
 

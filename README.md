@@ -10,9 +10,20 @@ Planwharf can use [Matt Pocock's open-source skills](https://github.com/mattpoco
 
 [Quick start](docs/QUICKSTART.md) | [Complete user guide](docs/USER-GUIDE.md) | [Project status](docs/PROJECT-STATUS.md) | [First project guide](docs/HOW-TO.md) · [Phase 2 execution contract](docs/PLANWHARF-PHASE-2.md) · [Startup verification](docs/STARTUP-VERIFICATION-2026-10-13.md)
 
+## Download the latest release
+
+For normal installation, open the [latest GitHub Release](https://github.com/benitz94/Planwharf/releases/latest) and download the release asset named `Planwharf-vX.Y.Z.zip` under **Assets**. The same release ZIP is used on Windows, macOS and Linux.
+
+- **Windows:** extract the ZIP and launch `Planwharf.exe` (or `planwharf.cmd` / `node planwharf.cjs`).
+- **macOS / Linux:** extract the same ZIP and run `sh ./planwharf.sh` or `node ./planwharf.cjs`.
+- `planwharf-update.json.gz` is update metadata, not the application download.
+- GitHub's automatically generated **Source code (zip/tar.gz)** archives are repository snapshots; prefer the packaged `Planwharf-vX.Y.Z.zip` release asset for normal installation.
+
+Node.js and any provider CLIs are installed separately.
+
 ## Start here
 
-1. Download the complete application folder, install Node.js, and open `Planwharf.exe`.
+1. Download `Planwharf-vX.Y.Z.zip` from the [latest GitHub Release](https://github.com/benitz94/Planwharf/releases/latest), extract the complete application folder, install Node.js, and on Windows open `Planwharf.exe`.
 2. Choose **Add project**, write a concrete goal, and link a new or existing project folder.
 3. For AI work, authenticate a supported coding CLI or add an API connection with authorized exact model IDs, then enable available lead/worker models. Chat subscriptions do not automatically grant API or CLI access. Use Grill to clarify the goal, then **Auto start** or chat to prepare an assignment.
 4. Review the proposed MegaTask, workers, and dependencies. Choose **Approve MegaTask**; Automatic mode also requires approval of new work.

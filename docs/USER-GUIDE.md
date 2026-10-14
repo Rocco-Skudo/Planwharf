@@ -12,9 +12,11 @@ A Planwharf project is a local notebook entry linked to a source folder and opti
 
 ## Installation, launch and windows
 
-Install Node.js and a Chromium browser. Planwharf has no npm dependencies. Download or clone the complete application directory: the executable is a launcher and needs the neighboring files. Windows is the verified desktop platform. Linux/macOS launcher paths exist, but their desktop behavior has not been verified by the Windows acceptance.
+Install Node.js and a Chromium browser. Planwharf has no npm dependencies. For a normal installation, open the [latest GitHub Release](https://github.com/benitz94/Planwharf/releases/latest), expand **Assets**, and download `Planwharf-vX.Y.Z.zip`. This is the packaged application release and the same ZIP is used on Windows, macOS and Linux. Extract the entire archive; do not run the launcher from inside the ZIP. The accompanying `planwharf-update.json.gz` file is update metadata, not the application package. GitHub's automatically generated **Source code (zip/tar.gz)** files are repository snapshots; cloning the repository remains an alternative for development.
 
-On Windows, open `Planwharf.exe` or `planwharf.cmd`. From a terminal, use `node planwharf.cjs`. The local server binds to `127.0.0.1`, normally on port 4173, and the desktop launcher can select another port when necessary.
+The executable is a launcher and needs the neighboring files. Windows is the verified desktop platform. Linux/macOS launcher paths exist, but their desktop behavior has not been verified by the Windows acceptance.
+
+On Windows, open `Planwharf.exe` or `planwharf.cmd`. From a terminal, use `node planwharf.cjs`. On macOS/Linux, use the same extracted release ZIP and run `sh ./planwharf.sh` or `node ./planwharf.cjs`. The local server binds to `127.0.0.1`, normally on port 4173, and the desktop launcher can select another port when necessary.
 
 Normal launch opens one window with **Show Orchestrator** / **Show Planwharf** to switch views. Both views share one backend, selected project and local UI state. Opening the same notebook again reuses its backend and focuses or reopens the application.
 
