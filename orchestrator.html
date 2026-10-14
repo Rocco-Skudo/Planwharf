@@ -20,6 +20,7 @@
   <script src="notifications.js" defer></script>
   <script src="window-ui.js" defer></script>
   <script src="orch.js" defer></script>
+  <script src="layout-ui.js" defer></script>
 </head>
 <body class="orch-app">
   <div class="fx" aria-hidden="true"></div>
@@ -28,6 +29,7 @@
     <p class="orch-lead-now" id="orch-lead-now">Lead: none yet</p>
     <div class="orch-top-actions">
       <span class="local">live</span><button type="button" id="plan-window" class="primary">Open Planwharf</button><button type="button" id="app-quit" class="secondary">Quit application</button>
+      <button type="button" class="secondary compact" data-layout-reset>Reset layout</button>
       <button type="button" id="theme-toggle" class="theme-toggle" aria-pressed="false" aria-label="Switch to light mode" title="Light">
         <span class="theme-sun" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg></span>
         <span class="theme-moon" aria-hidden="true"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z"/></svg></span>
