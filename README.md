@@ -48,7 +48,7 @@ Install Node.js and a Chromium browser such as Edge or Chrome. Planwharf has no 
 
 For a first Windows launch after downloading from GitHub:
 
-1. Clone the repository or use **Code → Download ZIP** and extract the entire archive.
+1. Download the latest GitHub Release ZIP, or clone the repository / use **Code → Download ZIP**, and extract the entire archive. Each push to `main` publishes the next patch release (`v0.1.1`, `v0.1.2`, …).
 2. Install Node.js separately if it is missing; the download does not include or install Node.js.
 3. Keep the application files together and double-click `Planwharf.exe` in the extracted folder. No `npm install` step is required.
 4. To run coding workers, separately install and sign in to the provider CLIs you want to use. They are not required just to open the notebook.
