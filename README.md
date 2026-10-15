@@ -1,5 +1,7 @@
 # Planwharf
 
+**Where projects dock, agents work, and progress stays anchored.**
+
 A local project notebook and coordinator for AI coding workers across models and providers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution with the AI models you use.
 
 Planwharf includes native Codex, Grok and Antigravity CLI adapters, direct OpenAI-compatible and Anthropic Messages API connections, and a configurable CLI adapter for compatible structured protocols. Add connections from **Usage and permissions ? Add API / CLI connection**. DeepSeek, Kimi and other providers can use compatible APIs without pretending to be another provider. See [connection setup and limitations](docs/EXTERNAL-PROVIDERS.md). Exact model access, tool support and credentials remain account-specific; installing an arbitrary CLI does not guarantee protocol compatibility. Live access to every provider/model has not been verified. Please [report missing integrations](https://github.com/benitz94/Planwharf/issues) with the OS, CLI/protocol version, exact model ID and sanitized error.
