@@ -1029,6 +1029,7 @@ function createOrchestrator(options) {
   const dir = typeof opts.dir === 'string' && opts.dir.trim() ? opts.dir : null;
   const stateFile = dir ? path.join(dir, 'orchestrator.json') : null;
   const ledger = dir ? createInvocationLedger(dir) : null;
+  const supervisor = require('./supervisor.cjs').createSupervisor({ dir, now, review: reviewSnapshot });
   const askProvider = opts.askModel, launchWorker = opts.spawnWorker, abortProvider = opts.abortAsk;
   let activeLeadInvocation = null;
   if (typeof abortProvider === 'function' && ledger) opts.abortAsk = () => {
@@ -1903,7 +1904,31 @@ function createOrchestrator(options) {
     view.interventions = collectInterventions(view.projects);
     ledger?.reconcile(view, opts.isProcessAlive);
     view.aiUsage = ledger?.view() || { orchestrator: [], workers: [], recent: [] };
+    view.supervisor = supervisor.observe(view);
     return view;
+  }
+
+  async function reviewSnapshot({ projectId, modelId, question, facts, history }) {
+    const model = roster().find(model => model.id === modelId);
+    if (!model || !model.enabled || model.available === false || model.providerEnabled === false || !permitsAssignment(model, { kind: 'audit' })
+      || usagePolicy(model, plansLive).blocked || planExhausted(plansLive, model.quotaPoolId || model.plan)
+      || !require('./supervisor.cjs').supported(model)) throw new Error('The selected Reviewer is unavailable, not permitted, or blocked by quota. No fallback was used.');
+    if (typeof askProvider !== 'function') throw new Error('The model transport is unavailable. Live evidence remains available.');
+    const invocation = ledger?.start({ role: 'reviewer', projectId, megaTaskId: facts.megaTaskId, provider: model.providerId || model.provider, model: model.cli, modelId, reason: 'Supervisor advisory question' });
+    try {
+      const result = await askProvider({ purpose: 'supervisor', allowActions: false, question, projectId, model, folder: null,
+        state: { facts, history } });
+      ledger?.finish(invocation, result?.failure ? 'FAILED' : 'COMPLETE', result?.processExit, result?.tokens);
+      return { ...(typeof result === 'string' ? { answer: result } : result), provider: model.providerId || model.provider, model: model.cli };
+    } catch (error) { ledger?.finish(invocation, 'FAILED'); throw error; }
+  }
+
+  async function supervisorRequest(action, input) {
+    const snap = snapshot(await opts.readPlan());
+    if (action === 'settings') return supervisor.settings(input, snap);
+    if (action === 'ignore') { supervisor.ignore(input.projectId, input.alertId); return supervisor.view(snap); }
+    if (action === 'ask') { await supervisor.ask(snap, input.projectId, input.question); return snapshot(await opts.readPlan()).supervisor; }
+    throw new Error('Unsupported Supervisor action.');
   }
 
   function bindAccount(providerId, key) {
@@ -3054,6 +3079,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     askToken += 1;
     thinkingLive = null;
     if (typeof opts.abortAsk === 'function') opts.abortAsk();
+    if (typeof opts.abortSupervisor === 'function') opts.abortSupervisor();
     refreshResearch();
     for (const record of store.researches.filter(item => item.status === 'watching')) {
       if (record.executionVersion === 2) {
@@ -3123,7 +3149,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

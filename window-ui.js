@@ -29,31 +29,34 @@
   const control = document.getElementById('watch-window');
   const projectView = document.getElementById('project-view');
   const orchestratorView = document.getElementById('orchestrator-view');
+  const supervisorView = document.getElementById('supervisor-view');
   let activeView = 'planwharf';
-  const scrollPositions = { planwharf: 0, orchestrator: 0 };
+  const scrollPositions = { planwharf: 0, orchestrator: 0, supervisor: 0 };
   function showView(next, initial = false) {
     if (!projectView || !orchestratorView) return;
     scrollPositions[activeView] = window.scrollY;
-    activeView = next === 'orchestrator' ? 'orchestrator' : 'planwharf';
+    activeView = next === 'supervisor' && supervisorView ? 'supervisor' : next === 'orchestrator' ? 'orchestrator' : 'planwharf';
     projectView.hidden = activeView !== 'planwharf';
     orchestratorView.hidden = activeView !== 'orchestrator';
+    if (supervisorView) supervisorView.hidden = activeView !== 'supervisor';
     document.body.dataset.appView = activeView;
     const intro = document.getElementById('project-lede');
-    if (intro) intro.textContent = activeView === 'orchestrator' ? 'Orchestrator chat, workers, and provider usage.' : 'Goal, progress, current work, next action, and your notes.';
+    if (intro) intro.textContent = activeView === 'supervisor' ? 'Execution oversight, alerts, and Reviewer advice.' : activeView === 'orchestrator' ? 'Orchestrator chat, workers, and provider usage.' : 'Goal, progress, current work, next action, and your notes.';
     if (control) {
       control.textContent = nativeWindow ? (view === 'planwharf' ? 'Open Orchestrator' : 'Open Planwharf') : activeView === 'planwharf' ? 'Show Orchestrator' : 'Show Planwharf';
       control.setAttribute('aria-pressed', String(activeView === 'orchestrator'));
     }
     if (!initial) {
-      history.replaceState(null, '', activeView === 'orchestrator' ? '#orchestrator' : '#project');
+      history.replaceState(null, '', activeView === 'supervisor' ? '#supervisor' : activeView === 'orchestrator' ? '#orchestrator' : '#project');
       window.scrollTo(0, scrollPositions[activeView]);
     }
     window.dispatchEvent(new CustomEvent('planwharf-view', { detail: activeView }));
   }
   window.PlanwharfShowView = showView;
   control?.addEventListener('click', async () => { if (nativeWindow) { try { await post(view === 'planwharf' ? '/api/orchestrator/window' : '/api/planwharf/window', {}); } catch (error) { document.getElementById('toast').textContent = error.message; } } else showView(activeView === 'planwharf' ? 'orchestrator' : 'planwharf'); });
-  window.addEventListener('hashchange', () => showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true));
-  showView(location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf', true);
+  const hashView = () => location.hash === '#supervisor' ? 'supervisor' : location.hash === '#orchestrator' ? 'orchestrator' : 'planwharf';
+  window.addEventListener('hashchange', () => showView(hashView(), true));
+  showView(hashView(), true);
   const header = document.querySelector('.topbar');
   if (header && typeof ResizeObserver !== 'undefined') {
     const controls = document.querySelector('.runtime-controls');

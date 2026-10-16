@@ -15,6 +15,8 @@
     } catch (e) {}
   </script>
   <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="harbor.css">
+  <link rel="stylesheet" href="supervisor.css">
   <script src="plan.js" defer></script>
   <script src="models.js" defer></script>
   <script src="engine/attempts.js" defer></script>
@@ -25,6 +27,8 @@
   <script src="notifications.js" defer></script>
   <script src="window-ui.js" defer></script>
   <script src="app.js" defer></script>
+  <script src="supervisor-ui.js" defer></script>
+  <script src="harbor-ui.js" defer></script>
   <script src="orch.js" defer></script>
   <script src="layout-ui.js" defer></script>
   <script src="update-ui.js" defer></script>
@@ -166,6 +170,7 @@
       <div id="dashboard-orchestrator" class="monitor"></div>
     </section>
       </main>
+      <main id="supervisor-view" aria-label="Supervisor" hidden></main>
     </div>
   </div>
   <dialog id="revision-dialog"><form id="revision-form"><div class="dialog-heading"><div><p class="eyebrow">NEXT STEP</p><h2>Edit the plan</h2></div><button type="button" id="close-dialog" class="icon-button" aria-label="Close">×</button></div><p class="muted">Saving adds a new version. Old ones stay.</p><label>Title<input name="title" required maxlength="120"></label><label>Goal<textarea name="direction" required rows="2" maxlength="1500"></textarea></label><label>Where it stands<textarea name="state" required rows="2" maxlength="1500"></textarea></label><div class="form-grid"><label>Already decided <small>One per line</small><textarea name="closed" rows="4" maxlength="3000"></textarea></label><label>Open questions <small>One per line</small><textarea name="open" rows="4" maxlength="3000"></textarea></label></div><p id="form-error" class="notice" hidden></p><div class="dialog-actions"><button type="button" id="cancel-dialog" class="secondary">Cancel</button><button type="submit" id="save-revision" class="primary">Save</button></div></form></dialog>

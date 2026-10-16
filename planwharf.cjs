@@ -9,7 +9,7 @@ const Plan = require('./plan.js');
 const { createAppWindows } = require('./engine/app-windows.cjs');
 const { createServer, readPlan } = require('./server.cjs');
 const { createAttemptEngine } = require('./engine/attempts.js');
-const { spawnWorker, isProcessAlive, killWorker, askOrchestrator, abortAsk } = require('./engine/runner.cjs');
+const { spawnWorker, isProcessAlive, killWorker, askOrchestrator, abortAsk, abortSupervisor } = require('./engine/runner.cjs');
 
 const root = __dirname;
 const defaultPlan = path.join(root, 'plan.json');
@@ -128,7 +128,7 @@ function findEdge() { return findBrowser(); }
 
 function listen(opts) {
   const windows = opts.windows || createAppWindows({ onWindowClosed: () => server.quitApp && server.quitApp(), open: (url, view) => openWindow(url, path.join(opts.attemptsDir, 'windows', view)) });
-  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, models: opts.models, fetchPlans: opts.fetchPlans, syncSkills: opts.syncSkills !== false, skillsEnabled: opts.skillsEnabled !== false, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk,
+  const server = createServer({ planFile: opts.planFile, attemptsDir: opts.attemptsDir, models: opts.models, fetchPlans: opts.fetchPlans, syncSkills: opts.syncSkills !== false, skillsEnabled: opts.skillsEnabled !== false, spawnWorker, isProcessAlive, killWorker, askModel: askOrchestrator, abortAsk, abortSupervisor,
     updateManager: opts.updateManager, restartAfterUpdate: opts.restartAfterUpdate, appWindows: windows, quitApp: () => server.quitApp && server.quitApp(),
     openWatchWindow: url => windows.openView('orchestrator', url), openPlanWindow: url => windows.openView('planwharf', url) });
   server.windows = windows;

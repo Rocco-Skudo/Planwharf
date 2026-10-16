@@ -105,6 +105,7 @@ async function closeView(connection) {
   const shot = await home.command('Page.captureScreenshot', { format: 'png', captureBeyondViewport: true });
   fs.writeFileSync(path.join(output, 'project-home.png'), Buffer.from(shot.data, 'base64'));
   await home.command('Emulation.setDeviceMetricsOverride', { width: 390, height: 844, deviceScaleFactor: 1, mobile: true });
+  await waitFor(() => home.evaluate("innerWidth === 390 && document.querySelector('.topbar .heading').getBoundingClientRect().width > 300"), 'mobile layout settles after DevTools resize');
   assert.equal(await home.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), true, 'mobile has no horizontal overflow');
   assert.ok(await home.evaluate("document.querySelector('.topbar .heading').getBoundingClientRect().width > 300"), 'mobile project heading remains readable beside window controls');
   await home.evaluate("document.getElementById('toast').textContent = ''");

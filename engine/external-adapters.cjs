@@ -60,7 +60,7 @@ function registerExternalAdapters(register) {
       if (!lead && !model.apiResultOutputPath) throw new Error('API workers require the structured MegaTask result contract.');
       const config = apiConfig(model); apiHeaders(config);
       return { command: process.execPath, args: [path.join(__dirname, 'api-agent.cjs')], cwd: folder, provider: model.providerId || model.provider, adapter: 'api', model: model.cli,
-        stdin: JSON.stringify({ config, model: model.cli, prompt, lead, alwaysApprove: model.policy?.alwaysApprove ?? model.alwaysApprove ?? true, resultOutputPath: model.apiResultOutputPath, resultIdentity: model.apiResultIdentity }) };
+        stdin: JSON.stringify({ config, model: model.cli, prompt, lead, advisory: model.advisory === true, alwaysApprove: model.policy?.alwaysApprove ?? model.alwaysApprove ?? true, resultOutputPath: model.apiResultOutputPath, resultIdentity: model.apiResultIdentity }) };
     },
     discover: async provider => {
       const config = apiConfig(provider);

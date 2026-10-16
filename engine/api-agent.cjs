@@ -70,13 +70,14 @@ async function runAgent(job, { folder = process.cwd(), request = fetch, emit = (
   const { config, model, prompt, lead = false, alwaysApprove = true } = job;
   if (typeof model !== 'string' || !model || typeof prompt !== 'string' || typeof alwaysApprove !== 'boolean') throw new Error('Invalid API job.');
   const headers = apiHeaders(config, env);
-  const allowed = definitions.filter(tool => !lead || !['write_file', 'write_result', 'run_command'].includes(tool.name)).filter(tool => alwaysApprove || tool.name !== 'run_command').filter(tool => tool.name !== 'write_result' || job.resultOutputPath);
+  const allowed = job.advisory ? [] : definitions.filter(tool => !lead || !['write_file', 'write_result', 'run_command'].includes(tool.name)).filter(tool => alwaysApprove || tool.name !== 'run_command').filter(tool => tool.name !== 'write_result' || job.resultOutputPath);
   const anthropic = config.apiProtocol === 'anthropic';
   const messages = [{ role: 'user', content: prompt }];
   const tokens = { input: 0, output: 0, cachedInput: 0 }; let observedUsage = false;
   for (let turn = 0; turn < config.maxTurns; turn++) {
     const body = { model, messages, max_tokens: config.maxOutputTokens, stream: false,
       tools: anthropic ? allowed.map(tool => ({ name: tool.name, description: tool.description, input_schema: tool.parameters })) : allowed.map(tool => ({ type: 'function', function: tool })) };
+    if (job.advisory) delete body.tools;
     const response = await request(config.baseUrl + (anthropic ? '/messages' : '/chat/completions'), { method: 'POST', headers, body: JSON.stringify(body), redirect: 'error', signal: AbortSignal.timeout(config.requestTimeoutMs) });
     const data = await responseJson(response);
     if (data.model && data.model !== model) throw new Error('PROVIDER_MODEL_IDENTITY_CHANGED: API returned a different model ID. Review the configured exact model ID; no substitution was accepted.');
@@ -105,6 +106,7 @@ async function runAgent(job, { folder = process.cwd(), request = fetch, emit = (
       calls = (assistant.tool_calls || []).map(call => { let input; try { input = JSON.parse(call.function.arguments); } catch { throw new Error('PROVIDER_PROTOCOL_CHANGED: invalid tool arguments JSON.'); } return { id: call.id, name: call.function.name, input }; });
     }
     messages.push(assistant);
+    if (job.advisory && calls.length) throw new Error('PERMISSION_DENIED: Supervisor responses cannot execute tools.');
     if (!calls.length) {
       if (typeof content !== 'string' || !content.trim()) throw new Error('PROVIDER_PROTOCOL_CHANGED: no recognized response.');
       emit({ type: 'item.completed', item: { type: 'agent_message', text: content } });

@@ -9,6 +9,8 @@
   const usageNotices = globalThis.PlanwharfModelPolicyUI?.createAlerts();
   let orchestra = { mode: 'manual', models: [], projects: [], asks: [], fleet: [] };
   let version = null;
+  let executionAvailable = false;
+  let refreshGeneration = 0;
   let projectId = null;
   let toastTimer;
   let chatSig = '';
@@ -397,6 +399,7 @@
     const projects = orchestra.projects || [];
     try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
     if (!projects.some(row => row.id === projectId)) projectId = null;
+    if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-orchestrator', { detail: { snapshot: orchestra, projectId, available: executionAvailable } }));
     if (recipient) recipient.innerHTML = '<option value="">Select a project</option>' + projects.map(row => `<option value="${escape(row.id)}"${row.id === projectId ? ' selected' : ''}>${escape(row.name)}</option>`).join('');
     fillLead();
     renderRequestMode();
@@ -411,15 +414,22 @@
   }
 
   async function refresh() {
+    const ticket = ++refreshGeneration;
     try {
       const response = await fetch('/api/orchestrator');
-      if (!response.ok) return;
+      if (!response.ok) throw new Error('Execution state unavailable');
       const snap = await response.json();
+      if (ticket !== refreshGeneration) return;
+      executionAvailable = true;
       const keep = sending ? orchestra.thinking : null;
       orchestra = snap;
       if (keep && !orchestra.thinking) orchestra.thinking = keep;
       render();
-    } catch (_) {}
+    } catch (_) {
+      if (ticket !== refreshGeneration) return;
+      executionAvailable = false;
+      if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-orchestrator', { detail: { snapshot: null, projectId, available: false } }));
+    }
   }
 
   async function loadPlan() {
@@ -442,6 +452,7 @@
     const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload || {}), signal });
     const body = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(body.error || 'Save failed.');
+    if (body.snapshot?.projects || body.projects) executionAvailable = true;
     return body;
   }
 

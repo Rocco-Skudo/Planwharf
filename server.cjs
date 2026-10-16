@@ -74,7 +74,7 @@ async function assertFolder(folder) {
   try { st = await fs.stat(folder); } catch { throw new RequestError(400, 'Folder not found.'); }
   if (!st.isDirectory()) throw new RequestError(400, 'Folder not found.');
 }
-function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, readRepository, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans, updateManager, restartAfterUpdate } = {}) {
+function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.json'), save = writePlan, attemptsDir, openFolder = defaultOpenFolder, openUrl = defaultOpenUrl, models = defaultModels, providers, inspectFolder, readRepository, skills, fetchSkills, syncSkills, skillsEnabled = true, discoverModels, readAccount, refreshModels = models === defaultModels, spawnWorker, isProcessAlive, killWorker, askModel, abortAsk, abortSupervisor, openWatchWindow, openPlanWindow, appWindows, quitApp, monitorIntervalMs = 4000, fetchPlans, updateManager, restartAfterUpdate } = {}) {
   const storeDir = attemptsDir || path.join(path.dirname(planFile), `.attempts-${path.basename(planFile, path.extname(planFile))}`);
   const connectionFile = path.join(storeDir, 'provider-connections.json');
   let connections = [];
@@ -238,6 +238,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     isProcessAlive,
     killWorker,
     askModel: typeof askModel === 'function' ? async info => {
+      if (info.purpose === 'supervisor') return askModel(info);
       await readySkills();
       let prompt = skillsPrompt('lead', info.grillKind ? 'grilling ' + info.question : info.question);
       if (info.grillKind) {
@@ -251,7 +252,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       }
       return askModel({ ...info, skillsPrompt: prompt });
     } : undefined,
-    abortAsk,
+    abortAsk, abortSupervisor,
     fetchPlans,
     readSkill: relative => (skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
     prepareTask: (projectId, question, stillAuthorized, goldModel) => enqueue(async () => {
@@ -334,7 +335,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
   }
   if (initialSkillsSync) initialSkillsSync.catch(() => {});
   const initialModelsSync = syncAccounts().then(() => refreshModels ? providerModels.refresh(true) : undefined).catch(() => {});
-  const staticFiles = { '/update-ui.js': ['update-ui.js', 'text/javascript'], '/layout-ui.js': ['layout-ui.js', 'text/javascript'], '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  const staticFiles = { '/supervisor-ui.js': ['supervisor-ui.js', 'text/javascript'], '/supervisor.css': ['supervisor.css', 'text/css'], '/harbor-ui.js': ['harbor-ui.js', 'text/javascript'], '/harbor.css': ['harbor.css', 'text/css'], '/update-ui.js': ['update-ui.js', 'text/javascript'], '/layout-ui.js': ['layout-ui.js', 'text/javascript'], '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -358,7 +359,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         const result = await enqueue(() => updates.install(input.confirmRunning === true));
         return json(result.requiresConfirmation ? 409 : 200, result);
       }
-      if (pathname === '/api/orchestrator' || request.method === 'POST' && !/\/(?:stop|abort)(?:\/|$)/.test(pathname) && /^\/api\/(?:orchestrator|models|catalog)\//.test(pathname)) {
+      if (pathname === '/api/orchestrator' || request.method === 'POST' && !/\/(?:stop|abort)(?:\/|$)/.test(pathname) && /^\/api\/(?:orchestrator|supervisor|models|catalog)\//.test(pathname)) {
         await initialModelsSync;
         await syncAccounts();
       }
@@ -556,6 +557,19 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         const result = await orchestra.setOrchestrator(input.id || '');
         if (!result.ok) throw new RequestError(400, result.reason || 'Invalid data.');
         return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && ['/api/supervisor/settings', '/api/supervisor/ignore', '/api/supervisor/ask'].includes(pathname)) {
+        const input = await body(request, 16000, 'Supervisor request too large.');
+        const action = pathname.split('/').at(-1);
+        const allowed = action === 'settings' ? ['name', 'modelId', 'autoReview'] : action === 'ignore' ? ['projectId', 'alertId'] : ['projectId', 'question'];
+        if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(key => !allowed.includes(key))
+          || action !== 'settings' && typeof input.projectId !== 'string'
+          || input.name !== undefined && typeof input.name !== 'string'
+          || input.modelId !== undefined && typeof input.modelId !== 'string'
+          || input.autoReview !== undefined && typeof input.autoReview !== 'boolean'
+          || action === 'ignore' && typeof input.alertId !== 'string') throw new RequestError(400, 'Invalid Supervisor request.');
+        try { return json(200, await orchestra.supervisorRequest(action, input)); }
+        catch (error) { throw new RequestError(400, error.message); }
       }
       if (request.method === 'POST' && pathname === '/api/orchestrator/ask/cancel') {
         return json(200, await orchestra.abortAsk());

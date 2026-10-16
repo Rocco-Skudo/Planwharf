@@ -57,8 +57,8 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
       finish(row.id, status === 'CHECKPOINTED' ? 'BLOCKED' : status || 'BLOCKED', exit?.exitCode, tokens);
     }
   }
-  // A lead response cannot survive backend replacement. Worker state is reconciled separately.
-  for (const row of records.values()) if (row.role === 'orchestrator' && row.status === 'RUNNING') finish(row.id, 'BLOCKED');
+  // A lead or advisory response cannot survive backend replacement. Worker state is reconciled separately.
+  for (const row of records.values()) if (['orchestrator', 'reviewer'].includes(row.role) && row.status === 'RUNNING') finish(row.id, 'BLOCKED');
   function view(projectId) {
     const rows = [...records.values()].filter(row => !projectId || row.projectId === projectId);
     const groups = role => {

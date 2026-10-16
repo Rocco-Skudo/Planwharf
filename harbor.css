@@ -1,0 +1,94 @@
+/* Fixed decorative layer, independent of the workspace layout. */
+.harbor-background {
+  --harbor-sky: #09131b;
+  --harbor-sea-top: #102d37;
+  --harbor-sea-bottom: #0a1925;
+  --harbor-line: #6da8ac;
+  --harbor-pier: #263d4b;
+  --harbor-hull: #27424e;
+  --harbor-cabin: #789496;
+  --harbor-window: #183d48;
+  --harbor-shadow: #020a12;
+  --harbor-rope: #b4aa83;
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: clip;
+  pointer-events: none;
+  user-select: none;
+  contain: strict;
+}
+.harbor-background[hidden] { display: none; }
+.harbor-background * { pointer-events: none; }
+.harbor-scene { display: block; width: 100%; height: 100%; }
+.harbor-background::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(180deg, var(--page) 4%, transparent 75%);
+  opacity: .7;
+}
+html[data-theme="light"] .harbor-background {
+  --harbor-sky: #e1ebee;
+  --harbor-sea-top: #c9dee1;
+  --harbor-sea-bottom: #dbe7ec;
+  --harbor-line: #427b83;
+  --harbor-pier: #7d9aab;
+  --harbor-hull: #638692;
+  --harbor-cabin: #c2d4d7;
+  --harbor-window: #456977;
+  --harbor-shadow: #728e9a;
+  --harbor-rope: #7c7152;
+}
+body.harbor-enabled .fx { display: none; }
+/* Keep existing card surfaces and semantic text colors. Dense regions attenuate
+   the scene while the open canvas remains more visible between panels. */
+body.harbor-enabled .orch-chat,
+body.harbor-enabled .orch-board { background: color-mix(in srgb, var(--page) 88%, transparent); }
+body.harbor-enabled .runtime-controls { background: color-mix(in srgb, var(--page) 90%, transparent); }
+body.harbor-enabled .card { background-color: color-mix(in srgb, var(--paper) 60%, var(--page)); }
+.harbor-route { transform: translate(1320px, 715px); }
+.harbor-background[data-flag="tech"] .harbor-sail { fill: url(#harbor-sail-tech); }
+.harbor-background[data-flag="exploration"] .harbor-sail { fill: url(#harbor-sail-stars); }
+.harbor-background[data-flag="merchant"] .harbor-sail { fill: url(#harbor-sail-trade); }
+.harbor-background[data-flag="pirate"] .harbor-sails { mask: url(#harbor-sail-wear); fill: color-mix(in srgb, var(--harbor-cabin) 45%, #222632); }
+.harbor-background[data-flag="pirate"] .harbor-hull-trim { stroke-dasharray: 12 5; }
+.harbor-background[data-flag="tech"] .harbor-hull-trim { stroke-width: 5; }
+.harbor-pier { opacity: 1; }
+.harbor-background[data-underway="true"] .harbor-route { transform: translate(1245px, 700px); }
+.harbor-background[data-underway="true"] .harbor-pier { transform: translateX(110px); opacity: .3; }
+.harbor-background[data-motion="full"] .harbor-route { transition: transform 6s ease-in-out; }
+.harbor-background[data-motion="full"] .harbor-pier { transition: transform 6s ease-in-out, opacity 6s ease-in-out; }
+.harbor-background[data-switching="true"] .harbor-route,
+.harbor-background[data-switching="true"] .harbor-pier,
+.harbor-background[data-state="neutral"] .harbor-route { transition: none; }
+.harbor-wake { opacity: 0; }
+.harbor-background[data-underway="true"] .harbor-wake { opacity: .4; }
+.harbor-background[data-underway="true"] .harbor-ropes,
+.harbor-background[data-underway="true"] .harbor-anchor { opacity: 0; }
+.harbor-background[data-state="neutral"] .harbor-ship { opacity: .45; }
+.harbor-background[data-motion="full"] .harbor-ship { animation: harbor-bob 7s ease-in-out infinite; }
+.harbor-background[data-motion="full"] .harbor-water { animation: harbor-tide 14s ease-in-out infinite alternate; }
+.harbor-background[data-motion="full"][data-underway="true"] .harbor-wake { animation: harbor-wake 9s linear infinite; }
+.harbor-background[data-motion="full"] .harbor-flag { animation: harbor-ensign 5s ease-in-out infinite alternate; transform-origin: 0 0; }
+.harbor-background[data-state="failed"][data-effects="true"] .harbor-beacon { fill: var(--amber); }
+.harbor-background[data-state="preparing"][data-effects="true"] .harbor-beacon { fill: var(--harbor-rope); }
+.harbor-background[data-state="completed"][data-effects="true"] .harbor-beacon { fill: var(--green); }
+.harbor-background[data-state="completed"][data-arrived="true"][data-motion="full"][data-effects="true"] .harbor-portholes { animation: harbor-arrival 2.4s ease-out 1; }
+.harbor-background[data-effects="false"] .harbor-atmosphere { display: none; }
+.harbor-background[data-suspended="true"] * { animation-play-state: paused !important; transition: none !important; }
+.harbor-background[data-motion="off"] *,
+.harbor-background[data-motion="reduced"] * { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .harbor-background * { animation: none !important; transition: none !important; } }
+@media (max-width: 900px) { .harbor-detail { display: none; } }
+@keyframes harbor-bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(3px); } }
+@keyframes harbor-tide { from { transform: translateX(0); } to { transform: translateX(-24px); } }
+@keyframes harbor-wake { from { stroke-dasharray: 18 12; stroke-dashoffset: 0; } to { stroke-dasharray: 18 12; stroke-dashoffset: 60; } }
+@keyframes harbor-ensign { from { transform: translate(-68px, 0) scale(.7) skewY(-2deg); } to { transform: translate(-68px, 0) scale(.7) skewY(2deg); } }
+@keyframes harbor-arrival { from { fill: var(--green); opacity: 1; } to { fill: var(--harbor-line); opacity: .7; } }
+.harbor-dialog { width: min(480px, calc(100vw - 32px)); max-height: 85dvh; overflow-y: auto; }
+.harbor-dialog form { display: grid; gap: 12px; }
+.harbor-dialog h2, .harbor-dialog p { margin: 0; }
+.harbor-dialog label:not(.choice) { display: grid; gap: 6px; }
+.harbor-dialog .choice { display: flex; align-items: center; gap: 8px; }
+.harbor-dialog .choice input { width: auto; }
+.harbor-flag-preview { width: 96px; height: 64px; }
+#harbor-settings-button { flex: 0 0 auto; }
