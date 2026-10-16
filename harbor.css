@@ -92,3 +92,52 @@ body.harbor-enabled .card { background-color: color-mix(in srgb, var(--paper) 60
 .harbor-dialog .choice input { width: auto; }
 .harbor-flag-preview { width: 96px; height: 64px; }
 #harbor-settings-button { flex: 0 0 auto; }
+
+/* Presentation settings never change backend execution. */
+.harbor-background { --ship-weather-opacity: 0; --ship-bob: 3px; }
+.harbor-background::before {
+  content: ""; position: absolute; inset: 0; z-index: 1; pointer-events: none;
+  background: linear-gradient(180deg, #667b8e99 0%, transparent 65%);
+  opacity: var(--ship-weather-opacity); transition: opacity 12s ease-in-out;
+}
+.harbor-background[data-weather="light"] { --ship-weather-opacity: .15; }
+.harbor-background[data-weather="moderate"] { --ship-weather-opacity: .3; --ship-bob: 4px; }
+.harbor-background[data-weather="rough"] { --ship-weather-opacity: .45; --ship-bob: 5px; }
+.harbor-background[data-weather="storm"] { --ship-weather-opacity: .6; --ship-bob: 6px; }
+.harbor-background .harbor-water path { transition: d 12s ease-in-out; }
+.harbor-background[data-weather="moderate"]::before,
+.harbor-background[data-weather="rough"]::before,
+.harbor-background[data-weather="storm"]::before {
+  background: repeating-linear-gradient(110deg, transparent 0 38px, #a9bccb22 39px 40px, transparent 41px 80px), linear-gradient(180deg, #667b8e99, transparent 75%);
+}
+@keyframes harbor-bob { 0%,100% { transform: translateY(0); } 50% { transform: translateY(var(--ship-bob)); } }
+.harbor-background[data-motion="off"]::before,
+.harbor-background[data-motion="reduced"]::before,
+.harbor-background[data-suspended="true"]::before { transition: none; }
+.harbor-background[data-motion="off"] .harbor-water path,
+.harbor-background[data-motion="reduced"] .harbor-water path,
+.harbor-background[data-suspended="true"] .harbor-water path { transition: none !important; }
+@media (prefers-reduced-motion: reduce) { .harbor-background::before { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .harbor-background .harbor-water path { transition: none !important; } }
+body.ship-view { overflow: hidden; }
+[data-ship-hidden="true"] { visibility: hidden !important; pointer-events: none !important; }
+body.ship-view .harbor-background::after { opacity: .1; }
+/* Ship notifications already include these same backend anomalies with a return
+   link. Avoid two fixed notification surfaces obscuring one another on phones. */
+body.ship-view #supervisor-notice { display: none; }
+#ship-view-controls {
+  position: fixed; z-index: 21; top: 16px; left: 16px; right: 16px; width: fit-content; max-width: calc(100vw - 32px);
+  padding: 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper); color: var(--ink);
+}
+#ship-view-controls[hidden], #ship-notifications[hidden] { display: none; }
+#ship-scene-label { margin: 8px 0 0; font-size: .85rem; overflow-wrap: anywhere; }
+#ship-notifications {
+  position: fixed; z-index: 22; right: 16px; bottom: 16px; width: min(440px, calc(100vw - 32px)); max-height: 38vh;
+  overflow-y: auto; background: var(--paper); color: var(--ink); padding: 8px; border: 1px solid var(--line); border-radius: 12px;
+}
+.ship-notice { display: flex; align-items: center; gap: 8px; padding: 5px; }
+.ship-notice > button:first-child { flex: 1; text-align: left; overflow-wrap: anywhere; }
+.ship-notice > button { font-size: .82rem; }
+.ship-notice.is-critical { border-left: 3px solid var(--amber); }
+#ship-notifications > p { font-size: .8rem; }
+@media (max-width: 600px) { #ship-view-controls { top: 8px; left: 8px; right: 8px; } #ship-notifications { bottom: 8px; right: 8px; } }

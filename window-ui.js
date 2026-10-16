@@ -35,10 +35,14 @@
   function showView(next, initial = false) {
     if (!projectView || !orchestratorView) return;
     scrollPositions[activeView] = window.scrollY;
-    activeView = next === 'supervisor' && supervisorView ? 'supervisor' : next === 'orchestrator' ? 'orchestrator' : 'planwharf';
+    const supervisorRequested = next === 'supervisor' && supervisorView;
+    activeView = supervisorRequested || next === 'orchestrator' ? 'orchestrator' : 'planwharf';
     projectView.hidden = activeView !== 'planwharf';
     orchestratorView.hidden = activeView !== 'orchestrator';
-    if (supervisorView) supervisorView.hidden = activeView !== 'supervisor';
+    if (supervisorRequested) {
+      if (window.PlanwharfSelectWorkspacePanel) window.PlanwharfSelectWorkspacePanel('supervisor');
+      else window.PlanwharfRequestedWorkspacePanel = 'supervisor';
+    }
     document.body.dataset.appView = activeView;
     const intro = document.getElementById('project-lede');
     if (intro) intro.textContent = activeView === 'supervisor' ? 'Execution oversight, alerts, and Reviewer advice.' : activeView === 'orchestrator' ? 'Orchestrator chat, workers, and provider usage.' : 'Goal, progress, current work, next action, and your notes.';
@@ -47,7 +51,7 @@
       control.setAttribute('aria-pressed', String(activeView === 'orchestrator'));
     }
     if (!initial) {
-      history.replaceState(null, '', activeView === 'supervisor' ? '#supervisor' : activeView === 'orchestrator' ? '#orchestrator' : '#project');
+      history.replaceState(null, '', supervisorRequested ? '#supervisor' : activeView === 'orchestrator' ? '#orchestrator' : '#project');
       window.scrollTo(0, scrollPositions[activeView]);
     }
     window.dispatchEvent(new CustomEvent('planwharf-view', { detail: activeView }));

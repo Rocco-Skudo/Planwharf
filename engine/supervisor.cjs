@@ -3,7 +3,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const label = input => typeof input === 'string' && input.trim() ? Array.from(input.trim()).slice(0, 80).join('') : 'Supervisor';
-const supported = model => ['codex', 'api'].includes(model.adapter || model.provider);
+const supported = require('./model-roles.cjs').supportsSupervisor;
+function advisoryError(model, plans = []) {
+  if (!model || model.roles?.supervisor !== true) return 'Supervisor permission is required; Reviewer permission does not authorize advisory calls.';
+  if (!supported(model)) return 'No verified no-tool Supervisor transport for this adapter. No fallback was used.';
+  if (!model.enabled || model.available === false || model.providerEnabled === false) return 'The selected Supervisor model or provider is unavailable. No fallback was used.';
+  if (!model.providerCatalog && Number.isFinite(model.remaining) && Number.isFinite(model.cost) && model.remaining < model.cost) return 'The selected Supervisor has no remaining model usage budget. No fallback was used.';
+  if (require('./model-policy.cjs').usagePolicy(model, plans).blocked || model.usagePolicy?.blocked || plans.some(pool => pool.id === (model.quotaPoolId || model.plan) && pool.readable && (pool.exhausted || pool.leftPct === 0))) return 'The selected Supervisor is blocked by its quota policy. No fallback was used.';
+  return null;
+}
 const keyFor = value => crypto.createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 24);
 function projectFacts(snapshot, projectId, now = Date.now()) {
   const row = snapshot.projects?.find(row => row.id === projectId);
@@ -54,15 +62,16 @@ function projectFacts(snapshot, projectId, now = Date.now()) {
 }
 function createSupervisor({ dir, review, now = () => new Date().toISOString() }) {
   const file = dir ? path.join(dir, 'supervisor.json') : null;
-  let store = { schema: 1, name: 'Supervisor', configured: false, modelId: '', autoReview: false, alerts: [], turns: [], autoCalls: [] };
-  try { const saved = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : store; if (saved.schema !== 1 || !Array.isArray(saved.alerts) || !Array.isArray(saved.turns)) throw Error('Invalid Supervisor storage'); store = { ...store, ...saved }; }
+  let store = { schema: 2, name: 'Supervisor', configured: false, modelId: '', autoReview: false, alerts: [], turns: [], autoCalls: [] };
+  let migrated = false;
+  try { const saved = file ? JSON.parse(fs.readFileSync(file, 'utf8')) : store; if (![1, 2].includes(saved.schema) || !Array.isArray(saved.alerts) || !Array.isArray(saved.turns)) throw Error('Invalid Supervisor storage'); store = { ...store, ...saved }; if (saved.schema === 1) { store.schema = 2; store.legacyModelId = store.modelId; store.modelId = ''; store.autoReview = false; migrated = true; } }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   let busy = false;
   const save = () => { if (!file) return; fs.mkdirSync(dir, { recursive: true }); const temp = file + '.tmp'; fs.writeFileSync(temp, JSON.stringify(store, null, 2)); fs.renameSync(temp, file); };
   // An advisory response cannot continue across backend replacement.
   let interrupted = false;
   for (const turn of store.turns) if (turn.status === 'running') { turn.status = 'failed'; turn.answer = 'This answer was interrupted by a backend restart. Ask again for current evidence.'; turn.finishedAt = now(); interrupted = true; }
-  if (interrupted) save();
+  if (interrupted || migrated) save();
   function observe(snapshot) {
     let changed = false; const activeKeys = new Set(), added = [];
     for (const project of snapshot.projects || []) for (const detected of projectFacts(snapshot, project.id, Date.parse(now())).alerts) {
@@ -73,7 +82,7 @@ function createSupervisor({ dir, review, now = () => new Date().toISOString() })
     for (const alert of store.alerts) if (alert.active && !activeKeys.has(alert.key)) { alert.active = false; alert.resolvedAt = now(); changed = true; }
     if (changed) save();
     // Event-triggered, bounded analysis; never an LLM status poll.
-    if (store.autoReview && store.modelId && !busy && added.length && store.autoCalls.filter(at => Date.parse(now()) - Date.parse(at) < 3600000).length < 3) {
+    if (store.autoReview && store.modelId && !advisoryError(snapshot.models?.find(m => m.id === store.modelId), snapshot.plans) && !busy && added.length && store.autoCalls.filter(at => Date.parse(now()) - Date.parse(at) < 3600000).length < 3) {
       const alert = added[0]; store.autoCalls.push(now()); save();
       void ask(snapshot, alert.projectId, `Explain this anomaly and suggest a safe next action: ${alert.title}. ${alert.message}`, true).catch(() => {});
     }
@@ -82,16 +91,16 @@ function createSupervisor({ dir, review, now = () => new Date().toISOString() })
   function view(snapshot) {
     return { name: label(store.name), configured: store.configured, modelId: store.modelId, autoReview: store.autoReview, busy,
       projects: (snapshot.projects || []).map(row => { const facts = projectFacts(snapshot, row.id, Date.parse(now())); return { ...facts, alerts: store.alerts.filter(a => a.projectId === row.id && a.active), turns: store.turns.filter(t => t.projectId === row.id).slice(-30) }; }),
-      models: (snapshot.models || []).filter(m => m.roles?.reviewer).map(m => ({ id: m.id, label: m.label, provider: m.providerId || m.provider, model: m.cli, available: m.enabled && m.available !== false && m.providerEnabled !== false && supported(m), reason: !supported(m) ? 'No verified read-only advisory transport for this adapter.' : m.unavailableReason || '' })) };
+      models: (snapshot.models || []).filter(m => m.roles?.supervisor).map(m => ({ id: m.id, label: m.label, provider: m.providerId || m.provider, model: m.cli, available: !advisoryError(m, snapshot.plans), reason: advisoryError(m, snapshot.plans) || '' })) };
   }
   function settings(input, snapshot) {
     const next = { name: store.name, configured: store.configured, modelId: store.modelId, autoReview: store.autoReview };
     if (input.name !== undefined) { next.name = label(input.name); next.configured = true; }
     if (input.modelId !== undefined) {
-      if (input.modelId && !snapshot.models.some(m => m.id === input.modelId && m.roles?.reviewer && supported(m))) throw Error('Select an eligible Reviewer model; no substitution is allowed.');
+      if (input.modelId && !snapshot.models.some(m => m.id === input.modelId && m.roles?.supervisor === true && supported(m))) throw Error('Select an eligible Supervisor model; no substitution is allowed.');
       next.modelId = input.modelId;
     }
-    if (input.autoReview !== undefined) { if (input.autoReview && !next.modelId) throw Error('Select a Reviewer before enabling anomaly analysis.'); next.autoReview = input.autoReview; }
+    if (input.autoReview !== undefined) { if (input.autoReview && !next.modelId) throw Error('Select a Supervisor before enabling anomaly analysis.'); next.autoReview = input.autoReview; }
     if (!next.modelId) next.autoReview = false;
     Object.assign(store, next);
     save(); return view(snapshot);
@@ -106,21 +115,23 @@ function createSupervisor({ dir, review, now = () => new Date().toISOString() })
     if (typeof question !== 'string' || !question.trim() || question.length > 8000) throw Error('Enter a question of at most 8000 characters.');
     const facts = projectFacts(snapshot, projectId, Date.parse(now()));
     busy = true;
-    const turn = { id: crypto.randomUUID(), projectId, question: question.trim(), at: now(), automatic, mode: store.modelId ? 'reviewer' : 'facts', modelId: store.modelId || null, status: 'running' };
+    const turn = { id: crypto.randomUUID(), projectId, question: question.trim(), at: now(), automatic, mode: store.modelId ? 'supervisor' : 'facts', modelId: store.modelId || null, status: 'running' };
     store.turns.push(turn); save();
     try {
       if (store.modelId) {
+        const denied = advisoryError(snapshot.models?.find(m => m.id === store.modelId), snapshot.plans);
+        if (denied) throw Error(denied);
         const result = await review({ projectId, modelId: store.modelId, question: turn.question, facts,
           history: store.turns.filter(t => t.projectId === projectId && t.status === 'complete').slice(-6).map(t => ({ question: t.question, answer: t.answer })) });
-        if (result.failure) throw Error(result.diagnostic?.message || result.answer || 'Reviewer analysis failed.');
-        turn.answer = String(result.answer || '').slice(0, 40000); if (!turn.answer.trim()) throw Error('Reviewer returned no answer.');
+        if (result.failure) throw Error(result.diagnostic?.message || result.answer || 'Supervisor analysis failed.');
+        turn.answer = String(result.answer || '').slice(0, 40000); if (!turn.answer.trim()) throw Error('Supervisor returned no answer.');
         turn.provider = result.provider; turn.model = result.model; turn.tokens = result.tokens || null;
       } else {
         const selected = /reviewer|revisor/i.test(question) ? facts.workers.filter(w => w.role === 'reviewer') : facts.workers;
         turn.answer = ['Live evidence (no AI interpretation):', facts.summary,
           ...selected.map(w => `${w.role === 'reviewer' ? 'Reviewer' : 'Worker'} ${w.provider}/${w.model}: ${w.task} — ${w.status}. ${w.summary}`),
           ...facts.alerts.map(a => `Attention: ${a.title}. ${a.message}`), facts.next ? 'Next recorded action: ' + facts.next : '',
-          'Select a Reviewer model for interpretation of this evidence.'].filter(Boolean).join('\n\n');
+          'Select a Supervisor model for interpretation of this evidence.'].filter(Boolean).join('\n\n');
       }
       turn.status = 'complete';
     } catch (error) { turn.status = 'failed'; turn.answer = error.message; }
@@ -129,4 +140,4 @@ function createSupervisor({ dir, review, now = () => new Date().toISOString() })
   }
   return { observe, view, settings, ignore, ask };
 }
-module.exports = { createSupervisor, projectFacts, label, supported };
+module.exports = { createSupervisor, projectFacts, label, supported, advisoryError };

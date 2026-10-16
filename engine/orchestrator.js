@@ -18,6 +18,7 @@ const Quota = require('../quota.js');
 const { validatePolicy, migratePolicy, usagePolicy, resolveUsageFallback } = require('./model-policy.cjs');
 const { validateProviderPolicy, providerPolicyFor } = require('./provider-policy.cjs');
 const { ROLE_IDS, withModelRoles, roleEligibility, permitsAssignment, assignmentRole } = require('./model-roles.cjs');
+const { assignmentSession, projectActivitySessions, pagedProjectActivitySessions, readRecordedTail, SESSION_LIMIT } = require('./activity-sessions.cjs');
 
 const LABELS = {
   waiting_on_you: 'Waiting on you',
@@ -426,7 +427,7 @@ function packState(snap, row) {
       checkpoints: snap.execution.checkpoints.filter(cp => cp.projectId === row.id),
       repository: row.facts, notes: row.notes || []
     } : null,
-    researches: snap && Array.isArray(snap.researches) ? snap.researches : [],
+    researches: snap && Array.isArray(snap.researches) ? snap.researches.filter(research => !row || research.projectId === row.id) : [],
     mode: snap && snap.mode,
     grill: {
       propose: snap && snap.grillPropose !== false,
@@ -467,7 +468,7 @@ function packState(snap, row) {
       lastLog: lastActivity(row.workerTail)
     } : null,
     others: (snap && Array.isArray(snap.projects) ? snap.projects : [])
-      .filter(item => !row || item.id !== row.id)
+      .filter(() => !row)
       .map(item => ({ id: item.id, name: item.name, folder: item.folder || null, github: item.github || null, repository: item.repository || null, status: item.status, job: item.jobTitle || null })),
     fleet: (snap && Array.isArray(snap.fleet) ? snap.fleet : []).map(item => ({
       id: item.id,
@@ -767,6 +768,7 @@ function fleetOf(models, projects, leadId, plans) {
       orchestratorEligible: item.orchestratorEligible ?? (item.kind === 'premium' || item.kind === 'default'),
       workerEligible: item.workerEligible !== false,
       reviewerEligible: item.reviewerEligible !== false,
+      supervisorEligible: roleEligibility(item).supervisor,
       roles: item.roles || withModelRoles(item).roles,
       roleEligibility: item.roleEligibility || roleEligibility(item),
       providerEnabled: item.providerEnabled !== false,
@@ -1804,7 +1806,7 @@ function createOrchestrator(options) {
         const docs = Array.isArray(row.docs) && row.docs.length ? row.docs : collectDocs(row.facts);
         const terminal = ['complete', 'failed', 'checkpointed'].includes(row.status);
         // Stored process flags are historical evidence, not current liveness.
-        const dispatch = clone(row.dispatch || []).map(part => {
+        const dispatch = clone(row.dispatch || []).map((part, index) => {
           if (!part) return part;
           const alive = Boolean(part.pid) && typeof opts.isProcessAlive === 'function'
             ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
@@ -1812,7 +1814,11 @@ function createOrchestrator(options) {
           const result = store.execution.results.find(result => result.attemptId === part.attemptId);
           let diagnostic = null;
           try { diagnostic = JSON.parse(fs.readFileSync(part.resultPath + '.diagnostic.json', 'utf8')); } catch {}
-          return { ...part, diagnostic, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
+          const activitySession = index < SESSION_LIMIT ? assignmentSession({
+            projectId: item.project.id, row, part: { ...part, observedAlive: alive }, execution: store.execution,
+            tail: readRecordedTail(part.logPath, dir), index
+          }) : null;
+          return { ...part, diagnostic, activitySession, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
         });
         const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
           : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1860,6 +1866,9 @@ function createOrchestrator(options) {
           ),
           pendingAutoStart: Boolean(row.pendingAutoStart),
           dispatch,
+          activitySessionPagination: { available: true, total: pagedProjectActivitySessions({ projectId: item.project.id, row, history: store.workerHistory, execution: store.execution, offset: Number.MAX_SAFE_INTEGER }).total, pageSize: SESSION_LIMIT },
+          activitySessions: projectActivitySessions({ projectId: item.project.id, row, current: dispatch.map(part => part?.activitySession),
+            history: store.workerHistory, execution: store.execution, readTail: file => readRecordedTail(file, dir) }),
           checkpoint: row.checkpoint ? clone(row.checkpoint) : null,
           timing: ((item.tasks || []).find(task => task.status === 'running') || {}).timing || (row.pendingAutoStart && row.pendingAutoStart.timing) || null,
           deadlineAt: ((item.tasks || []).find(task => task.status === 'running') || {}).deadlineAt || (row.pendingAutoStart && row.pendingAutoStart.deadlineAt) || null,
@@ -1910,12 +1919,15 @@ function createOrchestrator(options) {
 
   async function reviewSnapshot({ projectId, modelId, question, facts, history }) {
     const model = roster().find(model => model.id === modelId);
-    if (!model || !model.enabled || model.available === false || model.providerEnabled === false || !permitsAssignment(model, { kind: 'audit' })
+    if (!model || !model.enabled || model.available === false || model.providerEnabled === false || model.roles?.supervisor !== true
       || usagePolicy(model, plansLive).blocked || planExhausted(plansLive, model.quotaPoolId || model.plan)
-      || !require('./supervisor.cjs').supported(model)) throw new Error('The selected Reviewer is unavailable, not permitted, or blocked by quota. No fallback was used.');
+      || !model.providerCatalog && model.remaining < model.cost
+      || !require('./supervisor.cjs').supported(model)) throw new Error('The selected Supervisor is unavailable, not permitted, or blocked by quota. No fallback was used.');
     if (typeof askProvider !== 'function') throw new Error('The model transport is unavailable. Live evidence remains available.');
-    const invocation = ledger?.start({ role: 'reviewer', projectId, megaTaskId: facts.megaTaskId, provider: model.providerId || model.provider, model: model.cli, modelId, reason: 'Supervisor advisory question' });
+    const invocation = ledger?.start({ role: 'supervisor', projectId, megaTaskId: facts.megaTaskId, provider: model.providerId || model.provider, model: model.cli, modelId, accountKey: model.accountKey, accountType: model.accountType, reason: 'Supervisor advisory question' });
     try {
+      store.usage[model.id] = { used: usedOf(store.usage, model.id) + model.cost };
+      persist();
       const result = await askProvider({ purpose: 'supervisor', allowActions: false, question, projectId, model, folder: null,
         state: { facts, history } });
       ledger?.finish(invocation, result?.failure ? 'FAILED' : 'COMPLETE', result?.processExit, result?.tokens);
@@ -2406,7 +2418,8 @@ function createOrchestrator(options) {
         answer: 'Stopped.',
         thinking: live.thinking || null,
         ms: Number.isFinite(live.ms) ? live.ms : (Number.isFinite(started) ? Date.now() - started : null),
-        projectId: null,
+        projectId: live.projectId || null,
+        chatSessionId: live.chatSessionId || null,
         sessionId,
         orchestratorId: lead ? lead.id : null,
         order: 'abort'
@@ -2441,7 +2454,12 @@ function createOrchestrator(options) {
     if (projectId && mentionedProjects.some(row => row.id !== projectId)) return { ok: false, reason: 'Message names a different project from the selected recipient. Select the intended project before sending.' };
     if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
-    const conversation = chatSessionId ? store.asks.filter(item => item.chatSessionId === chatSessionId && item.projectId === projectId) : store.asks;
+    const contextProjectId = projectId || (mentionedProjects.length === 1 ? mentionedProjects[0].id : null);
+    // Project and chat are independent boundaries; a reused chat ID never grants
+    // access to another project's discussion or legacy unscoped records.
+    const conversation = store.asks.filter(item =>
+      (!contextProjectId || item.projectId === contextProjectId)
+      && (!chatSessionId || item.chatSessionId === chatSessionId && (contextProjectId || item.projectId == null)));
     const typedGrill = /^grill me[.!?]*$/i.test(q) ? 'me' : /^grill with (?:the )?docs[.!?]*$/i.test(q) ? 'docs' : null;
     const previousGrill = conversation.find(turn => turn.projectId === projectId)?.grillKind || null;
     const requestedGrill = requestedGrillKind || typedGrill;
@@ -2542,6 +2560,8 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         const started = Date.now();
         thinkingLive = {
           question: q,
+          projectId: contextProjectId,
+          chatSessionId: chatSessionId || null,
           lead: lead.label,
           thinking: '',
           draft: '',
@@ -2557,11 +2577,13 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
+            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: contextProjectId ? null : stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
                 question: q,
+                projectId: contextProjectId,
+                chatSessionId: chatSessionId || null,
                 lead: lead.label,
                 thinking: typeof part.thinking === 'string' ? part.thinking : (thinkingLive && thinkingLive.thinking) || '',
                 draft: typeof part.answer === 'string' ? (/^\s*(\{|```)/.test(part.answer) ? '' : part.answer) : (thinkingLive && thinkingLive.draft) || '',
@@ -2688,7 +2710,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     if (!model) return { ok: false, reason: 'model not present' };
     if (enabled && !model.available && !model.providerCatalog) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
     store.enabled[id] = Boolean(enabled);
-    store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role])]));
+    store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role] && (role !== 'supervisor' || model.roles.supervisor))]));
     if (model.accountScope) store.accountModelRoles[model.accountScope][id] = { ...store.modelRoles[id] };
     persist();
     return { ok: true, snapshot: await tick() };
@@ -2715,7 +2737,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
   async function setModelRoles(id, roles) {
     const model = roster().find(model => model.id === id);
     if (!model) return { ok: false, reason: 'Model not present.' };
-    if (!roles || typeof roles !== 'object' || Array.isArray(roles) || !Object.keys(roles).length || Object.entries(roles).some(([role, enabled]) => !ROLE_IDS.includes(role) || typeof enabled !== 'boolean')) return { ok: false, reason: 'Roles must contain Orchestrator, Worker or Reviewer boolean flags.' };
+    if (!roles || typeof roles !== 'object' || Array.isArray(roles) || !Object.keys(roles).length || Object.entries(roles).some(([role, enabled]) => !ROLE_IDS.includes(role) || typeof enabled !== 'boolean')) return { ok: false, reason: 'Roles must contain Orchestrator, Worker, Reviewer or Supervisor boolean flags.' };
     const eligibility = roleEligibility(model);
     for (const [role, enabled] of Object.entries(roles)) if (enabled && !eligibility[role]) return { ok: false, reason: `This model is not compatible with the ${role} role.` };
     store.modelRoles[id] = { ...model.roles, ...roles };
@@ -2758,7 +2780,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     if (typeof input.showAll === 'boolean') store.catalogVisibility[provider.id] = input.showAll;
     if (typeof input.allModelsEnabled === 'boolean') for (const model of roster().filter(m => (m.providerId || m.provider) === provider.id)) {
       store.enabled[model.id] = input.allModelsEnabled;
-      store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role])]));
+      store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role] && (role !== 'supervisor' || model.roles.supervisor))]));
       if (model.accountScope) store.accountModelRoles[model.accountScope][model.id] = { ...store.modelRoles[model.id] };
     }
     persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) };
@@ -3125,6 +3147,13 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     return null;
   }
 
+  async function activitySessionPage(projectId, offset = 0, limit = SESSION_LIMIT) {
+    const plan = await opts.readPlan();
+    if (!notebookProjects(plan).some(item => item.project.id === projectId)) throw new Error('Select an existing project.');
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > SESSION_LIMIT) throw new Error('Invalid activity session page.');
+    return { projectId, ...pagedProjectActivitySessions({ projectId, row: store.projects[projectId] || {}, history: store.workerHistory, execution: store.execution, offset, limit, readTail: file => readRecordedTail(file, dir) }) };
+  }
+
   async function inspectRepository(projectId, options) {
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(item => item.project.id === projectId);
@@ -3149,7 +3178,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, activitySessionPage, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

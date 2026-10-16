@@ -1,5 +1,45 @@
 'use strict';
+// Shared pure presentation contract; no backend authority or provider calls.
 (() => {
+  const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const roles = ['orchestrator', 'worker', 'reviewer', 'supervisor'];
+  const roleAllowed = (model, role) => role === 'supervisor' ? model.roles?.supervisor === true && model.roleEligibility?.supervisor === true : model.roles?.[role] === true;
+  function evidenceText(session) {
+    const evidence = session?.technicalEvidence;
+    if (!Array.isArray(evidence?.entries) || !evidence.entries.length) return 'Source-specific original command/output evidence is not retained in this view. No original output is reconstructed from Friendly descriptions.';
+    return evidence.entries.slice(-32).map(entry => [
+      `${entry.protocol || 'unknown protocol'} · ${entry.provenance || 'unknown provenance'}${entry.eventType ? ' · ' + entry.eventType : ''}`,
+      typeof entry.command === 'string' ? 'Original command: ' + entry.command.slice(0, 4096) : '',
+      typeof entry.output === 'string' ? 'Original output:\n' + entry.output.slice(0, 8192) : '',
+      Number.isInteger(entry.exitCode) ? 'Exit code: ' + entry.exitCode : '',
+      entry.sourceTimestamp ? 'Recorded timestamp: ' + entry.sourceTimestamp : ''
+    ].filter(Boolean).join('\n')).join('\n\n') + (evidence.truncated ? '\n\nEarlier evidence was truncated by the display bound.' : '') + (evidence.warnings || []).slice(0, 8).map(warning => '\n' + warning).join('');
+  }
+  function sessionHtml(session, mode = 'friendly') {
+    if (!session) return '<p class="muted">No recorded activity session is available for this selection.</p>';
+    const events = (Array.isArray(session.events) ? session.events : []).slice(-50);
+    const title = `${session.role || 'Unknown role'} · ${session.provider || 'unknown provider'}/${session.model || 'unknown model'}`;
+    const details = { projectId: session.projectId, jobId: session.jobId, megaTaskId: session.megaTaskId, subTaskId: session.subTaskId, attemptId: session.attemptId,
+      modelId: session.modelId, provider: session.provider, adapter: session.adapter, model: session.model, role: session.role,
+      processState: session.processState, state: session.state, startedAt: session.startedAt, completedAt: session.completedAt,
+      validatedResultStatus: session.validatedResultStatus, recordedResultStatus: session.recordedResultStatus, exitCode: session.exitCode,
+      capabilities: { expectedFormat: session.capabilities?.expectedFormat, detailedEventsExpected: session.capabilities?.detailedEventsExpected, liveDeliveryVerified: session.capabilities?.liveDeliveryVerified === true } };
+    const state = session.validatedResultStatus === 'COMPLETE' ? 'Completed · backend-validated result' : `${session.state || 'unknown'} · ${session.processState || 'unknown process state'}`;
+    return `<header class="activity-heading"><h3>${escape(title)}</h3><span class="badge">${escape(state)}</span></header><p class="muted">${escape(session.attemptId || 'Attempt identity not retained')} · ${escape(session.modelId || 'Configured model identity not retained')}</p><p class="activity-validation">${session.validatedResultStatus ? `Backend result: ${escape(session.validatedResultStatus)}` : 'Result not validated. Process termination and reported test output do not prove completion.'}</p>${(session.warnings || []).slice(0, 8).map(warning => `<p class="muted">${escape(String(warning).slice(0, 400))}</p>`).join('')}${mode === 'technical' ? `<details><summary>Assignment metadata</summary><pre class="activity-technical">${escape(JSON.stringify(details, null, 2))}</pre></details>` : ''}<ol class="activity-timeline">${events.map(event => {
+      const category = ['read', 'working', 'build', 'test', 'warning', 'review', 'report'].includes(event.classification) ? event.classification.toUpperCase() : 'UNKNOWN';
+      const provenance = ['observed', 'reported'].includes(event.provenance) ? event.provenance : 'unknown';
+      const technical = { protocol: event.protocol, state: event.state, eventType: event.technical?.eventType, tool: event.technical?.tool, exitCode: event.technical?.exitCode, validated: event.validated === true };
+      return `<li class="activity-event"><span class="activity-tag">[${category}]</span> <span>${escape(String(event.friendly || 'Unclassified activity').slice(0, 260))}</span><small>${provenance === 'reported' ? 'Worker reported' : provenance === 'observed' ? 'Observed event' : 'Unclassified evidence'}${event.timestamp ? ' · ' + escape(event.timestamp) : ''}</small>${mode === 'technical' ? `<pre>${escape(JSON.stringify(technical, null, 2))}</pre>` : ''}</li>`;
+    }).join('') || '<li class="muted">No readable event evidence retained. No activity is inferred.</li>'}</ol>${mode === 'technical' ? '<p class="muted">Only retained sanitized metadata is shown. Raw source logs remain in their existing local storage; missing event timestamps are not synthesized.</p>' : ''}`;
+  }
+  const api = { sessionHtml, evidenceText, roles, roleAllowed, escape };
+  globalThis.PlanwharfWorkspaceUI = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
+})();
+
+'use strict';
+(() => {
+  if (typeof document === 'undefined') return;
   const embedded = document.documentElement.hasAttribute?.('data-unified-app') || false;
   const $ = id => document.getElementById(embedded && id !== 'toast' ? `dashboard-${id}` : id);
   const escape = value => String(value).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -20,12 +60,158 @@
   let roleFilterControl;
   let sending = false;
   let pendingText = '';
+  let pendingProjectId = null;
   let pendingStarted = 0;
   let thinkTimer = null;
   let askAbort = null;
   let sendGen = 0;
   const researchReports = new Map();
   const workerSessionStartedAt = Date.now();
+  let workspaceProject;
+  let workspacePreferences = {};
+  let activitySignature = '';
+  let historyGeneration = 0;
+  const historyPages = new Map();
+  const historyLoading = new Set();
+  const workspace = document.querySelector('.orch-board');
+  const workspaceKey = id => 'planwharf_workspace_v1:' + encodeURIComponent(id || 'global');
+  function saveWorkspace() {
+    try { localStorage.setItem(workspaceKey(workspaceProject), JSON.stringify(workspacePreferences)); } catch { /* In-memory state still works. */ }
+  }
+  function workspacePanel(panel, restoring = false) {
+    if (!['overview', 'sessions', 'supervisor'].includes(panel)) panel = 'overview';
+    workspacePreferences.panelScroll ||= {};
+    if (!restoring && workspace && workspacePreferences.panel) workspacePreferences.panelScroll[workspacePreferences.panel] = workspace.scrollTop;
+    workspacePreferences.panel = panel;
+    workspace?.querySelectorAll('[data-workspace-pane]').forEach(pane => { pane.hidden = pane.dataset.workspacePane !== panel; });
+    workspace?.querySelectorAll('[data-workspace-panel]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.workspacePanel === panel)));
+    saveWorkspace();
+    if (workspace) workspace.scrollTop = Number(workspacePreferences.panelScroll[panel]) || 0;
+    window.dispatchEvent(new CustomEvent('planwharf-workspace-panel', { detail: panel }));
+  }
+  window.PlanwharfSelectWorkspacePanel = workspacePanel;
+  function syncWorkspaceProject() {
+    if (workspaceProject === projectId) return;
+    const input = $('orch-ask-input'), thread = $('orch-ask-thread');
+    if (workspaceProject !== undefined) {
+      workspacePreferences.draft = input?.value || '';
+      workspacePreferences.chatScroll = thread?.scrollTop || 0;
+      workspacePreferences.panelScroll ||= {};
+      if (workspace) workspacePreferences.panelScroll[workspacePreferences.panel || 'overview'] = workspace.scrollTop;
+      saveWorkspace();
+    }
+    workspaceProject = projectId;
+    historyGeneration++;
+    try { workspacePreferences = JSON.parse(localStorage.getItem(workspaceKey(projectId)) || '{}') || {}; } catch { workspacePreferences = {}; }
+    if (typeof workspacePreferences !== 'object' || Array.isArray(workspacePreferences)) workspacePreferences = {};
+    if (input) input.value = typeof workspacePreferences.draft === 'string' ? workspacePreferences.draft : '';
+    chatSig = ''; activitySignature = '';
+    if (thread) thread.dataset.restoreScroll = String(workspacePreferences.chatScroll || 0);
+    workspacePanel(window.PlanwharfRequestedWorkspacePanel || workspacePreferences.panel || 'overview', true);
+    window.PlanwharfRequestedWorkspacePanel = null;
+  }
+  function renderWorkspace() {
+    if (!workspace) return;
+    const row = (orchestra.projects || []).find(row => row.id === projectId);
+    const role = workspace.querySelector('[data-workspace-role]');
+    const selector = workspace.querySelector('[data-workspace-session]');
+    const view = workspace.querySelector('[data-workspace-activity]');
+    if (!selector || !view) return;
+    const pagination = row?.activitySessionPagination;
+    const pageSize = Number.isInteger(pagination?.pageSize) && pagination.pageSize > 0 ? Math.min(24, pagination.pageSize) : 24;
+    const total = Number.isInteger(pagination?.total) && pagination.total >= 0 ? pagination.total : (row?.activitySessions || []).length;
+    const storedOffset = Number.isInteger(workspacePreferences.offset) && workspacePreferences.offset > 0 ? workspacePreferences.offset : 0;
+    const offset = pagination?.available === true ? Math.min(storedOffset, Math.max(0, Math.floor((total - 1) / pageSize) * pageSize)) : 0;
+    workspacePreferences.offset = offset;
+    const key = projectId + ':' + total + ':' + offset;
+    if (offset && !historyPages.has(key) && !historyLoading.has(key)) {
+      historyLoading.add(key);
+      const targetProject = projectId, generation = historyGeneration;
+      fetch('/api/orchestrator/activity-sessions?' + new URLSearchParams({ projectId: targetProject, offset: String(offset), limit: String(pageSize) }))
+        .then(async response => { if (!response.ok) throw Error('Recorded assignment history is unavailable.'); return response.json(); })
+        .then(page => {
+          if (generation !== historyGeneration || targetProject !== projectId) return;
+          if (!Array.isArray(page.sessions) || page.offset !== offset || page.sessions.some(session => session.projectId !== targetProject)) throw Error('Recorded assignment history does not match the selected project.');
+          historyPages.set(key, page.sessions.slice(0, pageSize)); renderWorkspace();
+        }).catch(error => { if (generation === historyGeneration && targetProject === projectId) notice(error.message); })
+        .finally(() => { historyLoading.delete(key); });
+    }
+    const sessions = (offset ? historyPages.get(key) || [] : row?.activitySessions || []).filter(session => session.projectId === projectId).slice(0, 24);
+    if (document.activeElement !== role) role.value = workspacePreferences.role || 'all';
+    const visible = sessions.filter(session => role.value === 'all' || (session.role || 'unknown') === role.value);
+    const selected = visible.find(session => session.id === (workspacePreferences.sessionsByPage?.[offset] || workspacePreferences.session)) || visible[0] || null;
+    if (document.activeElement !== selector) {
+      selector.innerHTML = visible.map(session => `<option value="${escape(session.id)}">${escape(session.role || 'Unknown role')} · ${escape(session.model || session.modelId || 'Unknown model')} · ${escape(session.state || 'unknown')}${session.historical ? ' · recorded' : ''}</option>`).join('') || '<option value="">No recorded assignments</option>';
+      selector.value = selected?.id || '';
+    }
+    if (selected) workspacePreferences.session = selected.id;
+    const history = workspace.querySelector('[data-workspace-history]');
+    if (history) {
+      history.hidden = pagination?.available !== true;
+      history.querySelector('[data-history-previous]').disabled = offset === 0;
+      history.querySelector('[data-history-next]').disabled = offset + pageSize >= total;
+      history.querySelector('[data-history-label]').textContent = total ? `Assignments ${offset + 1}–${Math.min(offset + pageSize, total)} of ${total}` : 'No retained assignments';
+    }
+    const mode = workspacePreferences.mode === 'technical' ? 'technical' : 'friendly';
+    workspace.querySelectorAll('[data-activity-mode]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.activityMode === mode)));
+    workspace.querySelector('[data-workspace-feed]').textContent = !executionAvailable ? 'Updates unavailable. Retained evidence is shown; no current state is inferred.' : !row ? 'Select a project to inspect its assignments.' : `${visible.length} retained assignment${visible.length === 1 ? '' : 's'} for ${row.name}.`;
+    const sig = JSON.stringify([selected, mode]);
+    if (activitySignature !== sig) {
+      const scroll = view.scrollTop;
+      view.innerHTML = PlanwharfWorkspaceUI.sessionHtml(selected, mode);
+      if (mode === 'technical' && selected) {
+        const original = document.createElement('section'), title = document.createElement('h4'), output = document.createElement('pre');
+        title.textContent = 'Sanitized original assignment evidence'; output.className = 'activity-technical'; output.dataset.workspaceOriginal = '';
+        output.textContent = PlanwharfWorkspaceUI.evidenceText(selected); original.append(title, output);
+        view.querySelector('.activity-timeline')?.before(original);
+      }
+      view.scrollTop = scroll;
+      activitySignature = sig;
+    }
+  }
+  window.PlanwharfInspectAssignment = attemptId => {
+    const session = (orchestra.projects || []).find(row => row.id === projectId)?.activitySessions?.find(session => session.attemptId === attemptId);
+    if (!session) { notice('No retained activity session is available for this assignment.'); return; }
+    workspacePreferences.session = session.id; workspacePreferences.role = 'all'; workspacePanel('sessions'); renderWorkspace();
+  };
+  workspace?.addEventListener('click', event => {
+    const previous = event.target.closest('[data-history-previous]'), next = event.target.closest('[data-history-next]');
+    if (previous || next) {
+      const row = (orchestra.projects || []).find(row => row.id === projectId);
+      if (row?.activitySessionPagination?.available !== true) return;
+      const size = Math.min(24, row.activitySessionPagination.pageSize || 24);
+      workspacePreferences.sessionsByPage ||= {};
+      workspacePreferences.sessionsByPage[workspacePreferences.offset || 0] = workspacePreferences.session;
+      workspacePreferences.offset = Math.max(0, (workspacePreferences.offset || 0) + (next ? size : -size));
+      saveWorkspace(); renderWorkspace(); return;
+    }
+    const panel = event.target.closest('[data-workspace-panel]');
+    if (panel) workspacePanel(panel.dataset.workspacePanel);
+    const mode = event.target.closest('[data-activity-mode]');
+    if (mode) { workspacePreferences.mode = mode.dataset.activityMode; saveWorkspace(); renderWorkspace(); }
+    const focus = event.target.closest('[data-workspace-focus]');
+    if (focus) {
+      const shell = workspace.closest('.orch-shell'), enabled = shell.dataset.workspaceFocusState !== 'true';
+      shell.dataset.workspaceFocusState = String(enabled); focus.setAttribute('aria-pressed', String(enabled)); focus.textContent = enabled ? 'Show conversation' : 'Focus activity';
+      window.dispatchEvent(new Event('resize'));
+    }
+  });
+  workspace?.addEventListener('change', event => {
+    if (event.target.matches('[data-workspace-session]')) { workspacePreferences.session = event.target.value; workspacePreferences.sessionsByPage ||= {}; workspacePreferences.sessionsByPage[workspacePreferences.offset || 0] = event.target.value; }
+    else if (event.target.matches('[data-workspace-role]')) workspacePreferences.role = event.target.value;
+    else return;
+    saveWorkspace(); renderWorkspace();
+  });
+  $('orch-ask-input')?.addEventListener('input', () => { workspacePreferences.draft = $('orch-ask-input').value; saveWorkspace(); });
+  window.addEventListener('pagehide', () => { workspacePreferences.draft = $('orch-ask-input')?.value || ''; workspacePreferences.chatScroll = $('orch-ask-thread')?.scrollTop || 0; saveWorkspace(); });
+  function restoreDraft(id, draft) {
+    if (id === projectId) {
+      const input = $('orch-ask-input');
+      if (input && !input.value) { input.value = draft; workspacePreferences.draft = draft; saveWorkspace(); }
+    } else {
+      try { const key = workspaceKey(id), preferences = JSON.parse(localStorage.getItem(key) || '{}'); if (!preferences.draft) preferences.draft = draft; localStorage.setItem(key, JSON.stringify(preferences)); } catch { /* Original request is retained in pending/backend history. */ }
+    }
+  }
 
   function formatMs(ms) {
     const n = Math.max(0, Number(ms) || 0);
@@ -175,8 +361,8 @@
   function renderChat() {
     const el = $('orch-ask-thread');
     if (!el) return;
-    const sessionFilter = $('worker-session-filter')?.value || 'current';
-    const turns = (orchestra.asks || []).filter(item => sessionFilter === 'all' || sessionFilter === 'legacy' && !item.sessionId || sessionFilter === 'current' && Date.parse(item.at) >= workerSessionStartedAt || item.sessionId === sessionFilter);
+    const sessionFilter = projectId || 'global';
+    const turns = (orchestra.asks || []).filter(item => projectId ? item.projectId === projectId : item.projectId == null);
     const items = turns.slice().reverse();
     const sig = sessionFilter + chatSignature(turns);
     if (sig === chatSig && el.childElementCount) return;
@@ -188,7 +374,7 @@
     }
     const live = orchestra.thinking;
     const liveMs = live && Number.isFinite(live.ms) ? live.ms : (pendingStarted ? Date.now() - pendingStarted : 0);
-    const pending = sending
+    const pending = sending && pendingProjectId === projectId
       ? `<article class="chat-turn is-pending"><div class="chat-you"><p>${escape(pendingText)}</p></div><div class="chat-bot">${thinkHtml((live && live.thinking) || '', liveMs, true)}${live && live.draft ? `<p class="chat-draft">${escape(live.draft)}</p>` : ''}</div></article>`
       : '';
     el.innerHTML = items.map(item => {
@@ -196,7 +382,8 @@
       const elapsed = Number.isFinite(item.ms) ? ` · ${formatMs(item.ms)}` : '';
       return `<article class="chat-turn${item.order ? ' is-order' : ''}"><div class="chat-you"><p>${escape(item.question)}</p>${item.goldModel ? `<p class="muted">Gold model: ${escape(item.goldModel.provider)}/${escape(item.goldModel.cli)} (${escape(item.goldModel.id)})</p>` : ''}</div><div class="chat-bot">${order}${thinkHtml(item.thinking, item.ms, false)}<p data-chat-output>${escape(item.answer)}</p>${diagnosticHtml(item.diagnostic)}<button type="button" class="secondary compact chat-copy-output" data-copy-output>Copy output</button><time>${escape(clock(item.at))}${elapsed}</time></div></article>`;
     }).join('') + pending;
-    if (nearBottom || sending || !items.length) el.scrollTop = el.scrollHeight;
+    if (el.dataset.restoreScroll !== undefined) { el.scrollTop = Number(el.dataset.restoreScroll) || 0; delete el.dataset.restoreScroll; }
+    else if (nearBottom || sending && pendingProjectId === projectId || !items.length) el.scrollTop = el.scrollHeight;
   }
 
   function checkpointBanner(row) {
@@ -288,7 +475,7 @@
     const live = $('orch-live');
     const el = $('orchestrator');
     if (!el) return;
-    const rows = orchestra.projects || [];
+    const rows = (orchestra.projects || []).filter(row => !projectId || row.id === projectId);
     const sessionControl = $('worker-session-filter');
     if (sessionControl) {
       const selectedSession = sessionControl.value || 'current';
@@ -302,7 +489,7 @@
       projectFilter.value = ['current', 'all', ...rows.map(row => row.id)].includes(selectedFilter) ? selectedFilter : 'current';
     }
     const fleet = Array.isArray(orchestra.fleet) && orchestra.fleet.length ? orchestra.fleet : (orchestra.models || []);
-    const interventions = Array.isArray(orchestra.interventions) ? orchestra.interventions : [];
+    const interventions = (orchestra.interventions || []).filter(item => !projectId || item.projectId === projectId || item.project === rows[0]?.name);
     const looked = clock(orchestra.updatedAt);
     const lead = orchestra.orchestratorLabel || 'Orchestrator';
     if (live) live.textContent = `${lead} · updated ${looked || 'just now'}. I intervene on stall, death, or FAILED.`;
@@ -320,7 +507,7 @@
     if (!roleFilterControl && typeof document.createElement === 'function' && typeof el.before === 'function') {
       const label = document.createElement('label'); label.textContent = 'Model role';
       roleFilterControl = document.createElement('select'); roleFilterControl.setAttribute('aria-label', 'Filter models by role');
-      roleFilterControl.innerHTML = '<option value="all">All roles</option><option value="orchestrator">Orchestrator</option><option value="worker">Worker</option><option value="reviewer">Reviewer</option>';
+      roleFilterControl.innerHTML = '<option value="all">All roles</option><option value="orchestrator">Orchestrator</option><option value="worker">Worker</option><option value="reviewer">Reviewer</option><option value="supervisor">Supervisor</option>';
       roleFilterControl.addEventListener('change', () => { modelRoleFilter = roleFilterControl.value; renderBoard(); });
       label.append(roleFilterControl); el.before(label);
     }
@@ -338,16 +525,16 @@
       return !provider || provider.showAll || siblings.length <= 12 || item.enabled || item.lead || siblings.indexOf(item) < 8;
     });
     const providerControls = providerList.map(provider => `<article class="dash-model"><strong>${escape(provider.label)}</strong><p>${provider.models.length} configured models | ${escape(provider.availability)}</p><button class="secondary compact" data-provider="${escape(provider.id)}" data-provider-enabled="${!provider.enabled}">${provider.enabled ? 'Disable provider' : 'Enable provider'}</button><button class="secondary compact" data-provider-show="${escape(provider.id)}" data-provider-show-all="${!provider.showAll}">${provider.showAll ? 'Show selected models' : 'Show all models'}</button></article>`).join('');
-    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${['orchestrator', 'worker', 'reviewer'].map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes current models. ${excludedFleet.length} models no longer listed by their provider are hidden; saved roles and execution history are retained.</p><div class="dash-models">${visibleFleet.map(item => {
+    const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${PlanwharfWorkspaceUI.roles.map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes current models. ${excludedFleet.length} models no longer listed by their provider are hidden; saved roles and execution history are retained.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
       const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
       const availabilityText = item.availabilityWarning
         ? `Availability unread: ${item.availabilityWarning} Last known status: ${item.available === false ? 'unavailable' : 'available'}.`
         : item.available === false ? item.unavailableReason : doing;
       const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
-      const roleFlags = rolesSupported ? ['orchestrator', 'worker', 'reviewer'].map(role => {
-        const compatible = item.roleEligibility?.[role] !== false;
-        const selected = item.roles?.[role] ?? (role === 'orchestrator' ? item.orchestratorEligible !== false : true);
+      const roleFlags = rolesSupported ? PlanwharfWorkspaceUI.roles.map(role => {
+        const compatible = role === 'supervisor' ? item.roleEligibility?.supervisor === true && typeof item.roles?.supervisor === 'boolean' : item.roleEligibility?.[role] !== false;
+        const selected = role === 'supervisor' ? PlanwharfWorkspaceUI.roleAllowed(item, role) : item.roles?.[role] ?? (role === 'orchestrator' ? item.orchestratorEligible !== false : true);
         const title = compatible ? 'Permit this model to perform this role' : 'This model is not compatible with this role';
         return `<label title="${escape(title)}"><input type="checkbox" data-model-role="${escape(item.id)}" data-role="${role}" ${selected ? 'checked' : ''} ${compatible ? '' : 'disabled'}>${role[0].toUpperCase() + role.slice(1)}${compatible ? '' : ' (not supported)'}</label>`;
       }).join('') : '';
@@ -372,7 +559,7 @@
     const policySection = orchestra.providerPolicySupported ? PlanwharfModelPolicyUI.section(policyProviders, selectedPolicyProviderId, policyDrafts.get(selectedPolicyProviderId)) : '';
     const usage = orchestra.aiUsage || { orchestrator: [], workers: [], recent: [] };
     const usageRows = groups => groups.map(group => `<li>${escape(group.provider)} / ${escape(group.model)}: ${group.calls} calls or attempts${group.tokenReadings ? ' | ' + group.inputTokens + ' input / ' + group.outputTokens + ' output tokens (reported)' : ''} | ${escape(formatMs(group.durationMs))} | ${group.COMPLETE} COMPLETE / ${group.FAILED} FAILED / ${group.BLOCKED} BLOCKED${group.RUNNING ? ' / ' + group.RUNNING + ' RUNNING' : ''}</li>`).join('') || '<li>No invocations recorded.</li>';
-    const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
+    const usageHtml = `<section class="dash-section" aria-label="AI usage"><h3>AI usage</h3><p class="muted">Observed calls and duration. No billing estimates.</p><h4>Orchestrator | ${usage.orchestrator.reduce((sum, group) => sum + group.calls, 0)} calls | ${escape(formatMs(usage.orchestrator.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.orchestrator)}</ul><h4>Workers | ${usage.workers.reduce((sum, group) => sum + group.calls, 0)} attempts | ${escape(formatMs(usage.workers.reduce((sum, group) => sum + group.durationMs, 0)))}</h4><ul>${usageRows(usage.workers)}</ul><h4>Supervisors</h4><ul>${usageRows(usage.supervisors || [])}</ul><details><summary>Recent calls</summary><ol>${usage.recent.map(call => `<li>${escape(call.role)} | ${escape(call.provider)} / ${escape(call.model)} | ${escape(call.status)} | ${escape(formatMs(call.durationMs))} | ${escape(call.startTime)}</li>`).join('')}</ol></details></section>`;
     const gold = fleet.find(model => model.id === orchestra.goldModelId);
     const goldSection = rolesSupported ? `<section class="dash-section" aria-label="Gold model"><h3>Gold model</h3><label>Preferred worker<select data-gold-model><option value="">Choose Gold model</option>${fleet.filter(model => model.roleEligibility?.worker && !model.catalogExcluded).map(model => `<option value="${escape(model.id)}" ${model.id === orchestra.goldModelId ? 'selected' : ''}>${escape(model.label)} | ${escape(model.providerId || model.provider)}/${escape(model.cli)} (${escape(model.id)})${model.roles?.worker ? '' : ' - Worker role disabled'}</option>`).join('')}${orchestra.goldModelId && (!gold || gold.catalogExcluded) ? `<option selected disabled value="${escape(orchestra.goldModelId)}">Configured Gold model unavailable: ${escape(gold?.label || orchestra.goldModelId)}</option>` : ''}</select></label><p class="muted">Use Gold model below the chat for one request. Its implementation and research jobs keep this exact model through approval, pause and resume. Worker permission and quota limits still apply; unavailable work pauses without substitution. Reviewers keep their settings.</p></section>` : '';
     el.innerHTML = `${goldSection}${workersHtml(rows)}${usageHtml}${planCards}${policySection}${models}${processes}${iv}`;
@@ -399,6 +586,7 @@
     const projects = orchestra.projects || [];
     try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
     if (!projects.some(row => row.id === projectId)) projectId = null;
+    syncWorkspaceProject();
     if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-orchestrator', { detail: { snapshot: orchestra, projectId, available: executionAvailable } }));
     if (recipient) recipient.innerHTML = '<option value="">Select a project</option>' + projects.map(row => `<option value="${escape(row.id)}"${row.id === projectId ? ' selected' : ''}>${escape(row.name)}</option>`).join('');
     fillLead();
@@ -411,6 +599,7 @@
     }
     renderChat();
     renderBoard();
+    renderWorkspace();
   }
 
   async function refresh() {
@@ -428,6 +617,7 @@
     } catch (_) {
       if (ticket !== refreshGeneration) return;
       executionAvailable = false;
+      renderWorkspace();
       if (typeof CustomEvent === 'function') window.dispatchEvent(new CustomEvent('planwharf-orchestrator', { detail: { snapshot: null, projectId, available: false } }));
     }
   }
@@ -479,6 +669,7 @@
     stopThinkTimers();
     sending = false;
     pendingText = '';
+    pendingProjectId = null;
     pendingStarted = 0;
     orchestra.thinking = null;
     askAbort = null;
@@ -504,6 +695,7 @@
     if (!sending) return;
     sendGen += 1;
     const previous = pendingText;
+    const cancelledProject = pendingProjectId;
     try {
       const body = await post('/api/orchestrator/ask/cancel', {});
       if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
@@ -514,8 +706,8 @@
     }
     endSend();
     const input = $('orch-ask-input');
-    if (input && !input.value && previous) input.value = previous;
-    if (input) input.focus();
+    if (previous) restoreDraft(cancelledProject, previous);
+    if (input && projectId === cancelledProject) input.focus();
   }
 
   async function sendChat(options = {}) {
@@ -530,14 +722,18 @@
     if (!question && !(input && input.value.trim())) return;
     const text = (input && input.value ? input.value.trim() : question);
     if (!text) return;
+    const targetProjectId = projectId;
+    if (!targetProjectId || !(orchestra.projects || []).some(row => row.id === targetProjectId)) { notice('Select the project recipient before sending.'); return; }
     const myGen = ++sendGen;
     sending = true;
     pendingText = text;
+    pendingProjectId = targetProjectId;
     pendingStarted = Date.now();
     orchestra.thinking = { question: text, thinking: '', draft: '', ms: 0 };
     askAbort = typeof AbortController === 'function' ? new AbortController() : null;
     setComposer(true);
     if (input) input.value = '';
+    workspacePreferences.draft = ''; saveWorkspace();
     chatSig = '';
     renderChat();
     const pollThink = async () => {
@@ -559,9 +755,7 @@
     };
     pollThink();
     try {
-      try { projectId = localStorage.getItem('planwharf_chat_project') || projectId; } catch (_) {}
-      if (!projectId || !(orchestra.projects || []).some(row => row.id === projectId)) throw new Error('Select the project recipient before sending.');
-      const body = await post('/api/orchestrator/ask', { question: text, projectId, requestMode: options.grillKind ? 'default' : $('orch-request-mode')?.value || 'default', ...(options.grillKind ? { grillKind: options.grillKind } : {}), ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
+      const body = await post('/api/orchestrator/ask', { question: text, projectId: targetProjectId, requestMode: options.grillKind ? 'default' : $('orch-request-mode')?.value || 'default', ...(options.grillKind ? { grillKind: options.grillKind } : {}), ...(typeof window !== 'undefined' && window.PlanwharfChatSessionId ? { chatSessionId: window.PlanwharfChatSessionId } : {}) }, askAbort ? askAbort.signal : undefined);
       if (myGen !== sendGen) return;
       if (body.snapshot) orchestra = Object.assign(orchestra, body.snapshot);
       if ($('orch-request-mode')) $('orch-request-mode').value = 'default';
@@ -570,11 +764,11 @@
     } catch (error) {
       if (myGen !== sendGen) return;
       if (!error || error.name !== 'AbortError') notice(error.message);
-      if (input && !input.value) input.value = text;
+      restoreDraft(targetProjectId, text);
     } finally {
       if (myGen !== sendGen) return;
       endSend();
-      if (input) input.focus();
+      if (input && projectId === targetProjectId) input.focus();
     }
   }
 
@@ -663,6 +857,7 @@
     $('orchestrator').addEventListener('click', async event => {
       const bulk = event.target.closest('[data-role-bulk]');
       if (bulk) {
+        if (bulk.dataset.roleBulk === 'supervisor' && !(orchestra.models || []).some(model => model.roleEligibility?.supervisor === true && typeof model.roles?.supervisor === 'boolean')) { notice('This backend has no eligible Supervisor model. No role changes were sent.'); return; }
         bulk.disabled = true;
         try { orchestra = await post('/api/models/roles/bulk', { role: bulk.dataset.roleBulk, enabled: bulk.dataset.roleEnabled === 'true' }); render(); }
         catch (error) { notice(error.message); }

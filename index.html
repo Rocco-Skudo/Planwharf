@@ -160,7 +160,14 @@
         </div>
       </form>
     </section>
-    <section class="orch-board" aria-label="Dashboard">
+    <section class="orch-board" aria-label="Team workspace">
+      <nav class="workspace-nav" aria-label="Project team panels">
+        <button type="button" class="secondary compact" data-workspace-panel="overview" aria-pressed="true">Overview</button>
+        <button type="button" class="secondary compact" data-workspace-panel="sessions" aria-pressed="false">Workers &amp; Reviewers</button>
+        <button type="button" class="secondary compact" data-workspace-panel="supervisor" aria-pressed="false">Supervisor</button>
+        <button type="button" class="secondary compact" data-workspace-focus aria-pressed="false">Focus activity</button>
+      </nav>
+      <div data-workspace-pane="overview">
       <p class="dash-live" id="dashboard-orch-live">Connecting… Provider remaining quota loads here.</p>
       <div class="worker-filters" aria-label="Worker filters">
         <label>Project<select id="dashboard-worker-project-filter"><option value="current">Selected project</option><option value="all">All projects</option></select></label>
@@ -168,9 +175,26 @@
         <label>State<select id="dashboard-worker-state-filter"><option value="all">All states</option><option value="Running">Running</option><option value="Paused">Paused</option><option value="Finished">Finished</option><option value="Exited">Exited</option></select></label>
       </div>
       <div id="dashboard-orchestrator" class="monitor"></div>
+      </div>
+      <section class="workspace-sessions" data-workspace-pane="sessions" aria-label="Assignment activity" hidden>
+        <h2>Worker &amp; Reviewer sessions</h2>
+        <p class="muted">Up to 24 retained assignments and 50 events each. Earlier evidence may remain in local archives; this view is bounded.</p>
+        <div class="workspace-session-controls">
+          <label>Assignment role<select data-workspace-role><option value="all">All roles</option><option value="worker">Workers</option><option value="reviewer">Reviewers</option><option value="unknown">Unretained role</option></select></label>
+          <label>Recorded assignment<select data-workspace-session aria-label="Recorded assignment"><option value="">No recorded assignments</option></select></label>
+        </div>
+        <div class="activity-mode" aria-label="Activity presentation">
+          <button type="button" class="secondary compact" data-activity-mode="friendly" aria-pressed="true">Friendly CLI</button>
+          <button type="button" class="secondary compact" data-activity-mode="technical" aria-pressed="false">Technical CLI</button>
+        </div>
+        <div class="workspace-history" data-workspace-history hidden><button type="button" class="secondary compact" data-history-previous>Newer assignments</button><span class="muted" data-history-label></span><button type="button" class="secondary compact" data-history-next>Earlier assignments</button></div>
+        <p data-workspace-feed class="muted" role="status">Waiting for recorded assignment evidence.</p>
+        <div data-workspace-activity tabindex="0" aria-label="Selected assignment evidence"></div>
+      </section>
+      <section id="supervisor-view" data-workspace-pane="supervisor" aria-label="Supervisor" hidden></section>
     </section>
       </main>
-      <main id="supervisor-view" aria-label="Supervisor" hidden></main>
+
     </div>
   </div>
   <dialog id="revision-dialog"><form id="revision-form"><div class="dialog-heading"><div><p class="eyebrow">NEXT STEP</p><h2>Edit the plan</h2></div><button type="button" id="close-dialog" class="icon-button" aria-label="Close">×</button></div><p class="muted">Saving adds a new version. Old ones stay.</p><label>Title<input name="title" required maxlength="120"></label><label>Goal<textarea name="direction" required rows="2" maxlength="1500"></textarea></label><label>Where it stands<textarea name="state" required rows="2" maxlength="1500"></textarea></label><div class="form-grid"><label>Already decided <small>One per line</small><textarea name="closed" rows="4" maxlength="3000"></textarea></label><label>Open questions <small>One per line</small><textarea name="open" rows="4" maxlength="3000"></textarea></label></div><p id="form-error" class="notice" hidden></p><div class="dialog-actions"><button type="button" id="cancel-dialog" class="secondary">Cancel</button><button type="submit" id="save-revision" class="primary">Save</button></div></form></dialog>

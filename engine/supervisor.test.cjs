@@ -13,7 +13,7 @@ const { runAgent } = require('./api-agent.cjs');
 const { apiConfig } = require('./external-adapters.cjs');
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'pw-supervisor-'));
 const clean = dir => { assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep) && path.basename(dir).startsWith('pw-supervisor-')); fs.rmSync(dir, { recursive: true, force: true }); };
-const model = { id: 'review-fixture', label: 'Fixture Reviewer', provider: 'codex', cli: 'gpt-6-luna', enabled: true, available: true, roles: { worker: true, orchestrator: true, reviewer: true } };
+const model = { id: 'supervisor-fixture', label: 'Fixture Supervisor', provider: 'api', adapter: 'api', cli: 'exact-fixture', enabled: true, available: true, roles: { worker: false, orchestrator: false, reviewer: false, supervisor: true } };
 function snapshot() {
   return { models: [model], projects: [{ id: 'a', name: 'Alpha', status: 'watching', megaTaskId: 'MT-a', dispatch: [{ modelId: model.id, attemptId: 'A-1', subTaskId: 'ST-work', alive: true }, { modelId: model.id, attemptId: 'A-2', subTaskId: 'ST-review', alive: true }] }, { id: 'b', name: 'Beta', status: 'idle' }],
     execution: { megaTasks: [{ id: 'MT-a', projectId: 'a' }], subTasks: [{ id: 'ST-work', megaTaskId: 'MT-a', title: 'Build feature', type: 'IMPLEMENTATION' }, { id: 'ST-review', megaTaskId: 'MT-a', title: 'Review feature', type: 'AUDIT' }], results: [], timeline: [{ id: 'E-a', projectId: 'a', summary: 'Approved work' }, { id: 'E-b', projectId: 'b', summary: 'Other project' }] } };
@@ -31,7 +31,7 @@ test('alerts acknowledge without changing work; recurrence, persistence, names a
   const dir = temp(); let calls = 0;
   try {
     const snap = snapshot(); snap.projects[0].status = 'failed'; snap.projects[0].dispatch = [];
-    const s = createSupervisor({ dir, review: async () => { calls++; return { answer: 'Review the evidence.', provider: 'codex', model: 'gpt-6-luna' }; } });
+    const s = createSupervisor({ dir, review: async () => { calls++; return { answer: 'Review the evidence.', provider: 'api', model: 'exact-fixture' }; } });
     const first = s.observe(snap).projects[0].alerts[0]; s.ignore('a', first.id); assert.throws(() => s.ignore('b', first.id));
     for (let i = 0; i < 10; i++) s.observe(snap); assert.equal(calls, 0); assert.equal(s.view(snap).projects[0].alerts[0].ignored, true);
     s.settings({ name: ' Captain <&> ' }, snap); assert.equal(s.view(snap).name, 'Captain <&>'); s.settings({ name: '  ' }, snap); assert.equal(s.view(snap).name, 'Supervisor');
@@ -71,9 +71,9 @@ test('real Supervisor HTTP: independent questions, strict roles, scoped ignore, 
     const snap = await request('/api/orchestrator?readOnly=1'); assert.equal(snap.asks.length, 0, 'Supervisor conversation is separate from Orchestrator'); assert.equal(snap.supervisor.projects[1].turns.length, 0); assert.equal(fs.readFileSync(planFile, 'utf8'), before, 'Model prose/actions cannot dispatch or mutate work');
     await request('/api/supervisor/ask', { projectId: 'missing', question: 'Inspect other project' }, 400);
     await request('/api/supervisor/settings', { modelId: 'unknown' }, 400);
-    const invocations = fs.readFileSync(path.join(dir, '.attempts-notebook', 'invocations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse); assert.ok(invocations.some(i => i.role === 'reviewer' && i.modelId === model.id && i.status === 'COMPLETE'));
-    await request('/api/models/roles', { id: model.id, roles: { orchestrator: true, worker: true, reviewer: false } });
-    const refused = await request('/api/supervisor/ask', { projectId: 'a', question: 'Try again' }); assert.equal(refused.projects[0].turns.at(-1).status, 'failed'); assert.equal(calls.length, 1, 'Revoked Reviewer permission is enforced without fallback');
+    const invocations = fs.readFileSync(path.join(dir, '.attempts-notebook', 'invocations.jsonl'), 'utf8').trim().split('\n').map(JSON.parse); assert.ok(invocations.some(i => i.role === 'supervisor' && i.modelId === model.id && i.status === 'COMPLETE'));
+    await request('/api/models/roles', { id: model.id, roles: { reviewer: true, supervisor: false } });
+    const refused = await request('/api/supervisor/ask', { projectId: 'a', question: 'Try again' }); assert.equal(refused.projects[0].turns.at(-1).status, 'failed'); assert.equal(calls.length, 1, 'Revoked Supervisor permission is enforced without fallback even with Reviewer permission');
   } finally { await new Promise(r => server.close(r)); clean(dir); }
 });
 test('Supervisor API transport has no tools, uses exact identity, and does not cancel a live Orchestrator request', async () => {
@@ -89,7 +89,7 @@ test('Supervisor API transport has no tools, uses exact identity, and does not c
     await assert.rejects(() => runAgent({ config, model: 'exact-fixture', prompt: 'Fixture', lead: true, advisory: true }, { folder: dir, request: async (_url, init) => { assert.equal(JSON.parse(init.body).tools, undefined); return new Response(JSON.stringify({ model: 'exact-fixture', choices: [{ message: { role: 'assistant', content: null, tool_calls: [{ id: 'bad', type: 'function', function: { name: 'write_file', arguments: '{"path":"forbidden.txt","content":"bad"}' } }] } }] })); } }), /cannot execute tools/);
     assert.equal(fs.existsSync(path.join(dir, 'forbidden.txt')), false);
     const previous = process.env.PLANWHARF_CODEX; process.env.PLANWHARF_CODEX = process.execPath;
-    try { const spec = askCliArgs({ model, purpose: 'supervisor', folder: dir, question: 'Fixture' }); assert.equal(spec.args[spec.args.indexOf('--sandbox') + 1], 'read-only'); assert.ok(!spec.args.includes('--dangerously-bypass-approvals-and-sandbox')); assert.match(spec.prompt, /independent Reviewer/); }
+    try { assert.throws(() => askCliArgs({ model: { id: 'codex-fixture', provider: 'codex', cli: 'gpt-fixture' }, purpose: 'supervisor', folder: dir, question: 'Fixture' }), /No verified no-tool Supervisor transport/); }
     finally { if (previous === undefined) delete process.env.PLANWHARF_CODEX; else process.env.PLANWHARF_CODEX = previous; }
   } finally { await new Promise(r => server.close(r)); if (old === undefined) delete process.env.PW_SUPERVISOR_FIXTURE_KEY; else process.env.PW_SUPERVISOR_FIXTURE_KEY = old; clean(dir); }
 });

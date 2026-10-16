@@ -1506,3 +1506,32 @@ body[data-layout-height-resizing] { cursor: row-resize; user-select: none; }
 .app-update-dialog { width: min(560px, calc(100vw - 32px)); }
 .app-update-dialog p { line-height: 1.6; }
 .app-update-dialog .dialog-actions { flex-wrap: wrap; }
+
+/* One persistent conversation, selectable team evidence in the existing split. */
+.workspace-nav { display:flex; flex-wrap:wrap; gap:6px; padding:10px; position:sticky; top:0; z-index:10; background:var(--dialog-bg); border-bottom:1px solid var(--border); }
+.workspace-nav button[aria-pressed=true], .activity-mode button[aria-pressed=true] { border-color:var(--accent); background:var(--accent-soft, var(--paper)); font-weight:700; }
+.workspace-session-controls { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin:14px 0; }
+.workspace-session-controls label { display:grid; gap:5px; flex:1; min-width:160px; }
+.activity-mode { display:flex; gap:6px; }
+.workspace-sessions { min-width:0; }
+.workspace-sessions h2 { font-size:18px; }
+.activity-heading { display:flex; flex-wrap:wrap; align-items:start; gap:8px; justify-content:space-between; }
+.activity-heading h3 { font-size:15px; margin:0; overflow-wrap:anywhere; }
+.activity-timeline { list-style:none; padding:0; margin:16px 0; font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace; }
+.activity-event { padding:12px 8px; border-top:1px solid var(--border); overflow-wrap:anywhere; }
+.activity-event small { display:block; color:var(--muted); margin-top:4px; font-family:inherit; }
+.activity-tag { color:var(--accent); font-weight:700; }
+.activity-technical,.activity-event pre { font:12px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; overflow-wrap:anywhere; padding:12px; background:var(--page); border:1px solid var(--border); border-radius:8px; }
+.activity-validation { font-size:13px; border-left:3px solid var(--amber); padding-left:10px; }
+[data-workspace-pane][hidden] { display:none !important; }
+.orch-board > #supervisor-view { padding:12px 0 !important; }
+.orch-board .supervisor-heading h1 { font-size:22px; }
+.orch-board .supervisor-layout { grid-template-columns:minmax(0,1fr); }
+.orch-board .supervisor-observation,.orch-board .supervisor-conversation { padding:14px; }
+.orch-shell[data-workspace-focus-state=true] .orch-chat { display:none; }
+.orch-shell[data-workspace-focus-state=true] > .layout-splitter { display:none; }
+.orch-shell[data-workspace-focus-state=true] { grid-template-columns:minmax(0,1fr) !important; }
+@media(max-width:600px) { .workspace-nav { position:relative; } .workspace-nav button { flex:1; } .workspace-session-controls { display:grid; } }
+
+.workspace-sessions select { min-width:0; max-width:100%; width:100%; }
+.workspace-sessions pre { min-width:0; max-width:100%; overflow-x:auto; }

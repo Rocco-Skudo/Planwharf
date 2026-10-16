@@ -55,7 +55,7 @@ test('account switching isolates roles, invalidates quota and stale access, and 
   const model = state => state.models.find(item => item.id === 'grok-fixture');
   try {
     await start();
-    const personal = { orchestrator: false, worker: true, reviewer: false };
+    const personal = { orchestrator: false, worker: true, reviewer: false, supervisor: false };
     await request('/api/models/roles', { id: 'grok-fixture', roles: personal });
     await request('/api/orchestrator');
     account = { key: 'fixture-business', type: 'business' };
@@ -64,7 +64,7 @@ test('account switching isolates roles, invalidates quota and stale access, and 
     assert.equal(state.plans.find(pool => pool.id === 'Grok').readable, false, 'Previous personal quota cannot leak into Business');
     state = await request('/api/catalog/settings', { providerId: 'grok', allModelsEnabled: true });
     assert.equal(model(state).enabled, true, 'Bulk configuration targets the active account roles');
-    const business = { orchestrator: false, worker: false, reviewer: true };
+    const business = { orchestrator: false, worker: false, reviewer: true, supervisor: false };
     await request('/api/models/roles', { id: 'grok-fixture', roles: business });
     account = { key: 'fixture-personal', type: 'normal' };
     state = await request('/api/orchestrator?readOnly=1');

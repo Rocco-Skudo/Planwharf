@@ -521,6 +521,14 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         snapshot.providerModels = providerModels.snapshot();
         return json(200, snapshot);
       }
+      if (request.method === 'GET' && pathname === '/api/orchestrator/activity-sessions') {
+        if ([...loc.searchParams.keys()].some(key => !['projectId', 'offset', 'limit'].includes(key))) throw new RequestError(400, 'Invalid activity session page fields.');
+        const projectId = loc.searchParams.get('projectId'), plan = await readPlan(planFile);
+        if (!(plan.schema === 2 ? plan.projects : [plan]).some(item => item.project.id === projectId)) throw new RequestError(400, 'Select an existing project.');
+        const offset = Number(loc.searchParams.get('offset') ?? '0'), limit = Number(loc.searchParams.get('limit') ?? '24');
+        if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 24) throw new RequestError(400, 'Invalid activity session page.');
+        return json(200, await orchestra.activitySessionPage(projectId, offset, limit));
+      }
       if (request.method === 'GET' && pathname === '/api/skills') {
         return json(200, skillsSnapshot());
       }

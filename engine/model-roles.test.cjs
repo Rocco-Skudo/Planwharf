@@ -49,7 +49,7 @@ test('role settings persist, incompatible roles are rejected, exact audit/implem
     await request('/api/models/roles', { id: 'capable', roles: { reviewer: 'yes' } }, 400);
     await request('/api/models/roles', { id: 'capable', roles: { admin: true } }, 400);
     await request('/api/orchestrator/lead', { id: 'capable' });
-    const roles = { orchestrator: false, worker: false, reviewer: true };
+    const roles = { orchestrator: false, worker: false, reviewer: true, supervisor: false };
     const updated = await request('/api/models/roles', { id: 'capable', roles });
     assert.equal(updated.orchestratorId, null); assert.deepEqual(updated.models.find(model => model.id === 'capable').roles, roles);
     await request('/api/orchestrator/lead', { id: 'capable' }, 400);
