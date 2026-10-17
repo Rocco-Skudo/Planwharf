@@ -89,11 +89,6 @@ test('receipts require exact assignment identity, bounded storage and registry-o
  const row=c.reconcile('a').deliveries[0]; assert.equal(row.submitted,true); assert.equal(row.loaded,'unverified'); assert.equal(row.followed,'unverified'); assert.equal(row.verified,false);
 });
 
-test('native Grill with docs is visible metadata only and cannot download or execute',async t=>{
- const c=createSkillCatalog({dir:fixture(t),fetchImpl:()=>{throw Error('No downloads');}}), row=c.snapshot('a').catalog.find(r=>r.id==='matt/grill-with-docs');
- assert.equal(row.validation,'unsupported-native-dependencies');assert.equal(row.reviewed,false);assert.equal(row.downloadable,false);assert.equal(row.installed,false);assert.ok(row.dependencies.some(d=>d.id==='matt/domain-modeling'&&d.reviewed===false));
- await assert.rejects(c.install('a',row.id,true),/reviewed pinned/); c.configure('a',{mode:'manual',selected:[row.id]});const selection=c.select({...context,role:'orchestrator',task:'grill with docs'});assert.equal(selection.selected.length,0);assert.match(selection.rejected.find(r=>r.id===row.id).reason,/Unsupported native dependencies/);
-});
 test('prepared prompt-file receipt retains evidence without claiming submission or reading',async t=>{
  const dir=fixture(t),c=createSkillCatalog({dir,fetchImpl:fetchFixture});await c.install('a','ecc/verification-loop',true);enable(c,'a','ecc/verification-loop');const a=c.attach({...context,adapter:'grok',provider:'grok'});fs.mkdirSync(path.dirname(a.receiptPath),{recursive:true});
  const receipt={...a.skillDelivery,submitted:false,transport:'prompt-file-prepared-read-unverified',transportHash:require('./skill-catalog.cjs').hash(a.prompt),loaded:true,followed:true,verified:true};
@@ -101,4 +96,52 @@ test('prepared prompt-file receipt retains evidence without claiming submission 
  fs.writeFileSync(a.receiptPath,JSON.stringify(receipt));const row=c.reconcile('a').deliveries[0];assert.equal(row.submitted,false);assert.equal(row.transport,receipt.transport);assert.equal(row.transportHash,receipt.transportHash);assert.match(row.submissionEvidence,/file reading, submission.*unverified/);assert.equal(row.loaded,'unverified');assert.equal(row.followed,'unverified');assert.equal(row.verified,false);
  assert.equal(createSkillCatalog({dir}).reconcile('a').deliveries[0].transport,receipt.transport);
  fs.writeFileSync(a.receiptPath,JSON.stringify({...receipt,submitted:true,transport:'cli-stdin-written-consumption-unverified'}));assert.equal(c.reconcile('a').deliveries[0].submitted,true);
+});
+
+test('identical local instructions in different paths attach once after newline normalization',t=>{
+ const dir=fixture(t),folder=path.join(dir,'project');fs.mkdirSync(folder);const content=markdown('shared-procedure');local(folder,'first',content);local(folder,'second',content.replace(/\n/g,'\r\n'));
+ const c=createSkillCatalog({dir:path.join(dir,'registry')});c.discoverLocal('a',folder);for(const row of c.snapshot('a').catalog.filter(r=>r.source==='project-local'))enable(c,'a',row.id);
+ const selected=c.select({...context,projectFolder:folder});assert.equal(selected.selected.length,1);assert.equal(selected.rejected.filter(r=>r.reason==='Duplicate instruction content.').length,1);assert.equal(c.attach({...context,projectFolder:folder}).prompt.split('PROCEDURE-shared-procedure').length-1,1);
+});
+test('cross-source duplicate entry text deduplicates while distinct supporting files remain eligible',async t=>{
+ const dir=fixture(t),folder=path.join(dir,'project');fs.mkdirSync(folder);local(folder,'local-copy',markdown('verification-loop'));
+ const base=REVIEWED_SKILLS.find(r=>r.id==='ecc/verification-loop'),multi={...base,id:'ecc/multi-file',files:[...base.files,'skills/verification-loop/extra.md']};
+ const c=createSkillCatalog({dir:path.join(dir,'registry'),candidates:[base,multi],fetchImpl:async url=>url.endsWith('/extra.md')?{ok:true,text:async()=> 'Distinct supporting verification steps.'}:fetchFixture(url)});
+ for(const id of [base.id,multi.id]){await c.install('a',id,true);enable(c,'a',id);}c.discoverLocal('a',folder);const localRow=c.snapshot('a').catalog.find(r=>r.source==='project-local');enable(c,'a',localRow.id);
+ const selected=c.select({...context,projectFolder:folder});assert.deepEqual(selected.selected.map(r=>r.id),[base.id,multi.id]);assert.ok(selected.rejected.some(r=>r.id===localRow.id&&r.reason==='Duplicate instruction content.'));
+});
+
+test('docs compatibility requires exact explicit request and separately eligible grilling',async t=>{
+ const dir=fixture(t);let calls=0, mutateGrilling=false;const c=createSkillCatalog({dir,fetchImpl:async url=>{calls++;if(mutateGrilling&&url.includes('/productivity/grilling/SKILL.md'))return{ok:true,text:async()=>markdown('changed-grilling')};return fetchFixture(url);}}),id='matt/grill-with-docs';const request={...context,role:'orchestrator',task:'Discuss architecture',requestedSkills:[id]};
+ const row=c.snapshot('a').catalog.find(r=>r.id===id);assert.equal(row.validation,'instruction-compatible-docs-drafts');assert.equal(row.reviewed,true);assert.ok(row.dependencies.find(d=>d.id==='matt/domain-modeling').bundled);assert.equal(row.files.some(f=>f.includes('/grilling/')),false);
+ await assert.rejects(c.install('a',id,false),/Explicit approval/);assert.equal(calls,0);await c.install('a',id,true);assert.equal(c.select(request).selected.length,0);enable(c,'a',id);
+ assert.equal(c.select(request).selected.length,0);assert.match(c.select(request).rejected.find(r=>r.id===id).reason,/grilling dependency/);
+ await c.install('a','matt/grilling',true);enable(c,'a','matt/grilling');assert.deepEqual(c.select(request).selected.map(r=>r.id),['matt/grilling',id]);
+ const inspected=c.inspect('a',id);assert.match(inspected.texts['PLANWHARF-COMPATIBILITY.md'],/DRAFTS IN CHAT ONLY/);assert.match(inspected.texts['PLANWHARF-COMPATIBILITY.md'],/do not write project documentation or source/);assert.equal(inspected.contentHash,require('./skill-catalog.cjs').hash(JSON.stringify(inspected.texts)));
+ assert.ok(c.select({...request,requestedSkills:[]}).rejected.some(r=>r.id===id&&r.reason==='Explicit docs interview required.'));
+ assert.equal(c.select({...request,role:'worker'}).selected.some(r=>r.id===id),false);
+ c.configure('a',{disabled:['matt/grilling']});assert.equal(c.select(request).selected.some(r=>r.id===id),false);
+ c.configure('a',{disabled:[],mode:'manual',selected:[id]});assert.equal(c.select(request).selected.length,0);
+ c.configure('a',{selected:[id,'matt/grilling']});assert.equal(c.select(request).selected.length,2);
+ const attached=c.attach(request);assert.equal(attached.prompt.split('SKILL matt/grilling@').length-1,1);assert.equal(attached.prompt.split('SKILL matt/grill-with-docs@').length-1,1);assert.equal(attached.delivery.nativeSupport,'unverified');
+ c.approve('a','matt/grilling',false);assert.equal(c.select(request).selected.some(r=>r.id===id),false);
+ enable(c,'a','matt/grilling');mutateGrilling=true;await c.install('a','matt/grilling',true);assert.equal(c.select(request).selected.some(r=>r.id===id),false);
+});
+test('docs port policy bytes are bound to inspected approval and invalidate refreshed consent',async t=>{
+ const candidate=REVIEWED_SKILLS.find(r=>r.id==='matt/grill-with-docs'),dir=fixture(t);const c=createSkillCatalog({dir,fetchImpl:fetchFixture});await c.install('a',candidate.id,true);const inspected=enable(c,'a',candidate.id);
+ const changed=createSkillCatalog({dir,candidates:[{...candidate,adapterInstructions:candidate.adapterInstructions+' Clarify draft provenance.'}],fetchImpl:fetchFixture});await changed.install('a',candidate.id,true);assert.notEqual(changed.inspect('a',candidate.id).contentHash,inspected.contentHash);assert.equal(changed.snapshot('a').catalog.find(r=>r.id===candidate.id).approved,false);
+ assert.throws(()=>changed.approve('a',candidate.id,true,inspected.contentHash),/content hash/);
+});
+
+test('reviewed declared conflicts block both eligible instructions until one is explicitly excluded',async t=>{
+ const base=REVIEWED_SKILLS.find(r=>r.id==='ecc/verification-loop'),first={...base,id:'ecc/first',conflicts:['ecc/second']},second={...base,id:'ecc/second',entry:'skills/second/SKILL.md',files:['skills/second/SKILL.md','LICENSE']};
+ const c=createSkillCatalog({dir:fixture(t),candidates:[first,second],fetchImpl:async url=>url.includes('/second/')?{ok:true,text:async()=>markdown('distinct-second')}:fetchFixture(url)});
+ for(const candidate of [first,second]){await c.install('a',candidate.id,true);enable(c,'a',candidate.id);}const selection=c.select(context);assert.equal(selection.selected.length,0);for(const id of [first.id,second.id])assert.match(selection.rejected.find(r=>r.id===id).reason,/Declared instruction conflict/);
+ assert.deepEqual(c.snapshot('a').catalog.find(r=>r.id===first.id).conflicts,['ecc/second']);assert.equal(c.attach(context).prompt,'');
+ c.configure('a',{exclusions:[second.id]});assert.deepEqual(c.select(context).selected.map(r=>r.id),[first.id]);
+ c.configure('a',{exclusions:[],disabled:[first.id]});assert.deepEqual(c.select(context).selected.map(r=>r.id),[second.id]);
+});
+test('malformed conflict declarations are rejected before registry or instruction use',t=>{
+ const candidate=REVIEWED_SKILLS.find(r=>r.id==='ecc/verification-loop');
+ for(const conflicts of [candidate.id,[candidate.id],['../escape'],['ecc/peer','ecc/peer'],Array.from({length:31},(_,i)=>'ecc/peer-'+i),[null]])assert.throws(()=>createSkillCatalog({dir:fixture(t),candidates:[{...candidate,conflicts}]}),/conflicts/);
 });

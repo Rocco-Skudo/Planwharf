@@ -21,7 +21,7 @@ function fixture(t, extra = {}) {
     askModel: async info => { calls.push(info); return { answer: 'Q1: Which outcome? Recommended: a bounded prototype.' }; },
     spawnWorker: () => { throw Error('Clarification must not dispatch workers'); }, ...extra });
   t.after(async () => { await orchestra.shutdown(); assert.ok(dir.startsWith(os.tmpdir() + path.sep)); fs.rmSync(dir, { recursive: true, force: true }); });
-  return { orchestra, calls, reads, enabled };
+  return { orchestra, calls, reads, enabled, plan };
 }
 test('legacy clarification threads project identity and carries each required procedure once', async t => {
   const f = fixture(t); await f.orchestra.setOrchestrator('lead-fixture'); await f.orchestra.setGrillPropose(true, 'docs');
@@ -55,4 +55,24 @@ test('project snapshots expose callback metadata per project without model calls
   const snapshot = await f.orchestra.snapshot();
   for (const project of snapshot.projects) { assert.equal(project.projectSkills.projectId, project.id); assert.deepEqual(project.projectSkills.enabled, ['local/' + project.id]); }
   assert.deepEqual(new Set(seen), new Set(['alpha', 'beta'])); assert.deepEqual(f.calls, []); assert.deepEqual(f.reads, []);
+});
+
+test('fresh idle linked projects allow explicit docs inspection without filesystem polling', async t => {
+  let inspections = 0;
+  const f = fixture(t, { inspectFolder: () => { inspections++; return { names: ['README.md'], docs: ['README.md'], fileCount: 1, git: false }; } });
+  delete f.plan.projects[1].project.folder;
+  const snapshot = await f.orchestra.snapshot();
+  const linked = snapshot.projects.find(row => row.id === 'alpha'), unlinked = snapshot.projects.find(row => row.id === 'beta');
+  assert.equal(inspections, 0); assert.equal(linked.docsAvailability, 'unknown'); assert.equal(linked.canGrillDocs, true); assert.deepEqual(linked.docs, []);
+  assert.equal(unlinked.docsAvailability, 'unlinked'); assert.equal(unlinked.canGrillDocs, false);
+  await f.orchestra.setGrillPropose(true, 'docs');
+  const requested = await f.orchestra.startAutoTask('alpha'); assert.equal(requested.ok, true); assert.equal(requested.kind, 'docs'); assert.ok(inspections > 0);
+  assert.equal((await f.orchestra.snapshot()).projects.find(row => row.id === 'alpha').docsAvailability, 'available');
+});
+test('explicit docs inspection of a known empty folder fails truthfully and disables retry hint', async t => {
+  const f = fixture(t, { inspectFolder: () => ({ names: [], docs: [], fileCount: 0, git: false }) });
+  assert.equal((await f.orchestra.snapshot()).projects[0].canGrillDocs, true);
+  await f.orchestra.setGrillPropose(true, 'docs'); const requested = await f.orchestra.startAutoTask('alpha');
+  assert.equal(requested.ok, false); assert.match(requested.reason, /No docs in the folder/); assert.deepEqual(f.calls, []);
+  const row = (await f.orchestra.snapshot()).projects.find(row => row.id === 'alpha'); assert.equal(row.docsAvailability, 'none'); assert.equal(row.canGrillDocs, false);
 });

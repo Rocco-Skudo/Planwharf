@@ -9,9 +9,10 @@ const REVIEWED_SKILLS = [
   { id: 'matt/tdd', name: 'tdd', source: 'matt', repository: 'mattpocock/skills', revision: MATT_REV, license: 'MIT', attribution: 'Copyright 2026 Matt Pocock', description: 'Behavior-driven test-first development at approved testing seams.', files: ['skills/engineering/tdd/SKILL.md', 'skills/engineering/tdd/tests.md', 'skills/engineering/tdd/mocking.md', 'LICENSE'], entry: 'skills/engineering/tdd/SKILL.md', roles: ['worker'], triggers: ['test', 'bug', 'fix', 'feature', 'tdd'], tools: ['project-read', 'project-write', 'authorized-test-command'], harnesses: ['instruction-compatible'], dependencies: [{ id: 'matt/codebase-design', required: false, condition: 'Interface/seam design is uncertain', reviewed: false }], warnings: ['Confirm testing seams before tests. Conditional codebase-design dependency is not imported; interface design tasks are ineligible until reviewed.'], requires: 'approved-testing-seams', reviewed: true },
   { id: 'ecc/verification-loop', name: 'verification-loop', source: 'ecc', repository: 'affaan-m/ECC', revision: ECC_REV, license: 'MIT', attribution: 'Copyright 2026 Affaan Mustafa', description: 'Review build, type, lint, test, security and diff evidence after an authorized change.', files: ['skills/verification-loop/SKILL.md', 'LICENSE'], entry: 'skills/verification-loop/SKILL.md', roles: ['worker', 'reviewer'], triggers: ['verify', 'verification', 'review', 'test', 'refactor'], tools: ['project-read', 'authorized-test-command'], harnesses: ['instruction-compatible'], dependencies: [], warnings: ['Claude-specific text and npm/Python shell examples are not universal. Skip unsupported phases honestly. Coverage target is guidance, not measured evidence. Continuous mode and hooks are disabled.'], reviewed: true }
 ];
-// Metadata inspected at the pinned source only. Its native dependency calls
-// have no reviewed compatibility delivery path and are never imported.
-const UNSUPPORTED_SKILLS = [{ id: 'matt/grill-with-docs', name: 'grill-with-docs', source: 'matt', repository: 'mattpocock/skills', revision: MATT_REV, license: 'MIT', attribution: 'Copyright 2026 Matt Pocock', description: 'Interview a plan or design while preparing architecture decisions and a glossary.', files: ['skills/engineering/grill-with-docs/SKILL.md', 'LICENSE'], entry: 'skills/engineering/grill-with-docs/SKILL.md', roles: ['orchestrator'], triggers: ['grill with docs'], tools: ['native-Skill-tool'], harnesses: ['native-Skill-tool-required-unverified'], dependencies: [{ id: 'matt/grilling', required: true, reviewed: true }, { id: 'matt/domain-modeling', required: true, reviewed: false }], warnings: ['Pinned entry calls the native Skill tool for grilling and domain-modeling. Native Skill invocation and domain-modeling dependency are unsupported and unverified. Metadata only: downloading and execution are disabled.'], validation: 'unsupported-native-dependencies', reviewed: false, downloadable: false }];
+const DOCS_COMPATIBILITY = 'PLANWHARF DOCS INTERVIEW ADAPTER v1 (instruction compatibility; native loading unverified). The original pinned entry asks for native Skill tool calls. Replace those calls with the separately supplied approved grilling procedure and the bundled domain-modeling Markdown below; do not invoke a native Skill tool or import dependencies. Conduct the interview and prepare glossary and ADR DRAFTS IN CHAT ONLY. Treat source instructions to write documentation as proposals: do not write project documentation or source, run scripts, dispatch workers or expand permissions until separate user authorization through existing Planwharf approval controls. This adapted draft-only workflow is not equivalent to original inline documentation writes. Preserve existing no-publication and role restrictions.';
+const DOCS_SKILL = { id: 'matt/grill-with-docs', name: 'grill-with-docs', source: 'matt', repository: 'mattpocock/skills', revision: MATT_REV, license: 'MIT', attribution: 'Copyright 2026 Matt Pocock', description: 'Explicit docs interview with glossary and architecture decision drafts in chat; project writes require separate approval.', files: ['skills/engineering/grill-with-docs/SKILL.md', 'skills/engineering/domain-modeling/SKILL.md', 'skills/engineering/domain-modeling/GLOSSARY-FORMAT.md', 'skills/engineering/domain-modeling/ADR-FORMAT.md', 'LICENSE'], entry: 'skills/engineering/grill-with-docs/SKILL.md', roles: ['orchestrator'], triggers: [], tools: ['authorized-read-only-inspection', 'user-questions', 'chat-document-drafts'], harnesses: ['instruction-compatible-docs-drafts'], dependencies: [{ id: 'matt/grilling', required: true, reviewed: true, bundled: false }, { id: 'matt/domain-modeling', required: true, reviewed: true, bundled: true }], warnings: ['Native Skill invocation is not used or verified. Original pinned Markdown is preserved, but Planwharf adapts documentation writes into drafts in chat only. Separate approval is required before project documentation/source writes or dispatch.'], validation: 'instruction-compatible-docs-drafts', adapterInstructions: DOCS_COMPATIBILITY, disableModelInvocation: true, reviewed: true, downloadable: true };
+REVIEWED_SKILLS.push(DOCS_SKILL);
+const UNSUPPORTED_SKILLS = [];
 function writeAtomic(file, value) { fs.mkdirSync(path.dirname(file), { recursive: true }); const temp = file + '.' + crypto.randomUUID() + '.tmp'; fs.writeFileSync(temp, JSON.stringify(value, null, 2) + '\n', { flag: 'wx' }); fs.renameSync(temp, file); }
 function confined(root, relative, { existing = false } = {}) {
   if (typeof relative !== 'string' || !relative || path.isAbsolute(relative) || relative.split(/[\\/]/).some(p => !p || p === '.' || p === '..') || /[\x00-\x1f:]/.test(relative)) throw Error('Invalid project-local path.');
@@ -49,6 +50,9 @@ function createSkillCatalog({ dir, fetchImpl = globalThis.fetch, candidates = [.
   const file = path.join(dir, 'registry.json'); let store = { schema: 1, installed: {}, projects: {}, deliveries: [] };
   try { const saved = JSON.parse(fs.readFileSync(file)); if (saved.schema !== 1 || !saved.installed || !saved.projects || !Array.isArray(saved.deliveries)) throw Error('Invalid Skill registry.'); store = saved; } catch (error) { if (error.code !== 'ENOENT') throw error; }
   const save = () => writeAtomic(file, store);
+  for (const item of candidates) {
+    if (item.conflicts !== undefined && (!Array.isArray(item.conflicts) || item.conflicts.length > 30 || new Set(item.conflicts).size !== item.conflicts.length || item.conflicts.some(id => typeof id !== 'string' || !/^[a-z0-9][a-z0-9._-]*(?:\/[a-z0-9][a-z0-9._-]*){1,3}$/.test(id) || id.length > 200 || id === item.id))) throw Error('Reviewed Skill conflicts must be bounded distinct non-self Skill identities.');
+  }
   const definitions = new Map(candidates.map(item => [item.id, structuredClone(item)]));
   const defaults = () => ({ mode: 'auto', deliveryEnabled: false, selected: [], disabled: [], sources: ['matt', 'ecc', 'project-local'], exclusions: [], approvals: {}, testingSeamsApproved: false });
   const prefs = projectId => ({ ...defaults(), ...store.projects[projectId] });
@@ -73,7 +77,7 @@ function createSkillCatalog({ dir, fetchImpl = globalThis.fetch, candidates = [.
     requireProject(projectId); const candidate = definitions.get(id);
     if (approved !== true || !candidate?.reviewed) throw Error('Explicit approval of a reviewed pinned candidate is required before downloading.');
     if (!/^[a-f0-9]{40}$/.test(candidate.revision) || !/^[\w.-]+\/[\w.-]+$/.test(candidate.repository)) throw Error('Invalid pinned source.');
-    const texts = {};
+    const texts = candidate.adapterInstructions ? { 'PLANWHARF-COMPATIBILITY.md': candidate.adapterInstructions } : {};
     for (const relative of candidate.files) {
       if (relative !== 'LICENSE' && (!relative.endsWith('.md') || relative.includes('..') || !/^skills\/[\w./-]+$/.test(relative))) throw Error('Only reviewed Markdown and license files can be imported.');
       const response = await fetchImpl(`https://raw.githubusercontent.com/${candidate.repository}/${candidate.revision}/${relative}`, { signal: AbortSignal.timeout(8000), redirect: 'error' });
@@ -84,7 +88,7 @@ function createSkillCatalog({ dir, fetchImpl = globalThis.fetch, candidates = [.
     const parsed = parseSkill(texts[candidate.entry]);
     if (!parsed.name || !parsed.description) throw Error('Skill name/description metadata missing.');
     const contentHash = hash(JSON.stringify(texts));
-    store.installed[id] = { ...candidate, description: parsed.description, texts, contentHash, installedAt: now(), validation: 'reviewed-text-only', location: path.join(dir, 'registry.json') };
+    store.installed[id] = { ...candidate, description: candidate.adapterInstructions ? candidate.description : parsed.description, texts, contentHash, installedAt: now(), validation: candidate.validation || 'reviewed-text-only', location: path.join(dir, 'registry.json') };
     // Approval is revision/content specific; refresh never auto-approves changed bytes.
     const next = prefs(projectId); next.approvals = { ...next.approvals, [id]: next.approvals[id] === contentHash ? contentHash : null }; store.projects[projectId] = next; save(); return snapshot(projectId);
   }
@@ -123,7 +127,7 @@ function createSkillCatalog({ dir, fetchImpl = globalThis.fetch, candidates = [.
   function select(context) {
     requireProject(context.projectId); const p = prefs(context.projectId), text = [context.projectType, context.requirements, context.context, context.task].filter(Boolean).join(' ').toLowerCase(); const selected = [], rejected = [], seen = new Set(); let bytes = 0;
     for (const item of rows(context.projectId)) {
-      let reason = item.reviewed === false ? 'Unsupported native dependencies; metadata only, execution disabled.' : !item.enabled ? 'Not approved for this content revision or disabled.' : !p.sources.includes(item.source) ? 'Source excluded by project.' : [...p.exclusions, ...(context.exclusions || [])].includes(item.id) ? 'Task/project exclusion.' : !(item.roles || []).includes(context.role) ? 'Role incompatible.' : !['codex', 'grok', 'antigravity', 'api', 'configured-cli'].includes(context.adapter) ? 'Adapter has no reviewed instruction delivery path.' : p.mode === 'manual' && !p.selected.includes(item.id) ? 'Not manually selected.' : item.requires === 'approved-testing-seams' && !(context.testingSeamsApproved ?? p.testingSeamsApproved) ? 'Testing seams need user approval.' : item.id === 'matt/tdd' && /\b(interface|seam) design\b/.test(text) ? 'Conditional codebase-design dependency is unreviewed.' : p.mode === 'auto' && !(item.triggers || []).some(trigger => text.includes(trigger)) ? 'No applicable task trigger.' : null;
+      let reason = item.id === 'matt/grill-with-docs' && !context.requestedSkills?.includes(item.id) ? 'Explicit docs interview required.' : item.reviewed === false ? 'Unsupported native dependencies; metadata only, execution disabled.' : !item.enabled ? 'Not approved for this content revision or disabled.' : !p.sources.includes(item.source) ? 'Source excluded by project.' : [...p.exclusions, ...(context.exclusions || [])].includes(item.id) ? 'Task/project exclusion.' : !(item.roles || []).includes(context.role) ? 'Role incompatible.' : !['codex', 'grok', 'antigravity', 'api', 'configured-cli'].includes(context.adapter) ? 'Adapter has no reviewed instruction delivery path.' : p.mode === 'manual' && !p.selected.includes(item.id) ? 'Not manually selected.' : item.requires === 'approved-testing-seams' && !(context.testingSeamsApproved ?? p.testingSeamsApproved) ? 'Testing seams need user approval.' : item.id === 'matt/tdd' && /\b(interface|seam) design\b/.test(text) ? 'Conditional codebase-design dependency is unreviewed.' : p.mode === 'auto' && !context.requestedSkills?.includes(item.id) && !(item.id === 'matt/grilling' && context.requestedSkills?.includes('matt/grill-with-docs')) && !(item.triggers || []).some(trigger => text.includes(trigger)) ? 'No applicable task trigger.' : null;
       const installed = store.installed[item.id];
       if (!reason && installed?.source === 'project-local') {
         try {
@@ -133,12 +137,32 @@ function createSkillCatalog({ dir, fetchImpl = globalThis.fetch, candidates = [.
         } catch { reason = 'Project-local Skill requires a fresh matching authorized project folder and content approval.'; }
       }
       const body = installed ? Object.entries(installed.texts).filter(([name]) => name !== 'LICENSE').map(([name, content]) => `FILE ${name}\n${content}`).join('\n\n') : '';
-      const fingerprint = hash(body.replace(/\r\n/g, '\n').trim());
+      // Storage paths are provenance, not instruction content. Keep file
+      // boundaries and order so distinct supporting procedures stay distinct.
+      const instructionContents = installed ? Object.entries(installed.texts).filter(([name]) => name !== 'LICENSE').map(([, content]) => content.replace(/\r\n/g, '\n').trim()) : [];
+      const fingerprint = hash(JSON.stringify(instructionContents));
       if (!reason && seen.has(fingerprint)) reason = 'Duplicate instruction content.';
       if (!reason && bytes + Buffer.byteLength(body) > 48000) reason = 'Bounded instruction budget exceeded; not silently truncated.';
       if (reason) { rejected.push({ id: item.id, reason }); continue; }
       seen.add(fingerprint); bytes += Buffer.byteLength(body); selected.push({ id: item.id, name: item.name, source: item.source, revision: item.revision, contentHash: item.contentHash, reason: p.mode === 'manual' ? 'Explicit project manual selection.' : 'Approved source/role and matching task applicability.', warnings: item.warnings, body });
     }
+    const conflicting = new Map();
+    for (const item of selected) {
+      // Only reviewed declarations in this build confer conflict metadata;
+      // untrusted Markdown and persisted cache fields do not invent policies.
+      for (const otherId of definitions.get(item.id)?.conflicts || []) {
+        if (!selected.some(other => other.id === otherId)) continue;
+        for (const [id, peer] of [[item.id, otherId], [otherId, item.id]]) {
+          const peers = conflicting.get(id) || new Set(); peers.add(peer); conflicting.set(id, peers);
+        }
+      }
+    }
+    for (let index = selected.length - 1; index >= 0; index--) {
+      const item = selected[index], peers = conflicting.get(item.id);
+      if (peers) { selected.splice(index, 1); rejected.push({ id: item.id, reason: 'Declared instruction conflict with ' + [...peers].sort().join(', ') + '; exclude or disable one before execution.' }); }
+    }
+    const docsIndex = selected.findIndex(item => item.id === 'matt/grill-with-docs');
+    if (docsIndex >= 0 && !selected.some(item => item.id === 'matt/grilling')) { selected.splice(docsIndex, 1); rejected.push({ id: 'matt/grill-with-docs', reason: 'Required separately approved and selected grilling dependency is unavailable.' }); }
     return { projectId: context.projectId, mode: p.mode, selected, rejected, mechanism: 'instruction-compatibility', nativeSupport: 'unverified' };
   }
   function attach(context) {

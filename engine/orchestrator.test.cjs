@@ -1165,6 +1165,9 @@ function make(plan, inspectFolder, extra) {
   let keepHttpPid = 9100;
   const keepHttpOpts = {
     phase2: false,
+    // This checkpoint persistence fixture does not exercise downloadable Skills.
+    skillsEnabled: false,
+    syncSkills: false,
     planFile: keepHttpPlan,
     models,
     attemptsDir: keepAttemptsDir,
@@ -1177,8 +1180,11 @@ function make(plan, inspectFolder, extra) {
   await new Promise(resolve => keepHttpServer.listen(0, '127.0.0.1', resolve));
   const keepHttpBase = `http://127.0.0.1:${keepHttpServer.address().port}`;
   try {
-    await fetch(keepHttpBase + '/api/orchestrator/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) });
-    const stoppedKeep = await (await fetch(keepHttpBase + '/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) })).json();
+    const approvedKeep = await fetch(keepHttpBase + '/api/orchestrator/approve', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) });
+    assert.equal(approvedKeep.status, 200, await approvedKeep.clone().text());
+    const stoppedKeepResponse = await fetch(keepHttpBase + '/api/orchestrator/stop', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ projectId: 'demo' }) });
+    assert.equal(stoppedKeepResponse.status, 200, await stoppedKeepResponse.clone().text());
+    const stoppedKeep = await stoppedKeepResponse.json();
     assert.equal(stoppedKeep.projects[0].status, 'checkpointed');
   } finally {
     await new Promise(resolve => keepHttpServer.close(resolve));
@@ -1187,7 +1193,9 @@ function make(plan, inspectFolder, extra) {
   await new Promise(resolve => keepHttpServer2.listen(0, '127.0.0.1', resolve));
   const keepHttpBase2 = `http://127.0.0.1:${keepHttpServer2.address().port}`;
   try {
-    const afterRelaunch = await (await fetch(keepHttpBase2 + '/api/orchestrator')).json();
+    const afterRelaunchResponse = await fetch(keepHttpBase2 + '/api/orchestrator');
+    assert.equal(afterRelaunchResponse.status, 200, await afterRelaunchResponse.clone().text());
+    const afterRelaunch = await afterRelaunchResponse.json();
     assert.equal(afterRelaunch.projects[0].status, 'checkpointed');
     assert.equal(afterRelaunch.projects[0].canResume, true);
     assert.equal(afterRelaunch.projects[0].checkpoint.reason, 'stop');

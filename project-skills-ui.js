@@ -103,7 +103,10 @@
       card.append(element('p', 'Attempt: ' + (row.attemptId || 'Not recorded') + ' · Task: ' + (row.taskId || 'Not recorded') + ' · Record: ' + (row.recordId || row.id || 'Not recorded'), 'muted'));
       card.append(element('p', 'Observed transport: ' + (row.transport || 'Not recorded') + '. Remote provider acceptance: unverified; API stdin submission confirms local bridge delivery only.', 'muted'));
       card.append(element('p', 'Native loaded: unverified · Followed: unverified · Procedure verified: unverified', 'muted'));
-      for (const skill of row.skills || []) card.append(element('p', 'Attached Skill: ' + skill.id + ' · Content hash: ' + skill.contentHash, 'muted'));
+      for (const skill of row.skills || []) {
+        card.append(element('p', 'Attached Skill: ' + skill.id + ' · Content hash: ' + skill.contentHash, 'muted'));
+        card.append(element('p', 'Selection reason: ' + (skill.reason || 'Not retained for this assignment.'), 'muted'));
+      }
       for (const rejected of row.rejected || []) card.append(element('p', 'Not selected: ' + rejected.id + ' · ' + rejected.reason, 'muted'));
       deliveriesRegion.append(card);
     }

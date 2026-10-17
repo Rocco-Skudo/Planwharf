@@ -167,9 +167,14 @@
       const name = provider.label || provider.providerId || 'Provider';
       if (provider.status === 'disabled') return `${name}: provider disabled.`;
       const checked = provider.checkedAt ? ` Last checked: ${skillsDate(provider.checkedAt)}.` : '';
+      const access = provider.preservingPreviousAvailability === true
+        ? ' Last verified availability is retained for the same account.'
+        : provider.preservingPreviousAvailability === false
+          ? ' Cached access is not restored; fresh verification is required.'
+          : ' Current model access is unverified.';
       return provider.status === 'current'
         ? `${name}: ${(provider.ids || []).length} exact models listed for the current login.${checked}`
-        : `${name}: availability unread. ${provider.reason || 'No current catalog check recorded.'}${checked} Previous availability is retained.`;
+        : `${name}: availability unread. ${provider.reason || 'No current catalog check recorded.'}${checked}${access}`;
     }).join(' ');
   }
   async function refreshProviderStatus() {

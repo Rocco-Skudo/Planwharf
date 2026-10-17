@@ -1814,6 +1814,8 @@ function createOrchestrator(options) {
         const row = entry(item.project.id);
         const latest = item.revisions.at(-1);
         const docs = Array.isArray(row.docs) && row.docs.length ? row.docs : collectDocs(row.facts);
+        const docsInspected = Boolean(row.facts && (!row.facts.folder || row.facts.folder === item.project.folder));
+        const docsAvailability = docs.length ? 'available' : !item.project.folder && !item.project.github ? 'unlinked' : docsInspected && !item.project.github ? 'none' : 'unknown';
         const terminal = ['complete', 'failed', 'checkpointed'].includes(row.status);
         // Stored process flags are historical evidence, not current liveness.
         const dispatch = clone(row.dispatch || []).map((part, index) => {
@@ -1889,7 +1891,9 @@ function createOrchestrator(options) {
           checkpoint: row.checkpoint ? clone(row.checkpoint) : null,
           timing: ((item.tasks || []).find(task => task.status === 'running') || {}).timing || (row.pendingAutoStart && row.pendingAutoStart.timing) || null,
           deadlineAt: ((item.tasks || []).find(task => task.status === 'running') || {}).deadlineAt || (row.pendingAutoStart && row.pendingAutoStart.deadlineAt) || null,
-          canGrillDocs: docs.length > 0,
+          // Unknown linked projects can request explicit inspection; this is not a claim that docs exist.
+          canGrillDocs: docsAvailability === 'available' || docsAvailability === 'unknown',
+          docsAvailability,
           docs: clone(docs),
           grillSkipped: Boolean(row.grillSkipped),
           log: clone(row.log || []),
@@ -1960,10 +1964,10 @@ function createOrchestrator(options) {
     throw new Error('Unsupported Supervisor action.');
   }
 
-  function bindAccount(providerId, key) {
+  function bindAccount(providerId, key, { commit = true } = {}) {
     const previous = store.lastAccountKeys[providerId];
     const changed = previous !== undefined && previous !== key;
-    if (previous !== key) { store.lastAccountKeys[providerId] = key; persist(); }
+    if (commit && previous !== key) { store.lastAccountKeys[providerId] = key; persist(); }
     return changed;
   }
 

@@ -1,5 +1,7 @@
 # Planwharf review checkpoint — 17 October 2026
 
+**Current follow-up:** [FOLLOWUP.md](FOLLOWUP.md) records the resolved baseline failures, reviewed draft-only Docs compatibility, additional safeguards and fresh **62/62** passing engine files. The earlier checkpoint results and remaining-work list below are preserved as historical evidence.
+
 This branch saves all implemented source changes and review evidence for Benito. It is a draft review checkpoint, not a merge-ready or fully accepted release.
 
 ## Scope and provenance
