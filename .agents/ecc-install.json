@@ -1,0 +1,69 @@
+{
+  "source": "https://github.com/affaan-m/ECC",
+  "revision": "76aaa77df6adc5b889e689007bf99b9a4f74af34",
+  "installedAt": "2026-10-17T11:07:59.605462+00:00",
+  "project": "Planwharf",
+  "usageNotes": [
+    "Matt Pocock's existing skills remain the main planning, TDD and review workflows.",
+    "Use ECC skills only when their topic matches the task and the existing project stack.",
+    "Examples are guidance: preserve supported runtime versions, existing API contracts, native platform conventions and dependency policies. Check current primary documentation before relying on version-sensitive examples.",
+    "Skill installation does not authorize dependency changes, automatic commits, publishing, deployment, external communications, physical device commands or new services.",
+    "No ECC hooks, MCP servers, memory features, global rules or automatic updates were installed.",
+    "These are project-local skills. Planwharf supplies this selected project's ECC instructions to leads and workers across providers, including isolated researchers. Its Matt checkbox controls Matt skills only. Restart Planwharf after updating its backend code."
+  ],
+  "skills": [
+    {
+      "name": "security-review",
+      "upstreamPath": "skills/security-review",
+      "rationale": "Local web server, credentials and browser security.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "b9eb6416eebc8dda046674f0a2dbb3be88aff526d182b60a0f55998d3d6d0d8d",
+          "gitBlobSha": "3f26b0df65661425de4e5c40c295e04edcad7a83"
+        },
+        {
+          "path": "cloud-infrastructure-security.md",
+          "sha256": "7d9a83852475a9396e04c59c73df84ac24ee0f41322016de7c11c62138c2a8ca",
+          "gitBlobSha": "12634421765e25f961913dd380190ebfa970dd64"
+        }
+      ]
+    },
+    {
+      "name": "agent-security-hardening",
+      "upstreamPath": "skills/agent-security-hardening",
+      "rationale": "Agent execution, workspace containment and tool authorization.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "0e0895ada90aa8fa085e4257961ebe15f2dff43b843785b1533d4c731186ad81",
+          "gitBlobSha": "726cd3e2e01e7b03103c98639585868dd3afc392"
+        }
+      ]
+    },
+    {
+      "name": "api-design",
+      "upstreamPath": "skills/api-design",
+      "rationale": "Existing HTTP endpoints and error contracts.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "250e464413a13c0eb93cc73447b423df1f9aa8e4f80e5e68c41f895b2c33e352",
+          "gitBlobSha": "655d730e64492b997bded91038c52f75398c5563"
+        }
+      ]
+    },
+    {
+      "name": "accessibility",
+      "upstreamPath": "skills/accessibility",
+      "rationale": "Browser UI keyboard, focus and screen-reader behavior.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "sha256": "2762f21d09d199009ed4f95b28c911436b367c30963dc5ddb48b8e1ad7fc1585",
+          "gitBlobSha": "0685394eef10a1bf1e5c02f67a3a8b06ae210cc4"
+        }
+      ]
+    }
+  ]
+}
