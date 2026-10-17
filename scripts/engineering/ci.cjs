@@ -24,8 +24,10 @@ try {
   function walk(dir) { for (const item of fs.readdirSync(dir, { withFileTypes: true })) { const name = path.join(dir, item.name); if (item.isDirectory()) walk(name); else if (/\.(cjs|js|mjs)$/.test(name)) added.push(path.relative(root, name)); } }
   walk(__dirname);
   for (const file of new Set([...tracked.stdout.split('\0').filter(x => /\.(cjs|js|mjs)$/.test(x) && !x.startsWith('.review/')), ...added])) run('syntax-' + file, process.execPath, ['--check', file]);
-  run('working-patch', 'git', ['diff', '--check']);
-  if (process.env.PLANWHARF_DIFF_BASE) run('pr-patch', 'git', ['diff', '--check', process.env.PLANWHARF_DIFF_BASE, 'HEAD']);
+  // Historical review evidence preserves its original bytes and whitespace.
+  const patchPaths = ['--', '.', ':(exclude).review/**'];
+  run('working-patch', 'git', ['diff', '--check', ...patchPaths]);
+  if (process.env.PLANWHARF_DIFF_BASE) run('pr-patch', 'git', ['diff', '--check', process.env.PLANWHARF_DIFF_BASE, 'HEAD', ...patchPaths]);
   for (const file of ['engine/claim.test.cjs', 'engine/attempts.test.cjs', ...added.filter(x => x.endsWith('.test.cjs'))]) run(file, process.execPath, [file]);
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 process.exitCode = failures ? 1 : 0;

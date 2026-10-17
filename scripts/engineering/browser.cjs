@@ -6,14 +6,15 @@ const { spawn, spawnSync } = require('node:child_process');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 function candidates(kind, env = process.env, platform = process.platform) {
   if (!['edge', 'chrome'].includes(kind)) throw Error('BROWSER_UNSUPPORTED: choose edge or chrome');
+  const paths = platform === 'win32' ? path.win32 : path.posix;
   const explicit = env.PLANWHARF_BROWSER_PATH || env.PLANWHARF_TEST_BROWSER;
-  if (explicit) return [path.resolve(explicit)];
+  if (explicit) return [paths.resolve(explicit)];
   const names = kind === 'edge' ? ['msedge', 'microsoft-edge', 'microsoft-edge-stable'] : ['chrome', 'google-chrome', 'google-chrome-stable'];
   const locations = platform === 'win32'
-    ? [env.PROGRAMFILES, env['PROGRAMFILES(X86)'], env.LOCALAPPDATA].filter(Boolean).map(base => path.join(base, kind === 'edge' ? 'Microsoft/Edge/Application/msedge.exe' : 'Google/Chrome/Application/chrome.exe'))
+    ? [env.PROGRAMFILES, env['PROGRAMFILES(X86)'], env.LOCALAPPDATA].filter(Boolean).map(base => paths.join(base, kind === 'edge' ? 'Microsoft/Edge/Application/msedge.exe' : 'Google/Chrome/Application/chrome.exe'))
     : platform === 'darwin' ? [kind === 'edge' ? '/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge' : '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome']
       : kind === 'edge' ? ['/opt/microsoft/msedge/msedge', '/usr/bin/microsoft-edge'] : ['/opt/google/chrome/chrome', '/usr/bin/google-chrome'];
-  for (const base of (env.PATH || '').split(platform === 'win32' ? ';' : ':').filter(Boolean)) for (const name of names) locations.push(path.join(base, name + (platform === 'win32' ? '.exe' : '')));
+  for (const base of (env.PATH || '').split(platform === 'win32' ? ';' : ':').filter(Boolean)) for (const name of names) locations.push(paths.join(base, name + (platform === 'win32' ? '.exe' : '')));
   return [...new Set(locations)];
 }
 function discover(kind = process.env.PLANWHARF_BROWSER || 'edge', env = process.env) {
