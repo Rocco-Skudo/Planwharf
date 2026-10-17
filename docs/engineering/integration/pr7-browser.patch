@@ -1,0 +1,144 @@
+--- a/verify-layout.cjs
++++ b/verify-layout.cjs
+@@ -4,38 +4,26 @@
+ const path = require('node:path');
+ const Plan = require('./plan.js');
+ const { createServer } = require('./server.cjs');
+-const { spawn } = require('node:child_process');
++const { launch, discover } = require('./scripts/engineering/browser.cjs');
+ const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+-const configuredBrowser = process.env.PLANWHARF_TEST_BROWSER;
+-assert.ok(configuredBrowser && configuredBrowser.trim() === configuredBrowser && !/[\x00-\x1f]/.test(configuredBrowser) && path.isAbsolute(configuredBrowser), 'Set PLANWHARF_TEST_BROWSER to an absolute Chromium executable path for this DevTools harness.');
+-assert.ok(fs.existsSync(configuredBrowser) && fs.statSync(configuredBrowser).isFile(), 'PLANWHARF_TEST_BROWSER must point to an existing executable file.');
+-const browserExecutable = configuredBrowser;
++const browserExecutable = discover().executable;
+ const output = process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname, 'validation', 'layout-browser-' + Date.now());
+ fs.mkdirSync(output, { recursive: true });
+-const profile = path.join(output, `chromium-profile-${Date.now()}`);
+ const planFile = path.join(output, `browser-plan-${Date.now()}.json`);
+ const isolatedPlan = Plan.example(); isolatedPlan.tasks = []; isolatedPlan.project = { id: 'layout-probe', name: 'Layout probe' };
+ fs.writeFileSync(planFile, JSON.stringify(isolatedPlan));
+ const server = createServer({ skillsEnabled: false, planFile, models: [], fetchPlans: async () => [] });
+ let browser;
++let launched;
+ let ws;
+ let command;
+ let browserError;
+ (async () => {
+   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+   const appUrl = `http://127.0.0.1:${server.address().port}`;
+-  browser = spawn(browserExecutable, ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, appUrl], { windowsHide: true, stdio: 'ignore' });
+-  browser.on('error', error => { browserError = error; });
+-  let port;
+-  for (let i = 0; i < 100; i++) {
+-    if (browserError) throw browserError;
+-    try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); if (port) break; } catch (_) {}
+-    await pause(100);
+-  }
+-  assert.ok(port, `Chromium DevTools did not start: ${browserExecutable}`);
+-  const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+-  const page = pages.find(target => target.type === 'page');
+-  assert.ok(page, `Chromium page missing: ${browserExecutable}`);
++  launched = await launch(); browser = launched.child;
++  console.log(`Browser: ${launched.kind} ${launched.version}`);
++  const page = launched.page;
+   ws = new WebSocket(page.webSocketDebuggerUrl);
+   await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
+   let sequence = 0;
+@@ -167,7 +155,7 @@
+ })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
+   if (command) { try { await command('Browser.close'); } catch (_) {} }
+   if (ws) ws.close();
+-  if (browser) browser.kill();
++  await launched?.close();
+   if (server.listening) await new Promise(resolve => server.close(resolve));
+   fs.rmSync(planFile, { force: true });
+ });
+--- a/verify-workspace-browser.cjs
++++ b/verify-workspace-browser.cjs
+@@ -1,12 +1,11 @@
+ 'use strict';
+ // Installed Chromium browser + actual isolated backend and persisted protocol fixtures. No live provider calls.
+ const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
+-const { spawn } = require('node:child_process');
++const { launch, discover } = require('./scripts/engineering/browser.cjs');
+ const sourceRoot = path.resolve(process.env.PLANWHARF_TEST_SOURCE_ROOT || __dirname);
+ const Plan = require(path.join(sourceRoot, 'plan.js'));
+ const { createServer } = require(path.join(sourceRoot, 'server.cjs'));
+-const chrome = process.env.PLANWHARF_TEST_BROWSER;
+-assert.ok(chrome && path.isAbsolute(chrome) && /(?:^|[\\/])(?:chrome|msedge)\.exe$/i.test(chrome) && fs.statSync(chrome).isFile(), 'Set PLANWHARF_TEST_BROWSER to the explicit installed Chrome or Edge executable.');
++const chrome = discover().executable;
+ assert.notEqual(process.env.PLANWHARF_TEST_NO_SANDBOX, '1', 'Browser sandbox must stay enabled.');
+ const output = path.resolve(process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname, 'validation', 'workspace-' + Date.now()));
+ fs.mkdirSync(output, { recursive: true });
+@@ -49,6 +48,7 @@
+   spawnWorker: () => { launches++; throw Error('Browser fixture cannot dispatch'); }, killWorker: () => { throw Error('Browser fixture cannot terminate workers'); },
+   askModel: async info => { assert.equal(info.purpose, 'supervisor'); assert.equal(info.model.id, 'supervisor-fixture'); assert.equal(info.allowActions, false); aiCalls++; return { answer: 'Fixture Supervisor advice from isolated injected provider.', provider: 'api', model: 'exact-fixture-supervisor' }; }
+ });
++let launched;
+ let browser, socket, command, evaluate, base;
+ let browserStage = 'not-started';
+ const browserDiagnostics = [];
+@@ -74,10 +74,9 @@
+   if (process.env.PLANWHARF_EXPECT_TECHNICAL_EVIDENCE === '1') assert.ok(snapshot.projects[0].activitySessions.some(session => session.technicalEvidence?.entries?.some(entry => entry.command === 'npm test')), 'Backend must expose actual source command evidence');
+   if (process.env.PLANWHARF_EXPECT_ACTIVITY_PAGING === '1') assert.ok(snapshot.projects[0].activitySessionPagination?.available === true && snapshot.projects[0].activitySessionPagination.total > 24, 'Backend must advertise real retained paging');
+   browserStage = 'launch';
+-  browser = spawn(chrome, ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', browserStderr] });
+-  let browserError; browser.on('error', error => { browserError = error; }); let port;
+-  await until(() => { if (browserError) throw browserError; try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); return port > 0; } catch { return false; } }, 'Chrome DevTools');
+-  const pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json(); const page = pages.find(page => page.type === 'page');
++  launched = await launch(); browser = launched.child;
++  console.log(`Browser: ${launched.kind} ${launched.version}`);
++  const page = launched.page;
+   socket = new WebSocket(page.webSocketDebuggerUrl); await new Promise((resolve, reject) => { socket.addEventListener('open', resolve, { once: true }); socket.addEventListener('error', reject, { once: true }); });
+   let sequence = 0; const pending = new Map();
+   socket.addEventListener('message', message => {
+@@ -175,7 +174,8 @@
+ })().catch(error => { fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: error.stack, browser: chrome, stage: browserStage, browserDiagnostics, errors, networkErrors }, null, 2)); console.error(error); process.exitCode = 1; }).finally(async () => {
+   if (command) { try { await command('Browser.close'); } catch {} }
+   socket?.close();
+-  if (browser && browser.exitCode === null) { await delay(300); if (browser.exitCode === null) browser.kill(); }
++  if (launched) fs.writeSync(browserStderr, launched.startupLog());
++  await launched?.close();
+   if (server.listening) await new Promise(resolve => server.close(resolve));
+   fs.closeSync(browserStderr);
+ });
+--- a/verify-ship-browser.cjs
++++ b/verify-ship-browser.cjs
+@@ -4,11 +4,9 @@
+ const assert = require('node:assert/strict');
+ const fs = require('node:fs');
+ const path = require('node:path');
+-const {spawn} = require('node:child_process');
++const {launch, discover} = require('./scripts/engineering/browser.cjs');
+ const {createServer} = require('./server.cjs');
+-const executable=process.env.PLANWHARF_TEST_BROWSER;
+-assert.ok(executable && path.isAbsolute(executable) && !/[\x00-\x1f]/.test(executable) && fs.statSync(executable).isFile(),'Explicit existing Chrome or Edge executable required');
+-assert.match(path.basename(executable),/^(?:chrome|msedge)(?:\.exe)?$/i,'Explicit installed Chromium browser required');
++const executable=discover().executable;
+ const out=path.resolve(process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname,'validation','ship-'+Date.now()));
+ fs.mkdirSync(out,{recursive:true});
+ assert.notEqual(process.env.PLANWHARF_TEST_NO_SANDBOX, '1', 'Browser sandbox must stay enabled');
+@@ -22,6 +20,7 @@
+ const server=createServer({planFile,attemptsDir:path.join(fixture,'attempts'),models:[{id:'ship-fixture',label:'Ship transport fixture',provider:'codex',cli:'gpt-6-luna',kind:'default',enabled:true,available:true}],fetchPlans:null,skillsEnabled:false,refreshModels:false,monitorIntervalMs:1000,
+  inspectFolder:folder=>({folder,git:false,names:[],fileCount:0,dirty:[]}),
+  spawnWorker:info=>{const id=++pid;launches.push({...info,pid:id});live.add(id);return {pid:id};},isProcessAlive:id=>live.has(id),killWorker:id=>live.delete(id),askModel:()=>{aiCalls++;throw Error('No AI calls authorized by ship test');}});
++let launched;
+ let browser,ws,cdp,evaluate,base;
+ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+ async function until(check,label,timeout=18000){const end=Date.now()+timeout;while(Date.now()<end){if(await check())return;await pause(100);}throw Error('Timeout: '+label);}
+@@ -33,7 +32,7 @@
+ async function notice(kind){await until(()=>evaluate(`!!document.querySelector('#ship-notifications [data-kind=${JSON.stringify(kind)}]')`),'notice '+kind);}
+ async function propose(count=2){const result=await request('/api/orchestrator/propose',{projectId:'ship-alpha',title:'Ship fixture lifecycle',goal:'Isolated browser verification',subTasks:Array.from({length:count},(_,i)=>({title:'Fixture slice '+i,detail:'No provider',assignedModelId:'ship-fixture',type:i?'AUDIT':'IMPLEMENTATION',dependsOn:i?[i-1]:[]}))},201);return result.snapshot.projects.find(row=>row.id==='ship-alpha').megaTaskId;}
+ function finish(info,status='COMPLETE',keepAlive=false){fs.writeFileSync(info.structuredResultPath,JSON.stringify({resultId:info.resultId,attemptId:info.attemptId,subTaskId:info.subTaskId,megaTaskId:info.megaTaskId,status,summary:'Explicit local transport fixture result',filesChanged:[],tests:[],blockers:status==='COMPLETE'?[]:['Fixture blocker'],nextAction:'Review fixture',createdAt:new Date().toISOString()}));fs.writeFileSync(info.exitPath,JSON.stringify({attemptId:info.attemptId,exitCode:status==='FAILED'?1:0,provider:info.worker.provider,model:info.worker.cli}));fs.writeFileSync(info.resultPath,'STATUS: '+status+'\n');if(!keepAlive)live.delete(info.pid);}
+-async function launchBrowser(){browserStage='launch';const profile=path.join(fixture,'chrome-profile');browser=spawn(executable,['--headless=new','--disable-gpu','--disable-extensions','--disable-background-networking','--no-first-run','--no-default-browser-check','--remote-debugging-port=0','--user-data-dir='+profile,'about:blank'],{windowsHide:true,stdio:['ignore','ignore',browserStderr]});browser.on('error',error=>errors.push(error.message));let port;await until(()=>{try{port=Number(fs.readFileSync(path.join(profile,'DevToolsActivePort'),'utf8').split('\n')[0]);return port;}catch{return false;}},'Chrome DevTools');const pages=await(await fetch(`http://127.0.0.1:${port}/json/list`)).json();ws=new WebSocket(pages.find(page=>page.type==='page').webSocketDebuggerUrl);await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});let sequence=0;const waiting=new Map();ws.addEventListener('message',event=>{const msg=JSON.parse(event.data);if(msg.method==='Inspector.targetCrashed')browserDiagnostics.push({stage:browserStage,event:msg.method});if(msg.method==='Runtime.exceptionThrown')errors.push(msg.params.exceptionDetails);if(msg.method==='Runtime.consoleAPICalled'&&msg.params.type==='error')errors.push(msg.params.args);if(msg.method==='Network.responseReceived'&&msg.params.response.status>=400&&!msg.params.response.url.endsWith('/favicon.ico'))httpErrors.push(msg.params.response);if(msg.method==='Network.loadingFailed'&&!msg.params.canceled)httpErrors.push(msg.params);const pending=waiting.get(msg.id);if(pending){clearTimeout(pending.timer);waiting.delete(msg.id);msg.error?pending.reject(Error(JSON.stringify(msg.error))):pending.resolve(msg.result);}});cdp=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{waiting.delete(id);reject(Error('CDP timeout '+method));},15000);waiting.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});evaluate=async expression=>{const result=await cdp('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};browserStage='blank-page-smoke';await cdp('Inspector.enable');assert.equal(await evaluate('1 + 1'),2,'Blank page renderer must respond before application navigation');await cdp('Runtime.enable');await cdp('Page.enable');await cdp('Network.enable');}
++async function launchBrowser(){browserStage='launch';launched=await launch();browser=launched.child;console.log(`Browser: ${launched.kind} ${launched.version}`);const pages=[launched.page];ws=new WebSocket(pages.find(page=>page.type==='page').webSocketDebuggerUrl);await new Promise((resolve,reject)=>{ws.addEventListener('open',resolve,{once:true});ws.addEventListener('error',reject,{once:true});});let sequence=0;const waiting=new Map();ws.addEventListener('message',event=>{const msg=JSON.parse(event.data);if(msg.method==='Inspector.targetCrashed')browserDiagnostics.push({stage:browserStage,event:msg.method});if(msg.method==='Runtime.exceptionThrown')errors.push(msg.params.exceptionDetails);if(msg.method==='Runtime.consoleAPICalled'&&msg.params.type==='error')errors.push(msg.params.args);if(msg.method==='Network.responseReceived'&&msg.params.response.status>=400&&!msg.params.response.url.endsWith('/favicon.ico'))httpErrors.push(msg.params.response);if(msg.method==='Network.loadingFailed'&&!msg.params.canceled)httpErrors.push(msg.params);const pending=waiting.get(msg.id);if(pending){clearTimeout(pending.timer);waiting.delete(msg.id);msg.error?pending.reject(Error(JSON.stringify(msg.error))):pending.resolve(msg.result);}});cdp=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;const timer=setTimeout(()=>{waiting.delete(id);reject(Error('CDP timeout '+method));},15000);waiting.set(id,{resolve,reject,timer});ws.send(JSON.stringify({id,method,params}));});evaluate=async expression=>{const result=await cdp('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};browserStage='blank-page-smoke';await cdp('Inspector.enable');assert.equal(await evaluate('1 + 1'),2,'Blank page renderer must respond before application navigation');await cdp('Runtime.enable');await cdp('Page.enable');await cdp('Network.enable');}
+ (async()=>{
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${server.address().port}`;
+  await launchBrowser();await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});browserStage='application-navigation';await cdp('Page.navigate',{url:base+'/#orchestrator'});
+@@ -84,4 +83,4 @@
+  const after=JSON.parse(fs.readFileSync(planFile,'utf8'));for(const item of after.projects)assert.deepEqual(item.home?.notes||[],[],'Notes untouched');
+  fs.writeFileSync(path.join(out,'report.json'),JSON.stringify({result:'PASS',browser:executable,sandboxEnabled:true,browserDiagnostics,scope:'Actual browser and HTTP backend; worker transport/liveness fixtures only, no providers',launchCount:launches.length,aiCalls,errors,httpErrors,evidence},null,2));
+  console.log('PASS Ship actual '+path.basename(executable)+' interactions, real backend fixture lifecycle and seven notification classes, draft preservation, weather/motion/flags/themes/mobile/reload. No live provider. Evidence: '+out);
+-})().catch(error=>{console.error(error);fs.writeFileSync(path.join(out,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,browser:executable,stage:browserStage,browserDiagnostics,errors,httpErrors,evidence},null,2));process.exitCode=1;}).finally(async()=>{if(cdp)try{await cdp('Browser.close');}catch{}if(ws)ws.close();if(browser)browser.kill();if(server.listening)await new Promise(resolve=>server.close(resolve));fs.closeSync(browserStderr);});
++})().catch(error=>{console.error(error);fs.writeFileSync(path.join(out,'failure.json'),JSON.stringify({message:error.message,stack:error.stack,browser:executable,stage:browserStage,browserDiagnostics,errors,httpErrors,evidence},null,2));process.exitCode=1;}).finally(async()=>{if(cdp)try{await cdp('Browser.close');}catch{}if(ws)ws.close();if(launched)fs.writeSync(browserStderr,launched.startupLog());await launched?.close();if(server.listening)await new Promise(resolve=>server.close(resolve));fs.closeSync(browserStderr);});

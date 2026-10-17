@@ -1,0 +1,222 @@
+[
+  {
+    "file": "engine/activity.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/app-updates.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/attempts.test.cjs",
+    "included": true,
+    "reason": "Reviewed complete test and direct implementation: in-memory claims or disposable temp attempt/result files, no provider execution"
+  },
+  {
+    "file": "engine/chat-request.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/claim.test.cjs",
+    "included": true,
+    "reason": "Reviewed complete test and direct implementation: in-memory claims or disposable temp attempt/result files, no provider execution"
+  },
+  {
+    "file": "engine/conversation-history.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/execution-next.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/external-adapters.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/final.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/gitea.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/gold-model.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/grill-chat.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/lifecycle.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/model-policy.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/model-roles.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/model-routing.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/orchestrator.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/phase1.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/phase2-deadline.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/phase2-git.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/phase2-worker.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/phase2.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/progress-detail.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/project-folders.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/project-recipient.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/prompt-transport.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/provider-accounts.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/provider-connections.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/provider-models.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/provider-transport.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/providers.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/reconcile-attempts.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/repository.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/research-dispatch.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/runner.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/runtime-integration.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/skills.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/startup.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/supervisor.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/task-completion.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/window-execution.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/worker-snapshot.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/worker-startup.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  },
+  {
+    "file": "engine/worker-ui.test.cjs",
+    "included": false,
+    "reason": "Not admitted: full transitive fixture/provider/process/filesystem isolation review is outstanding; not executed and no pass/fail claim"
+  }
+]
