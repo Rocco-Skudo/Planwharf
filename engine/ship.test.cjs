@@ -30,6 +30,12 @@ assert.equal(H.visibleNotice({kind:'checkpoint'},'important'),false);
 assert.equal(H.visibleNotice({kind:'checkpoint'},'all'),true);
 assert.ok(!H.snapshotNotices({projects:[{id:'active',status:'complete',workerAlive:true}]}).some(n=>n.kind==='completed'));
 assert.ok(!H.snapshotNotices({projects:[{id:'ambiguous',status:'complete',dispatch:[{observedAlive:true}]}]}).some(n=>n.kind==='completed'));
+const completedWithHistory = { id: 'history', megaTaskId: 'current-mega', status: 'complete', workerAlive: false,
+  dispatch: [{ megaTaskId: 'old-mega', historicalAssignment: true, observedAlive: true, alive: false }] };
+assert.equal(H.resolveState(completedWithHistory), 'completed', 'Historical reused PIDs do not change the current ship lifecycle');
+assert.ok(H.snapshotNotices({ projects: [completedWithHistory] }).some(n => n.kind === 'completed'), 'Historical reused PIDs do not suppress current completion notifications');
+assert.equal(H.resolveState({ ...completedWithHistory, dispatch: [{ megaTaskId: 'old-mega', observedAlive: true, alive: true }] }), 'completed', 'An explicit old MegaTask is excluded even without the historical flag');
+assert.equal(H.resolveState({ ...completedWithHistory, dispatch: [...completedWithHistory.dispatch, { megaTaskId: 'current-mega', observedAlive: true, alive: false }] }), 'neutral', 'Ambiguous current-assignment PIDs still prevent false completion');
 assert.equal(H.resolveState({status:'watching',workerAlive:true,megaTask:{pauseRequested:true}}),'pausing');
 assert.equal(H.resolveState({status:'resuming',workerAlive:false}),'preparing');
 const savedGlobals={window:global.window,document:global.document,setTimeout:global.setTimeout,clearTimeout:global.clearTimeout};

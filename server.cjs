@@ -10,6 +10,7 @@ const { createAttemptEngine } = require('./engine/attempts.js');
 const { createSentinel } = require('./engine/sentinel.js');
 const { createOrchestrator, jobFingerprint } = require('./engine/orchestrator.js');
 const { createSkillsCache } = require('./engine/skills.js');
+const { createSkillCatalog } = require('./engine/skill-catalog.cjs');
 const { createProviderModels } = require('./engine/provider-models.cjs');
 const { loadCatalog } = require('./engine/provider-catalog.cjs');
 const { adapterFor } = require('./engine/provider-adapters.cjs');
@@ -25,6 +26,7 @@ const version = plan => crypto.createHash('sha256').update(JSON.stringify(plan.s
 class RequestError extends Error {
   constructor(status, message) { super(message); this.status = status; }
 }
+const parsedBodies = new WeakMap();
 async function readPlan(file) {
   ensureDefaultNotebook(file);
   const plan = JSON.parse(await fs.readFile(file, 'utf8'));
@@ -47,6 +49,8 @@ async function writePlan(file, plan) {
   }
 }
 async function body(request, maxBytes = 65536, tooLarge = 'Revision too large.') {
+  const cached = parsedBodies.get(request);
+  if (cached) { if (cached.size > maxBytes) throw new RequestError(413, tooLarge); return cached.value; }
   const chunks = [];
   let size = 0;
   for await (const chunk of request) {
@@ -54,7 +58,7 @@ async function body(request, maxBytes = 65536, tooLarge = 'Revision too large.')
     if (size > maxBytes) throw new RequestError(413, tooLarge);
     chunks.push(chunk);
   }
-  try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+  try { const value = JSON.parse(Buffer.concat(chunks).toString('utf8')); parsedBodies.set(request, { value, size }); return value; }
   catch { throw new RequestError(400, 'Request unreadable.'); }
 }
 function defaultOpenFolder(folder) {
@@ -190,11 +194,57 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     }
   });
   const skillsCache = skills || createSkillsCache({ dir: path.join(storeDir, 'matt-skills'), fetchImpl: fetchSkills });
+  // Catalog preparation is project scoped; it does not change legacy execution delivery.
+  let projectSkills;
+  try { projectSkills = createSkillCatalog({ dir: path.join(storeDir, 'project-skills'), ...(fetchSkills ? { fetchImpl: fetchSkills } : {}) }); } catch { /* Optional catalog failure must not prevent execution recovery. */ }
+  let skillGeneration, procedureEvidence;
+  try { procedureEvidence = require('./engine/skill-procedure-evidence.cjs').createSkillProcedureEvidence({
+    dir: path.join(storeDir, 'project-skills'), attemptsDir: storeDir,
+    snapshot: projectId => ({ ...orchestra.executionView(projectId), deliveries: projectSkills.reconcile(projectId).deliveries }),
+    projectResolver: projectId => { const item = projectForSkills(projectId); return { id: item.project.id, folder: item.project.folder }; }
+  }); } catch { /* Optional evidence failure must not affect execution recovery. */ }
+  try { skillGeneration = require('./engine/skill-generation.cjs').createSkillGeneration({ dir: path.join(storeDir, 'project-skills'),
+    ...(procedureEvidence ? { resolveProcedureProposal: (projectId, proposalId) => procedureEvidence.proposal(projectId, proposalId) } : {})
+  }); } catch { /* Preserve a damaged optional draft store for recovery. */ }
+  let catalogQueue = Promise.resolve();
+  const enqueueCatalog = fn => { const pending = catalogQueue.then(fn); catalogQueue = pending.catch(() => {}); return pending; };
   const skillsPolicyFile = path.join(storeDir, 'skills-policy.json');
   try { skillsEnabled = JSON.parse(require('node:fs').readFileSync(skillsPolicyFile, 'utf8')).enabled !== false; } catch {}
   const skillsSnapshot = () => ({ ...skillsCache.snapshot(), enabled: skillsEnabled });
   let initialSkillsSync = syncSkills ? skillsCache.ensure() : null;
-  async function readySkills() {
+  const catalogEnabled = projectId => Boolean(projectSkills && projectId && projectSkills.snapshot(projectId).preferences.deliveryEnabled);
+  function projectForSkills(projectId) {
+    const plan = JSON.parse(require('node:fs').readFileSync(planFile, 'utf8'));
+    if (!Plan.validate(plan)) throw new Error('Cannot authorize Skills against an invalid notebook.');
+    const item = (plan.schema === 2 ? plan.projects : [plan]).find(item => item.project.id === projectId);
+    if (!item) throw new Error('Skills delivery requires an existing explicit project.');
+    return item;
+  }
+  function attachProjectSkills(info, role) {
+    const item = projectForSkills(info.projectId), model = info.worker || info.model;
+    if (!model?.cli || !(model.providerId || model.provider)) throw new Error('Skills delivery requires exact provider/model identity.');
+    if (item.project.folder) projectSkills.discoverLocal(info.projectId, item.project.folder);
+    const assigned = projectSkills.attach({ projectId: info.projectId, projectFolder: item.project.folder, role,
+      taskId: info.subTaskId || info.job?.id || info.state?.currentRequest?.taskId || null,
+      attemptId: info.attemptId || null, provider: model.providerId || model.provider, model: model.cli,
+      adapter: model.adapter || model.provider, task: [info.job?.title, info.job?.detail, info.question].filter(Boolean).join('\n'),
+      requirements: item.revisions.at(-1)?.direction || '', projectType: item.project.type || '' });
+    const settings = projectSkills.snapshot(info.projectId).preferences;
+    if (settings.mode === 'manual') {
+      const unavailable = settings.selected.filter(id => !settings.disabled.includes(id) && !settings.exclusions.includes(id)
+        && !assigned.delivery.skills.some(skill => skill.id === id)
+        && !assigned.delivery.rejected.some(skill => skill.id === id && ['Source excluded by project.', 'Role incompatible.'].includes(skill.reason)));
+      if (unavailable.length) throw new Error('Manually selected Skills are unavailable for this execution: ' + unavailable.join(', ') + '. Inspect catalog eligibility and approve current content before retrying.');
+    }
+    return assigned;
+  }
+  async function readySkills(projectId) {
+    if (catalogEnabled(projectId)) return;
+    if (!projectId) {
+      const plan = JSON.parse(require('node:fs').readFileSync(planFile, 'utf8'));
+      const active = (plan.schema === 2 ? plan.projects : [plan]).filter(item => item.tasks.some(task => task.status === 'running'));
+      if (!active.length || active.every(item => catalogEnabled(item.project.id))) return;
+    }
     if (!skillsEnabled) return;
     if (!initialSkillsSync && !skillsCache.snapshot().sha) initialSkillsSync = skillsCache.ensure();
     if (initialSkillsSync) await initialSkillsSync;
@@ -230,16 +280,44 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     models,
     providers,
     enforceSessionBoundary: true,
-    mattSkillsEnabled: () => skillsEnabled,
+    mattSkillsEnabled: projectId => catalogEnabled(projectId) || skillsEnabled,
+    projectSkillState: projectId => {
+      if (!projectSkills) return { available: false, error: 'Project Skills registry unavailable.' };
+      const state = projectSkills.reconcile(projectId);
+      return { available: true, deliveryEnabled: state.preferences.deliveryEnabled, mode: state.preferences.mode,
+        enabled: state.catalog.filter(row => row.enabled).map(({ id, name, source, contentHash }) => ({ id, name, source, contentHash })),
+        deliveries: state.deliveries.slice(-12) };
+    },
     dir: storeDir,
     inspectFolder,
     readRepository,
-    spawnWorker: typeof spawnWorker === 'function' ? info => spawnWorker({ ...info, job: { ...info.job, detail: [info.job?.detail || '', skillsPrompt(info.job?.kind === 'research' ? 'research' : info.job?.kind === 'audit' ? 'audit' : 'worker', `${info.job?.title || ''} ${info.job?.detail || ''}`)].join('\n\n') } }) : undefined,
+    spawnWorker: typeof spawnWorker === 'function' ? info => {
+      if (!projectSkills) throw new Error('Project Skills registry is unavailable; recover it before starting new work.');
+      if (catalogEnabled(info.projectId)) {
+        const assigned = attachProjectSkills(info, info.job?.kind === 'audit' ? 'reviewer' : 'worker');
+        return spawnWorker({ ...info, skillsPrompt: assigned.prompt, ...(assigned.delivery.attached ? { skillDelivery: assigned.skillDelivery } : {}) });
+      }
+      return spawnWorker({ ...info, job: { ...info.job, detail: [info.job?.detail || '', skillsPrompt(info.job?.kind === 'research' ? 'research' : info.job?.kind === 'audit' ? 'audit' : 'worker', `${info.job?.title || ''} ${info.job?.detail || ''}`)].join('\n\n') } });
+    } : undefined,
     isProcessAlive,
     killWorker,
     askModel: typeof askModel === 'function' ? async info => {
       if (info.purpose === 'supervisor') return askModel(info);
-      await readySkills();
+      if (!projectSkills) throw new Error('Project Skills registry is unavailable; recover it before starting new work.');
+      if (catalogEnabled(info.projectId)) {
+        try {
+        const assigned = attachProjectSkills(info, 'orchestrator');
+        if (info.grillKind || info.clarificationKind) {
+          const required = (info.grillKind || info.clarificationKind) === 'docs' ? ['matt/grilling', 'matt/grill-with-docs'] : ['matt/grilling'];
+          if (required.some(id => !assigned.delivery.skills.some(item => item.id === id))) throw new Error('The project catalog requires approved, selected ' + required.join(' and ') + ' for this interview. Unsupported native dependencies are not invoked.');
+        }
+        return await askModel({ ...info, skillsPrompt: assigned.prompt, ...(assigned.delivery.attached ? { skillDelivery: assigned.skillDelivery } : {}) });
+        } catch (error) {
+          if (info.grillKind || info.clarificationKind) error.code = 'PROJECT_SKILL_INTERVIEW_UNAVAILABLE';
+          throw error;
+        }
+      }
+      await readySkills(info.projectId);
       let prompt = skillsPrompt('lead', info.grillKind ? 'grilling ' + info.question : info.question);
       if (info.grillKind) {
         if (!skillsEnabled) throw new Error('Matt skills are disabled. Enable Use Matt skills to start Matt grilling.');
@@ -254,7 +332,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     } : undefined,
     abortAsk, abortSupervisor,
     fetchPlans,
-    readSkill: relative => (skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
+    readSkill: (relative, projectId) => (!catalogEnabled(projectId) && skillsEnabled && typeof skillsCache.read === 'function' ? skillsCache.read(relative) : ''),
     prepareTask: (projectId, question, stillAuthorized, goldModel) => enqueue(async () => {
       const current = await readPlan(planFile);
       const item = (current.schema === 2 ? current.projects : [current]).find(item => item.project.id === projectId);
@@ -336,6 +414,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
   if (initialSkillsSync) initialSkillsSync.catch(() => {});
   const initialModelsSync = syncAccounts().then(() => refreshModels ? providerModels.refresh(true) : undefined).catch(() => {});
   const staticFiles = { '/supervisor-ui.js': ['supervisor-ui.js', 'text/javascript'], '/supervisor.css': ['supervisor.css', 'text/css'], '/harbor-ui.js': ['harbor-ui.js', 'text/javascript'], '/harbor.css': ['harbor.css', 'text/css'], '/update-ui.js': ['update-ui.js', 'text/javascript'], '/layout-ui.js': ['layout-ui.js', 'text/javascript'], '/model-policy-ui.js': ['model-policy-ui.js', 'text/javascript'], '/notifications.js': ['notifications.js', 'text/javascript'], '/quota.js': ['quota.js', 'text/javascript'], '/home-ui.js': ['home-ui.js', 'text/javascript'], '/window-ui.js': ['window-ui.js', 'text/javascript'], '/': ['index.html', 'text/html'], '/index.html': ['index.html', 'text/html'], '/orchestrator.html': ['orchestrator.html', 'text/html'], '/orch.js': ['orch.js', 'text/javascript'], '/app.js': ['app.js', 'text/javascript'], '/plan.js': ['plan.js', 'text/javascript'], '/styles.css': ['styles.css', 'text/css'], '/models.js': ['models.js', 'text/javascript'], '/models.json': ['models.json', 'application/json'], '/engine/attempts.js': ['engine/attempts.js', 'text/javascript'], '/engine/sentinel.js': ['engine/sentinel.js', 'text/javascript'] };
+  staticFiles['/project-skills-ui.js'] = ['project-skills-ui.js', 'text/javascript'];
   const server = http.createServer(async (request, response) => {
     const json = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -369,7 +448,14 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       // Model discovery is explicit or startup-only; status polling never spawns provider CLIs.
       if (refreshModels && request.method === 'POST' && pathname === '/api/orchestrator/propose') await providerModels.refresh();
       if (skillsEnabled && typeof spawnWorker === 'function' && (pathname === '/api/orchestrator' && loc.searchParams.get('readOnly') !== '1' || request.method === 'POST' && ['/api/orchestrator/approve', '/api/orchestrator/resume', '/api/orchestrator/start', '/api/orchestrator/mode', '/api/orchestrator/research/resume', '/api/orchestrator/research/approve'].includes(pathname))) {
-        try { await readySkills(); } catch (error) { throw new RequestError(503, error.message); }
+        try {
+          const input = request.method === 'POST' ? await body(request) : null;
+          // Global scheduling may contain legacy projects; explicit catalog launches
+          // never wait for or inject the legacy downloadable instruction pipeline.
+          if (input?.projectId) await readySkills(input.projectId);
+          // Global ticks isolate projects. A cold legacy cache is reported by its
+          // own launch wrapper and cannot block unrelated catalog-enabled work.
+        } catch (error) { throw new RequestError(error.status || 503, error.message); }
       }
       if (request.method === 'GET' && pathname === '/' && (loc.searchParams.get('watch') === '1' || loc.searchParams.get('view') === 'watch')) {
         response.writeHead(302, { Location: '/#orchestrator' });
@@ -528,6 +614,51 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         const offset = Number(loc.searchParams.get('offset') ?? '0'), limit = Number(loc.searchParams.get('limit') ?? '24');
         if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 24) throw new RequestError(400, 'Invalid activity session page.');
         return json(200, await orchestra.activitySessionPage(projectId, offset, limit));
+      }
+      if (pathname.startsWith('/api/project-skills')) {
+        if (!projectSkills) throw new RequestError(503, 'Project Skills catalog is unavailable. Preserve its registry for recovery.');
+        const action = pathname.slice('/api/project-skills'.length);
+        const read = request.method === 'GET' && ['', '/content', '/drafts', '/procedures'].includes(action);
+        const write = request.method === 'POST' && ['/settings', '/discover', '/approve', '/install', '/drafts/create', '/drafts/create-assisted', '/drafts/edit', '/drafts/approve', '/procedures/prepare', '/procedures/accept'].includes(action);
+        if (!read && !write) throw new RequestError(404, 'Resource unavailable.');
+        const input = read ? Object.fromEntries(loc.searchParams) : await body(request);
+        const allowed = action === '/procedures/prepare' ? ['projectId', 'attemptId', 'skillId', 'referencePaths'] : action === '/procedures/accept' ? ['projectId', 'candidateId', 'expectedHash', 'approved', 'reviewNote'] : action === '/drafts/create-assisted' ? ['projectId', 'proposalId', 'name', 'description', 'procedure', 'requested'] : action === '/drafts/create' ? ['projectId', 'name', 'description', 'procedure', 'references', 'requested'] : action === '/drafts/edit' ? ['projectId', 'id', 'revision', 'content'] : action === '/drafts/approve' ? ['projectId', 'id', 'revision', 'approved'] : action === '/content' ? ['projectId', 'id'] : action === '/settings' ? ['projectId', 'settings'] : action === '/approve' ? ['projectId', 'id', 'enabled', 'contentHash'] : action === '/install' ? ['projectId', 'id', 'approved'] : action === '' ? ['projectId', 'query', 'source'] : ['projectId'];
+        if (!input || typeof input.projectId !== 'string' || Object.keys(input).some(key => !allowed.includes(key))) throw new RequestError(400, 'Select an existing project and valid catalog fields.');
+        const result = await enqueueCatalog(async () => {
+          const plan = await readPlan(planFile);
+          const project = (plan.schema === 2 ? plan.projects : [plan]).find(item => item.project.id === input.projectId);
+          if (!project) throw new RequestError(404, 'Project not found.');
+          try {
+            if (action.startsWith('/procedures')) {
+              if (!procedureEvidence) throw new RequestError(503, 'Procedure review evidence is unavailable. Preserve its store for recovery.');
+              if (action === '/procedures/prepare') return procedureEvidence.prepare(input);
+              if (action === '/procedures/accept') {
+                const acceptance = procedureEvidence.accept({ ...input, principal: 'user' });
+                return { acceptance, ...procedureEvidence.suggest({ projectId: input.projectId }) };
+              }
+              return procedureEvidence.snapshot(input.projectId);
+            }
+            if (action.startsWith('/drafts')) {
+              if (!skillGeneration) throw new RequestError(503, 'Project Skill drafts are unavailable. Preserve their store for recovery.');
+              if (action === '/drafts') return skillGeneration.snapshot(input.projectId);
+              if (action === '/drafts/edit') return skillGeneration.edit(input.projectId, input.id, input.revision, input.content);
+              if (!project.project.folder) throw new RequestError(400, 'Set the project folder before generating a Skill.');
+              if (action === '/drafts/create') return skillGeneration.create({ ...input, folder: project.project.folder });
+              if (action === '/drafts/create-assisted') return skillGeneration.createAssisted({ ...input, folder: project.project.folder });
+              return skillGeneration.approve({ ...input, folder: project.project.folder });
+            }
+            if (action === '/content') return projectSkills.inspect(input.projectId, input.id);
+            if (action === '/settings') return projectSkills.configure(input.projectId, input.settings);
+            if (action === '/approve') return projectSkills.approve(input.projectId, input.id, input.enabled, input.contentHash);
+            if (action === '/install') return await projectSkills.install(input.projectId, input.id, input.approved);
+            if (action === '/discover') {
+              if (!project.project.folder) throw new RequestError(400, 'Set the project folder before discovering local Skills.');
+              return projectSkills.discoverLocal(input.projectId, project.project.folder);
+            }
+            return { ...projectSkills.reconcile(input.projectId), ...projectSkills.snapshot(input.projectId, { query: input.query, source: input.source }), executionIntegration: true };
+          } catch (error) { if (error.status) throw error; throw new RequestError(400, error.message); }
+        });
+        return json(200, result);
       }
       if (request.method === 'GET' && pathname === '/api/skills') {
         return json(200, skillsSnapshot());

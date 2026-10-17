@@ -427,9 +427,21 @@
 
   function workersHtml(rows) {
     const models = orchestra.models || orchestra.fleet || [];
-    const workers = [...rows, ...(orchestra.workerHistory || [])].flatMap(row => {
+    const assignmentRow = (row, part, retainedHistory) => {
+      const owner = row.projectId || row.id;
+      const session = part.activitySession || (row.activitySessions || []).find(item => item.projectId === owner && item.attemptId === part.attemptId && (!part.megaTaskId || item.megaTaskId === part.megaTaskId));
+      const megaId = part.megaTaskId || session?.megaTaskId;
+      const mega = (orchestra.execution?.megaTasks || []).find(item => item.projectId === owner && item.id === megaId);
+      const historical = retainedHistory || Boolean(megaId && row.megaTaskId && megaId !== row.megaTaskId) || session?.historical === true;
+      if (!historical) return { row, part };
+      // A retained attempt belongs to its original MegaTask. The current project
+      // title, progress summary and combined tail are never evidence for it.
+      const status = mega ? ({ COMPLETE: 'complete', FAILED: 'failed', PAUSED: 'checkpointed', RUNNING: 'recorded' }[mega.status] || 'recorded') : retainedHistory ? row.status : 'recorded';
+      return { row: { ...row, jobTitle: mega?.title || (retainedHistory ? row.jobTitle : null) || 'Assignment title not retained', status, label: mega?.status || (retainedHistory ? row.label || row.status : null) || 'Historical assignment; status unknown', workerActivity: '', workerTail: '', progressAt: null, monitoring: null }, part: { ...part, alive: false } };
+    };
+    const workers = [...rows.map(row => ({ row, retainedHistory: false })), ...(orchestra.workerHistory || []).map(row => ({ row, retainedHistory: true }))].flatMap(({ row, retainedHistory }) => {
       const parts = Array.isArray(row.dispatch) ? row.dispatch.filter(part => part && (part.pid || part.startedAt || part.resultPath)) : [];
-      if (parts.length) return parts.map((part, index) => ({ row, part, index }));
+      if (parts.length) return parts.map((part, index) => ({ ...assignmentRow(row, part, retainedHistory), index }));
       return row.workerPid ? [{ row, part: { modelId: row.modelId, label: row.workerLabel, pid: row.workerPid, alive: row.workerAlive, activity: row.workerActivity }, index: 0 }] : [];
     });
     (orchestra.researches || []).forEach(job => {
@@ -527,7 +539,7 @@
     const providerControls = providerList.map(provider => `<article class="dash-model"><strong>${escape(provider.label)}</strong><p>${provider.models.length} configured models | ${escape(provider.availability)}</p><button class="secondary compact" data-provider="${escape(provider.id)}" data-provider-enabled="${!provider.enabled}">${provider.enabled ? 'Disable provider' : 'Enable provider'}</button><button class="secondary compact" data-provider-show="${escape(provider.id)}" data-provider-show-all="${!provider.showAll}">${provider.showAll ? 'Show selected models' : 'Show all models'}</button></article>`).join('');
     const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${PlanwharfWorkspaceUI.roles.map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes current models. ${excludedFleet.length} models no longer listed by their provider are hidden; saved roles and execution history are retained.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
-      const doing = jobs.map(job => `${job.project}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
+      const doing = jobs.map(job => `${job.project}${job.taskTitle ? ' / ' + job.taskTitle : ''}${job.attemptId ? ' / attempt ' + job.attemptId : ''}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
       const availabilityText = item.availabilityWarning
         ? `Availability unread: ${item.availabilityWarning} Last known status: ${item.available === false ? 'unavailable' : 'available'}.`
         : item.available === false ? item.unavailableReason : doing;
@@ -544,10 +556,10 @@
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
       const slices = parts.length
-        ? parts.map(part => `<li><strong>${escape(part.label || part.modelId)}</strong> · ${escape(part.slice || 'whole job')} · pid ${escape(String(part.pid || '—'))} ${part.alive ? 'alive' : 'stopped'} · ${escape(part.activity || row.workerActivity || 'quiet')}</li>`).join('')
+        ? parts.map(part => `<li><strong>${escape(part.label || part.modelId)}</strong> · ${escape(part.assignmentJobTitle || (part.historicalAssignment ? 'Historical assignment title not retained' : row.jobTitle) || part.slice || 'whole job')}${part.attemptId ? ' · attempt ' + escape(part.attemptId) : ''} · pid ${escape(String(part.pid || '—'))} ${part.alive ? 'alive' : 'stopped'} · ${escape(part.activity || (part.historicalAssignment ? 'Original activity is not retained.' : row.workerActivity || 'quiet'))}</li>`).join('')
         : `<li class="muted">${row.workerLabel ? escape(row.workerLabel) : 'No process yet.'}</li>`;
       const log = row.workerTail ? `<details class="monitor-log"><summary>Live log</summary><pre class="worker-tail">${escape(row.workerTail)}</pre></details>` : '';
-      const monitor = row.monitoring ? `<p class="muted">${row.monitoring.alive}/${row.monitoring.workers} alive · ${row.monitoring.folderFiles} files</p>` : '';
+      const monitor = row.monitoring ? `<p class="muted">${row.monitoring.alive}/${row.monitoring.workers} alive · ${Number.isFinite(row.monitoring.folderFiles) ? row.monitoring.folderFiles + ' files' : 'File count unavailable'}</p>` : '';
       return `<article class="dash-proc ${escape(row.status)}"><header><strong>${escape(row.name)}</strong><span class="orch-status">${escape(row.label)}</span></header>${checkpointBanner(row)}<p>${escape(row.analysis || row.orchestratorDoing || row.doing || '')}</p>${monitor}<ol class="dash-slices">${slices}</ol>${log}<div class="now-actions">${projectActions(row)}</div></article>`;
     }).join('') || '<p class="muted">No projects in the notebook.</p>'}</div></section>`;
     const iv = `<section class="dash-section dash-zone-iv"><h3>Interventions</h3>${interventions.length

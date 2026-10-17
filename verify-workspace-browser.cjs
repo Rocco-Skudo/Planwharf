@@ -1,16 +1,16 @@
 'use strict';
-// Chrome + actual isolated backend and persisted protocol fixtures. No live provider calls.
+// Installed Chromium browser + actual isolated backend and persisted protocol fixtures. No live provider calls.
 const assert = require('node:assert/strict'), fs = require('node:fs'), path = require('node:path');
 const { spawn } = require('node:child_process');
 const sourceRoot = path.resolve(process.env.PLANWHARF_TEST_SOURCE_ROOT || __dirname);
 const Plan = require(path.join(sourceRoot, 'plan.js'));
 const { createServer } = require(path.join(sourceRoot, 'server.cjs'));
 const chrome = process.env.PLANWHARF_TEST_BROWSER;
-assert.ok(chrome && path.isAbsolute(chrome) && /(?:^|[\\/])chrome\.exe$/i.test(chrome) && fs.statSync(chrome).isFile(), 'Set PLANWHARF_TEST_BROWSER to the explicit installed Chrome executable.');
-assert.notEqual(process.env.PLANWHARF_TEST_NO_SANDBOX, '1', 'Chrome sandbox must stay enabled.');
+assert.ok(chrome && path.isAbsolute(chrome) && /(?:^|[\\/])(?:chrome|msedge)\.exe$/i.test(chrome) && fs.statSync(chrome).isFile(), 'Set PLANWHARF_TEST_BROWSER to the explicit installed Chrome or Edge executable.');
+assert.notEqual(process.env.PLANWHARF_TEST_NO_SANDBOX, '1', 'Browser sandbox must stay enabled.');
 const output = path.resolve(process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname, 'validation', 'workspace-' + Date.now()));
 fs.mkdirSync(output, { recursive: true });
-const profile = path.join(output, 'chrome-profile-' + Date.now()), attemptsDir = path.join(output, 'attempts'); fs.mkdirSync(attemptsDir, { recursive: true });
+const profile = path.join(output, 'browser-profile-' + Date.now()), attemptsDir = path.join(output, 'attempts'); fs.mkdirSync(attemptsDir, { recursive: true });
 const plan = { schema: 2, projects: ['workspace-alpha', 'workspace-beta'].map(id => { const item = Plan.example(); item.tasks = []; item.project = { id, name: id }; return item; }) };
 const planFile = path.join(output, 'notebook.json'); fs.writeFileSync(planFile, JSON.stringify(plan));
 const execution = { megaTasks: [], subTasks: [], results: [], checkpoints: [], timeline: [], observations: {} };
@@ -50,6 +50,9 @@ const server = createServer({ planFile, attemptsDir, models, skillsEnabled: fals
   askModel: async info => { assert.equal(info.purpose, 'supervisor'); assert.equal(info.model.id, 'supervisor-fixture'); assert.equal(info.allowActions, false); aiCalls++; return { answer: 'Fixture Supervisor advice from isolated injected provider.', provider: 'api', model: 'exact-fixture-supervisor' }; }
 });
 let browser, socket, command, evaluate, base;
+let browserStage = 'not-started';
+const browserDiagnostics = [];
+const browserStderr = fs.openSync(path.join(output, 'browser-stderr.log'), 'a');
 const errors = [], networkErrors = [], checks = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 async function until(check, label, timeout = 15000) { const end = Date.now() + timeout; while (Date.now() < end) { if (await check()) return; await delay(100); } throw Error('Timed out: ' + label); }
@@ -70,7 +73,8 @@ async function shot(name, selector) {
   const snapshot = await (await fetch(base + '/api/orchestrator?readOnly=1')).json(); assert.ok(snapshot.projects[0].activitySessions.length >= 2);
   if (process.env.PLANWHARF_EXPECT_TECHNICAL_EVIDENCE === '1') assert.ok(snapshot.projects[0].activitySessions.some(session => session.technicalEvidence?.entries?.some(entry => entry.command === 'npm test')), 'Backend must expose actual source command evidence');
   if (process.env.PLANWHARF_EXPECT_ACTIVITY_PAGING === '1') assert.ok(snapshot.projects[0].activitySessionPagination?.available === true && snapshot.projects[0].activitySessionPagination.total > 24, 'Backend must advertise real retained paging');
-  browser = spawn(chrome, ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, base + '/#orchestrator'], { windowsHide: true, stdio: 'ignore' });
+  browserStage = 'launch';
+  browser = spawn(chrome, ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'], { windowsHide: true, stdio: ['ignore', 'ignore', browserStderr] });
   let browserError; browser.on('error', error => { browserError = error; }); let port;
   await until(() => { if (browserError) throw browserError; try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); return port > 0; } catch { return false; } }, 'Chrome DevTools');
   const pages = await (await fetch('http://127.0.0.1:' + port + '/json/list')).json(); const page = pages.find(page => page.type === 'page');
@@ -78,6 +82,7 @@ async function shot(name, selector) {
   let sequence = 0; const pending = new Map();
   socket.addEventListener('message', message => {
     const data = JSON.parse(message.data);
+    if (data.method === 'Inspector.targetCrashed') browserDiagnostics.push({ stage: browserStage, event: data.method });
     if (data.method === 'Runtime.exceptionThrown') errors.push(data.params.exceptionDetails);
     if (data.method === 'Network.loadingFailed' && !data.params.canceled) networkErrors.push(data.params);
     if (data.method === 'Network.responseReceived' && data.params.response.status >= 400 && !data.params.response.url.endsWith('/favicon.ico')) networkErrors.push({ url: data.params.response.url, status: data.params.response.status });
@@ -85,9 +90,13 @@ async function shot(name, selector) {
   });
   command = (method, params = {}) => new Promise((resolve, reject) => { const id = ++sequence; const timer = setTimeout(() => { pending.delete(id); reject(Error('DevTools timeout: ' + method)); }, 20000); pending.set(id, { resolve, reject, timer }); socket.send(JSON.stringify({ id, method, params })); });
   evaluate = async expression => { const result = await command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true }); if (result.exceptionDetails) throw Error(JSON.stringify(result.exceptionDetails)); return result.result.value; };
+  browserStage = 'blank-page-smoke';
+  await command('Inspector.enable');
+  assert.equal(await evaluate('1 + 1'), 2, 'Blank page renderer must respond before application navigation');
   await command('Runtime.enable'); await command('Network.enable'); await command('Page.enable');
   await command('Emulation.setDeviceMetricsOverride', { width: 1480, height: 1050, deviceScaleFactor: 1, mobile: false });
-  await command('Page.reload');
+  browserStage = 'application-navigation';
+  await command('Page.navigate', { url: base + '/#orchestrator' });
   await until(() => evaluate("document.body.dataset.orchReady==='1' && document.querySelector('[data-workspace-session]')?.options.length>=2"), 'workspace real sessions');
   await click('[data-workspace-panel=sessions]');
   assert.equal(await evaluate("document.querySelector('[data-activity-mode=friendly]').getAttribute('aria-pressed')"), 'true');
@@ -161,11 +170,12 @@ async function shot(name, selector) {
   assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth + 2'), true, 'Mobile has no horizontal page overflow'); await shot('workspace-mobile-light', '.workspace-nav');
   assert.equal(launches, 0); assert.deepEqual(errors, []); assert.deepEqual(networkErrors, []);
   checks.push('actual backend log-to-session-to-DOM', 'Friendly/Technical provenance', 'two-project drafts and sessions', 'shared conversation retained', 'focus restore', 'keyboard resize', 'light/dark/mobile', 'Core zero calls', 'Supervisor-only injected advisory', 'blank/inert names', 'reload/hash compatibility', 'no JS/HTTP errors');
-  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ status: 'PASS', sourceRoot, browser: chrome, sandboxEnabled: true, fixturesOnly: true, liveProviderCalls: 0, injectedSupervisorCalls: aiCalls, workerLaunches: launches, checks, errors, networkErrors }, null, 2));
-  console.log('PASS: Chrome workspace browser checks; actual isolated backend, recorded protocol fixtures and injected Supervisor only. Evidence: ' + output);
-})().catch(error => { fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: error.stack, errors, networkErrors }, null, 2)); console.error(error); process.exitCode = 1; }).finally(async () => {
+  fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ status: 'PASS', sourceRoot, browser: chrome, browserDiagnostics, sandboxEnabled: true, fixturesOnly: true, liveProviderCalls: 0, injectedSupervisorCalls: aiCalls, workerLaunches: launches, checks, errors, networkErrors }, null, 2));
+  console.log('PASS: ' + path.basename(chrome) + ' workspace browser checks; actual isolated backend, recorded protocol fixtures and injected Supervisor only. Evidence: ' + output);
+})().catch(error => { fs.writeFileSync(path.join(output, 'failure.json'), JSON.stringify({ error: error.stack, browser: chrome, stage: browserStage, browserDiagnostics, errors, networkErrors }, null, 2)); console.error(error); process.exitCode = 1; }).finally(async () => {
   if (command) { try { await command('Browser.close'); } catch {} }
   socket?.close();
   if (browser && browser.exitCode === null) { await delay(300); if (browser.exitCode === null) browser.kill(); }
   if (server.listening) await new Promise(resolve => server.close(resolve));
+  fs.closeSync(browserStderr);
 });

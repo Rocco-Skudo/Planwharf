@@ -68,7 +68,7 @@
   }
   function resolveState(row, available = true) {
     if (!available || !row) return 'neutral';
-    const parts = Array.isArray(row.dispatch) ? row.dispatch.filter(Boolean) : [];
+    const parts = Array.isArray(row.dispatch) ? row.dispatch.filter(part => part && !part.historicalAssignment && (!row.megaTaskId || !part.megaTaskId || part.megaTaskId === row.megaTaskId)) : [];
     const live = row.workerAlive || parts.some(part => part.alive);
     const terminal = ['complete', 'checkpointed', 'failed'].includes(row.status) || row.status?.startsWith('blocked_');
     if (terminal && live) return row.status === 'complete' ? 'running' : 'pausing';

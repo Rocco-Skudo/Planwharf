@@ -1535,3 +1535,19 @@ body[data-layout-height-resizing] { cursor: row-resize; user-select: none; }
 
 .workspace-sessions select { min-width:0; max-width:100%; width:100%; }
 .workspace-sessions pre { min-width:0; max-width:100%; overflow-x:auto; }
+#project-skills-panel {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+#project-skills-panel *, #project-skills-panel *::before, #project-skills-panel *::after {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+#project-skills-panel input[type="checkbox"] {
+  width: auto;
+  margin-inline: 0 .4rem;
+}
+#project-skills-panel textarea {
+  width: 100%;
+}

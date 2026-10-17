@@ -106,7 +106,7 @@ function orchestratorDoing(row) {
   return LABELS[row.status] || 'Idle.';
 }
 
-function crewOf(row, leadLabel) {
+function crewOf(row, leadLabel, execution = {}) {
   const crew = [{
     role: 'Orchestrator',
     name: leadLabel || (row && row.orchestratorLabel) || ORCH_NAME,
@@ -116,14 +116,21 @@ function crewOf(row, leadLabel) {
   const dispatch = liveWorkers && Array.isArray(row.dispatch) ? row.dispatch : [];
   if (dispatch.length) {
     dispatch.forEach(part => {
+      const sub = (execution.subTasks || row.subTasks || []).find(sub => sub.id === part.subTaskId && (!part.megaTaskId || sub.megaTaskId === part.megaTaskId));
+      const retainedRole = part.activitySession?.role;
+      const role = retainedRole === 'reviewer' || (!retainedRole && assignmentRole(sub || part) === 'reviewer') ? 'Reviewer' : 'Worker';
       let doing = part.slice || 'On the plan';
+      if (part.historicalAssignment) {
+        crew.push({ role, name: part.label || part.modelId, doing: `${part.assignmentJobTitle || 'Historical assignment'}: ${part.activity || 'Original activity is not retained.'}` });
+        return;
+      }
       if (row.status === 'needs_approval') doing = `${part.slice || 'Whole job'}. Waiting for Approve.`;
       if (row.status === 'watching') doing = part.activity || row.workerActivity
         || `${part.slice || 'Whole job'}. ${part.pid ? `Process ${part.pid}${part.alive ? ' running' : ' stopped'}.` : 'Claimed.'}`;
       if (row.status === 'complete') doing = 'Evidence complete.';
       if (row.status === 'checkpointed') doing = checkpointTalk(row.checkpoint && row.checkpoint.reason).orch;
       if (row.status === 'blocked_no_worker') doing = 'No remaining provider usage.';
-      crew.push({ role: 'Worker', name: part.label || part.modelId, doing });
+      crew.push({ role, name: part.label || part.modelId, doing });
     });
   } else if (row && row.workerLabel && !String(row.workerLabel).includes(' + ')) {
     crew.push({
@@ -510,7 +517,7 @@ function briefRow(row, lead) {
     bits.push(row.workerLabel ? `Worker: ${row.workerLabel}.` : 'No worker assigned.');
   }
   if (row.monitoring) {
-    bits.push(`I am monitoring processes, worker logs, and the project folder: ${row.monitoring.alive}/${row.monitoring.workers} alive, ${row.monitoring.folderFiles} files.`);
+    bits.push(`I am monitoring processes, worker logs, and the project folder: ${row.monitoring.alive}/${row.monitoring.workers} alive, ${Number.isFinite(row.monitoring.folderFiles) ? row.monitoring.folderFiles + ' files' : 'file count unavailable'}.`);
   }
   if (row.waitingFor) bits.push(`Waiting for: ${row.waitingFor}.`);
   if (row.next) bits.push(`Next: ${row.next}`);
@@ -578,7 +585,7 @@ function answerQuestion(question, snap, projectId) {
     return {
       ok: true,
       projectId: row.id,
-      answer: `${lead}: ${row.orchestratorDoing || 'not monitoring a run.'} ${row.monitoring ? `${row.monitoring.alive}/${row.monitoring.workers} processes alive, ${row.monitoring.folderFiles} files.` : ''} Waiting for: ${row.waitingFor || 'nothing named'}.`
+      answer: `${lead}: ${row.orchestratorDoing || 'not monitoring a run.'} ${row.monitoring ? `${row.monitoring.alive}/${row.monitoring.workers} processes alive, ${Number.isFinite(row.monitoring.folderFiles) ? row.monitoring.folderFiles + ' files' : 'file count unavailable'}.` : ''} Waiting for: ${row.waitingFor || 'nothing named'}.`
     };
   }
   if (/\b(next|prossimo|waiting|aspet)\b/i.test(q)) {
@@ -735,11 +742,14 @@ function fleetOf(models, projects, leadId, plans) {
           assignments.push({
             projectId: row.id,
             project: row.name,
-            status: row.status,
+            taskTitle: part.assignmentJobTitle || (part.historicalAssignment ? 'Historical assignment title not retained' : row.jobTitle) || '',
+            attemptId: part.attemptId || null,
+            historicalAssignment: Boolean(part.historicalAssignment),
+            status: part.assignmentStatus || row.status,
             slice: part.slice || '',
             pid: part.pid || null,
             alive: Boolean(part.alive),
-            activity: part.activity || row.workerActivity || ''
+            activity: part.activity || (part.historicalAssignment ? 'Original activity is not retained for this historical assignment.' : row.workerActivity || '')
           });
         });
       } else if (row.modelId === item.id) {
@@ -1812,13 +1822,19 @@ function createOrchestrator(options) {
             ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
           const sub = row.subTasks?.find(sub => sub.id === part.subTaskId);
           const result = store.execution.results.find(result => result.attemptId === part.attemptId);
+          const assignmentMega = store.execution.megaTasks.find(mega => mega.id === (part.megaTaskId || result?.megaTaskId));
+          const historicalAssignment = Boolean(assignmentMega && assignmentMega.id !== row.megaTaskId);
           let diagnostic = null;
           try { diagnostic = JSON.parse(fs.readFileSync(part.resultPath + '.diagnostic.json', 'utf8')); } catch {}
           const activitySession = index < SESSION_LIMIT ? assignmentSession({
-            projectId: item.project.id, row, part: { ...part, observedAlive: alive }, execution: store.execution,
+            projectId: item.project.id, row, part: { ...part, megaTaskId: assignmentMega?.id || part.megaTaskId, observedAlive: !terminal && !historicalAssignment && alive }, execution: store.execution, historical: historicalAssignment,
             tail: readRecordedTail(part.logPath, dir), index
           }) : null;
-          return { ...part, diagnostic, activitySession, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
+          return { ...part, diagnostic, activitySession, historicalAssignment,
+            assignmentJobTitle: assignmentMega?.title || null,
+            assignmentStatus: historicalAssignment ? ({ COMPLETE: 'complete', FAILED: 'failed', BLOCKED: 'blocked' }[result?.status] || 'historical') : row.status,
+            ...(historicalAssignment ? { activity: result?.summary || 'Original activity is not retained for this historical assignment.' } : {}),
+            observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !historicalAssignment && !part.stoppedByUser && alive };
         });
         const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
           : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1826,6 +1842,7 @@ function createOrchestrator(options) {
         return {
           id: item.project.id,
           name: item.project.name,
+          projectSkills: typeof opts.projectSkillState === 'function' ? clone(opts.projectSkillState(item.project.id)) : null,
           folder: item.project.folder || null,
           github: item.project.github || null,
           repository: row.repository && row.repository.folder === (item.project.folder || null) && row.repository.github === (item.project.github || null) ? clone(row.repository) : null,
@@ -1853,7 +1870,7 @@ function createOrchestrator(options) {
           next: row.megaTaskId ? executionNext(store.execution.megaTasks.find(mega => mega.id === row.megaTaskId && mega.projectId === item.project.id), store.execution) : row.next || '',
           step: stepOf(row),
           pipeline: pipelineOf(row),
-          crew: crewOf({ ...row, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME),
+          crew: crewOf({ ...row, dispatch, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME, store.execution),
           resultPath: row.resultPath || null,
           watchingSince: row.watchingSince || null,
           approved: Boolean(row.approved),
@@ -2549,7 +2566,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
       const history = recentContext(conversation || []);
-      if (grillKind && opts.mattSkillsEnabled?.() === false) {
+      if (grillKind && opts.mattSkillsEnabled?.(row?.id || projectId) === false) {
         answer = 'Matt skills are disabled. Enable Use Matt skills to start Matt grilling.';
       } else if (grillKind && typeof opts.askModel !== 'function') {
         answer = 'An orchestrator model connection is required for Matt grilling. Select an available lead and retry.';
@@ -2641,7 +2658,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
-          diagnostic = grillKind && /Matt .*skill/i.test(error?.message || '') ? null : diagnoseProvider(lead, error?.message || 'CLI error');
+          diagnostic = error?.code === 'PROJECT_SKILL_INTERVIEW_UNAVAILABLE' || grillKind && /Matt .*skill/i.test(error?.message || '') ? null : diagnoseProvider(lead, error?.message || 'CLI error');
           answer = diagnostic ? diagnostic.message : error.message;
         }
         thinkingLive = null;
@@ -2831,18 +2848,20 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
   async function composeGrillRound(item, facts, kind) {
     const latest = item.revisions.at(-1);
     const docs = kind === 'docs' ? collectDocs(facts) : [];
-    const skillText = typeof opts.readSkill === 'function'
-      ? (opts.readSkill('skills/productivity/grilling/SKILL.md') || '')
+    const skillsEnabled = opts.mattSkillsEnabled?.(item.project.id) !== false;
+    const skillText = skillsEnabled && typeof opts.readSkill === 'function'
+      ? (opts.readSkill('skills/productivity/grilling/SKILL.md', item.project.id) || '')
       : '';
-    const docsSkill = kind === 'docs' && typeof opts.readSkill === 'function'
-      ? (opts.readSkill('skills/engineering/grill-with-docs/SKILL.md') || '')
+    const docsSkill = skillsEnabled && kind === 'docs' && typeof opts.readSkill === 'function'
+      ? (opts.readSkill('skills/engineering/grill-with-docs/SKILL.md', item.project.id) || '')
       : '';
     const lead = leadModel();
-    if (typeof opts.askModel === 'function' && lead) {
+    if (skillsEnabled && typeof opts.askModel === 'function' && lead) {
       try {
         const spoken = await opts.askModel({
           question: grillPrompt(item, facts, [docsSkill, skillText].filter(Boolean).join('\n\n'), docs),
           model: lead,
+          clarificationKind: kind,
           projectId: item.project.id,
           folder: item.project.folder || null,
           state: { name: item.project.name, goal: latest && latest.direction, folder: item.project.folder, docs },
@@ -2851,7 +2870,9 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         const text = spoken && typeof spoken === 'object' && !Array.isArray(spoken) ? spoken.answer : spoken;
         const parsed = parseGrillQuestions(leadEnvelope(text).answer);
         if (parsed.length) return parsed;
-      } catch (_) {}
+      } catch (error) {
+        if (error.code === 'PROJECT_SKILL_INTERVIEW_UNAVAILABLE') throw error;
+      }
     }
     return Plan.grillFrontier({
       name: item.project.name,
@@ -2928,9 +2949,15 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
       const wanted = store.grillKind === 'docs' || store.grillKind === 'me' ? store.grillKind : null;
       if (wanted === 'docs' && !docs.length) return { ok: false, reason: 'No docs in the folder to grill with' };
       const kind = wanted === 'me' ? 'me' : (wanted === 'docs' || docs.length ? 'docs' : 'me');
-      const questions = await composeGrillRound(item, facts, kind);
+      let questions;
+      try { questions = await composeGrillRound(item, facts, kind); } catch (error) {
+        row.pendingAutoStart = null;
+        note(projectId, 'Clarification interview unavailable: ' + error.message);
+        persist();
+        return { ok: false, reason: error.message };
+      }
       row.grillAsked = true;
-      note(projectId, opts.mattSkillsEnabled?.() === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
+      note(projectId, opts.mattSkillsEnabled?.(projectId) === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: clarification interview (${kind}); inspect Skill delivery records for instruction provenance.`);
       persist();
       await tick(projectId);
       return {

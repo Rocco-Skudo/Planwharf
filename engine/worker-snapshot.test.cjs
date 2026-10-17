@@ -8,7 +8,7 @@ const { createAttemptEngine } = require('./attempts.js');
 const { createSentinel } = require('./sentinel.js');
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-worker-snapshot-'));
 const project = id => ({ schema: 1, project: { id, name: id }, revisions: [{ id: 1, direction: 'Isolated fixture', state: '', open: [] }], tasks: [] });
-const plan = { schema: 2, projects: ['dead-complete', 'reused-complete', 'running', 'dead-watching', 'paused'].map(project) };
+const plan = { schema: 2, projects: ['dead-complete', 'reused-complete', 'running', 'dead-watching', 'paused', 'crew-roles'].map(project) };
 const projects = Object.fromEntries(plan.projects.map(item => [item.project.id, {
   status: item.project.id === 'paused' ? 'checkpointed' : item.project.id.includes('complete') ? 'complete' : 'watching',
   modelId: 'fixture', workerPid: item.project.id.startsWith('dead') ? 111 : 222, workerAlive: true,
@@ -16,7 +16,16 @@ const projects = Object.fromEntries(plan.projects.map(item => [item.project.id, 
   dispatch: [{ modelId: 'fixture', pid: item.project.id.startsWith('dead') ? 111 : 222, alive: true, slice: 'Fixture' }]
 }]));
 const file = path.join(dir, 'orchestrator.json');
-const evidence = JSON.stringify({ projects, mode: 'manual', researches: [] });
+const execution = { megaTasks: [{ id: 'crew-current', projectId: 'crew-roles', title: 'Current review', status: 'RUNNING' }, { id: 'crew-old', projectId: 'crew-roles', title: 'Original review', status: 'COMPLETE' }],
+  subTasks: [{ id: 'current-review', megaTaskId: 'crew-current', type: 'AUDIT', status: 'RUNNING' }, { id: 'old-review', megaTaskId: 'crew-old', type: 'AUDIT', status: 'COMPLETE' }], results: [], checkpoints: [], timeline: [] };
+projects['crew-roles'].megaTaskId = 'crew-current';
+projects['crew-roles'].dispatch = [
+  { label: 'Current reviewer', modelId: 'fixture', pid: 222, megaTaskId: 'crew-current', subTaskId: 'current-review' },
+  { label: 'Historical reviewer', modelId: 'fixture', pid: 222, megaTaskId: 'crew-old', subTaskId: 'old-review' },
+  { label: 'Retained audit fallback', modelId: 'fixture', type: 'AUDIT', pid: 111 },
+  { label: 'Legacy worker fallback', modelId: 'fixture', pid: 111 }
+];
+const evidence = JSON.stringify({ projects, execution, mode: 'manual', researches: [] });
 fs.writeFileSync(file, evidence);
 (async () => {
   let launches = 0;
@@ -29,10 +38,16 @@ fs.writeFileSync(file, evidence);
     assert.equal(byId(id).dispatch[0].alive, false, id);
     assert.equal(byId(id).workerAlive, false, id);
     assert.equal(byId(id).monitoring.alive, 0, id);
+    if (['dead-complete', 'reused-complete', 'paused'].includes(id)) assert.notEqual(byId(id).dispatch[0].activitySession?.processState, 'running', 'Terminal session cannot inherit raw PID liveness');
   }
   assert.equal(byId('running').dispatch[0].alive, true);
   assert.equal(byId('running').workerAlive, true);
+  assert.equal(byId('running').dispatch[0].activitySession.processState, 'running', 'Current live assignment retains live state');
   assert.equal(byId('reused-complete').dispatch[0].pid, 222, 'Historical PID retained');
+  const crew = byId('crew-roles').crew;
+  for (const name of ['Current reviewer', 'Historical reviewer', 'Retained audit fallback']) assert.equal(crew.find(part => part.name === name).role, 'Reviewer', name);
+  assert.equal(crew.find(part => part.name === 'Legacy worker fallback').role, 'Worker');
+  assert.match(crew.find(part => part.name === 'Historical reviewer').doing, /Original review/);
   assert.equal(launches, 0);
   assert.equal(fs.readFileSync(file, 'utf8'), evidence, 'Snapshot does not rewrite persisted evidence');
   console.log('Worker snapshots refresh liveness and keep terminal jobs inactive, including reused PIDs.');

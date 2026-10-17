@@ -110,5 +110,38 @@ node('worker-state-filter').value = 'all';
   await intervals[0]();
   assert.match(node('orch-lead').innerHTML, /value="gemini"[^>]* selected>Gemini Pro/);
   assert.doesNotMatch(node('orch-lead').innerHTML, /value="gemini"[^>]* disabled/);
+  snapshot.researches = []; snapshot.workerHistory = [];
+  snapshot.execution = { megaTasks: [
+    { id: 'old-worker', projectId: 'test', title: 'Original worker objective', status: 'COMPLETE' },
+    { id: 'old-review', projectId: 'test', title: 'Original reviewer objective', status: 'COMPLETE' },
+    { id: 'current', projectId: 'test', title: 'Current objective', status: 'RUNNING' }
+  ] };
+  snapshot.projects = [{ id: 'test', name: 'Fixture project', megaTaskId: 'current', jobTitle: 'Current objective', status: 'watching', label: 'Current project summary', workerActivity: 'LATEST-ONLY-ACTIVITY', workerTail: 'LATEST-ONLY-LOG', dispatch: [
+    { attemptId: 'old-worker-attempt', megaTaskId: 'old-worker', modelId: 'luna', pid: 201, alive: false, slice: 'Original worker slice', validatedResultStatus: 'COMPLETE' },
+    { attemptId: 'old-review-attempt', megaTaskId: 'old-review', modelId: 'luna', pid: 202, alive: false, slice: 'Original reviewer slice', validatedResultStatus: 'COMPLETE' },
+    { attemptId: 'unknown-attempt', megaTaskId: 'missing', modelId: 'luna', pid: 203, alive: false, slice: 'Unretained assignment' },
+    { attemptId: 'current-attempt', megaTaskId: 'current', modelId: 'luna', pid: 204, alive: true, slice: 'Current slice' }
+  ] }];
+  await intervals[0]();
+  const cards = workerSection().match(/<article class="dash-worker[\s\S]*?<\/article>/g);
+  const historicalWorker = cards.find(card => card.includes('Original worker slice'));
+  const historicalReviewer = cards.find(card => card.includes('Original reviewer slice'));
+  assert.match(historicalWorker, /Original worker objective/); assert.match(historicalReviewer, /Original reviewer objective/);
+  for (const card of [historicalWorker, historicalReviewer]) { assert.doesNotMatch(card, /Current objective|Current project summary|LATEST-ONLY/); assert.doesNotMatch(card, /data-worker-stop/); }
+  const missing = cards.find(card => card.includes('Unretained assignment')); assert.match(missing, /Assignment title not retained/); assert.match(missing, /Historical assignment; status unknown/); assert.doesNotMatch(missing, /Current objective|LATEST-ONLY/);
+  const current = cards.find(card => card.includes('Current slice')); assert.match(current, /Current objective/); assert.match(current, /LATEST-ONLY-ACTIVITY/); assert.match(current, /data-worker-stop="test"/);
+  const old = snapshot.projects[0].dispatch[0]; Object.assign(old, { historicalAssignment: true, assignmentJobTitle: 'Original worker objective', activity: 'Original recorded result summary' });
+  snapshot.projects[0].monitoring = { alive: 1, workers: 1 };
+  snapshot.fleet = [{ ...snapshot.models[0], assignments: [{ project: 'Fixture project', taskTitle: 'Original worker objective', attemptId: old.attemptId, activity: 'Original recorded result summary', alive: false }] }];
+  await intervals[0]();
+  const modelMarkup = node('orchestrator').innerHTML.split('<section class="dash-section dash-zone-models">')[1].split('<section class="dash-section dash-zone-procs">')[0];
+  assert.match(modelMarkup, /Original worker objective/); assert.match(modelMarkup, /attempt old-worker-attempt/);
+  const processMarkup = node('orchestrator').innerHTML.split('<section class="dash-section dash-zone-procs">')[1].split('<section class="dash-section dash-zone-iv">')[0];
+  const oldProcess = processMarkup.match(/<li>[\s\S]*?attempt old-worker-attempt[\s\S]*?<\/li>/)[0];
+  assert.match(oldProcess, /Original worker objective/); assert.match(oldProcess, /Original recorded result summary/); assert.doesNotMatch(oldProcess, /LATEST-ONLY/);
+  assert.match(processMarkup, /File count unavailable/); assert.doesNotMatch(processMarkup, /undefined files/);
+  snapshot.fleet = [];
+  snapshot.workerHistory = [{ id: 'test', name: 'Fixture project', jobTitle: 'Retained legacy title', status: 'checkpointed', dispatch: [{ modelId: 'luna', pid: 205, alive: false, slice: 'Legacy retained slice' }] }];
+  await intervals[0](); assert.match(workerSection(), /Retained legacy title/);
   console.log('Workers UI isolated snapshot checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });
