@@ -172,6 +172,9 @@
   window.PlanwharfInspectAssignment = attemptId => {
     const session = (orchestra.projects || []).find(row => row.id === projectId)?.activitySessions?.find(session => session.attemptId === attemptId);
     if (!session) { notice('No retained activity session is available for this assignment.'); return; }
+    workspacePreferences.offset = 0;
+    workspacePreferences.sessionsByPage ||= {};
+    workspacePreferences.sessionsByPage[0] = session.id;
     workspacePreferences.session = session.id; workspacePreferences.role = 'all'; workspacePanel('sessions'); renderWorkspace();
   };
   workspace?.addEventListener('click', event => {
