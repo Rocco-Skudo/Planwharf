@@ -1,0 +1,31 @@
+name: Offline pull request checks
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Syntax, patch integrity and reviewed offline fixtures
+        env:
+          PLANWHARF_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
+        run: node scripts/engineering/ci.cjs
+      - name: Preserve check logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: offline-check-logs
+          path: engineering-logs/
+          retention-days: 7
+          if-no-files-found: error

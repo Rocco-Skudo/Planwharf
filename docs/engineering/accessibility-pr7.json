@@ -1,0 +1,48 @@
+{
+  "lightPrimaryTokenContrast": 3.968326871008013,
+  "evidence": "static source only; no browser or assistive technology execution",
+  "dialogs": [
+    {
+      "id": "revision-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "grill-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "import-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "task-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "auto-start-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "project-dialog",
+      "explicitAccessibleName": false
+    },
+    {
+      "id": "place-dialog",
+      "explicitAccessibleName": false
+    }
+  ],
+  "unnamedDialogs": [
+    "revision-dialog",
+    "grill-dialog",
+    "import-dialog",
+    "task-dialog",
+    "auto-start-dialog",
+    "project-dialog",
+    "place-dialog"
+  ],
+  "focusRulePresent": true,
+  "shipExitFocusPresent": true,
+  "shipEscapeHandlerPresent": true,
+  "motionPreferencePresent": true,
+  "liveRegionPresent": true
+}
