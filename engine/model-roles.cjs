@@ -1,16 +1,19 @@
 'use strict';
-const ROLE_IDS = ['orchestrator', 'worker', 'reviewer'];
+const ROLE_IDS = ['orchestrator', 'worker', 'reviewer', 'supervisor'];
+// Only the API advisory transport has a verified no-tool execution contract.
+const supportsSupervisor = model => (model.adapter || model.provider) === 'api';
 function roleEligibility(model) {
   const tools = model.capabilities?.canUseTools !== false && model.capabilities?.canInspectFilesystem !== false;
   return {
     orchestrator: tools && (model.orchestratorEligible ?? model.capabilities?.orchestratorEligible ?? model.capabilities?.canOrchestrate ?? model.kind !== 'local'),
     worker: model.workerEligible !== false && model.capabilities?.workerEligible !== false,
-    reviewer: tools && (model.reviewerEligible ?? model.capabilities?.reviewerEligible ?? model.workerEligible !== false)
+    reviewer: tools && (model.reviewerEligible ?? model.capabilities?.reviewerEligible ?? model.workerEligible !== false),
+    supervisor: supportsSupervisor(model) && model.supervisorEligible !== false && model.capabilities?.supervisorEligible !== false
   };
 }
 function withModelRoles(model, preferences = {}) {
   const eligibility = roleEligibility(model);
-  const roles = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(eligibility[role] && (preferences[role] ?? model.roles?.[role] ?? true))]));
+  const roles = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(eligibility[role] && (preferences[role] ?? model.roles?.[role] ?? (role !== 'supervisor')))]));
   return { ...model, roleEligibility: eligibility, roles };
 }
 function assignmentRole(job = {}) {
@@ -22,4 +25,4 @@ function permitsAssignment(model, job) {
   if (role === 'worker' && job?.goldModel && (model.id !== job.goldModel.id || (model.providerId || model.provider) !== job.goldModel.provider || model.cli !== job.goldModel.cli)) return false;
   return resolved.roles[role] === true;
 }
-module.exports = { ROLE_IDS, roleEligibility, withModelRoles, assignmentRole, permitsAssignment };
+module.exports = { ROLE_IDS, roleEligibility, withModelRoles, assignmentRole, permitsAssignment, supportsSupervisor };

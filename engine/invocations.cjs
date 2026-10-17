@@ -58,7 +58,7 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
     }
   }
   // A lead or advisory response cannot survive backend replacement. Worker state is reconciled separately.
-  for (const row of records.values()) if (['orchestrator', 'reviewer'].includes(row.role) && row.status === 'RUNNING') finish(row.id, 'BLOCKED');
+  for (const row of records.values()) if (['orchestrator', 'reviewer', 'supervisor'].includes(row.role) && row.status === 'RUNNING') finish(row.id, 'BLOCKED');
   function view(projectId) {
     const rows = [...records.values()].filter(row => !projectId || row.projectId === projectId);
     const groups = role => {
@@ -72,7 +72,7 @@ function createInvocationLedger(dir, { now = () => new Date().toISOString() } = 
       }
       return [...totals.values()];
     };
-    return { orchestrator: groups('orchestrator'), workers: groups('worker'), recent: rows.slice(-20).reverse() };
+    return { orchestrator: groups('orchestrator'), workers: groups('worker'), supervisors: groups('supervisor'), recent: rows.slice(-20).reverse() };
   }
   return { start, update, finish, reconcile, view, file };
 }

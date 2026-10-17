@@ -5,6 +5,9 @@ assert.deepEqual(candidates('chrome', { PLANWHARF_BROWSER_PATH: '/explicit/chrom
 assert.ok(candidates('edge', { PATH: '/fixture/bin' }, 'linux').includes('/fixture/bin/microsoft-edge'));
 assert.ok(candidates('chrome', { PROGRAMFILES: 'C:/Programs', PATH: '' }, 'win32').some(x => x.includes('Google')));
 assert.ok(candidates('edge', {}, 'darwin')[0].includes('Microsoft Edge.app'));
+assert.deepEqual(candidates('chrome', { PLANWHARF_BROWSER_PATH: 'C:/explicit/chrome.exe' }, 'win32'), ['C:\\explicit\\chrome.exe']);
+assert.ok(candidates('edge', { PATH: 'C:/fixture/bin;D:/other/bin' }, 'win32').includes('D:\\other\\bin\\msedge.exe'));
+assert.ok(candidates('edge', { PATH: '/fixture/bin' }, 'linux').every(file => !file.includes('\\')));
 assert.throws(() => candidates('firefox'), /UNSUPPORTED/);
 assert.throws(() => discover('chrome', { PLANWHARF_BROWSER_PATH: '/missing-browser' }), /BROWSER_MISSING/);
 console.log('PASS browser discovery fixtures; no real browser coverage');

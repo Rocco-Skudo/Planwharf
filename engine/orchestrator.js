@@ -18,6 +18,7 @@ const Quota = require('../quota.js');
 const { validatePolicy, migratePolicy, usagePolicy, resolveUsageFallback } = require('./model-policy.cjs');
 const { validateProviderPolicy, providerPolicyFor } = require('./provider-policy.cjs');
 const { ROLE_IDS, withModelRoles, roleEligibility, permitsAssignment, assignmentRole } = require('./model-roles.cjs');
+const { assignmentSession, projectActivitySessions, pagedProjectActivitySessions, readRecordedTail, SESSION_LIMIT } = require('./activity-sessions.cjs');
 
 const LABELS = {
   waiting_on_you: 'Waiting on you',
@@ -105,7 +106,7 @@ function orchestratorDoing(row) {
   return LABELS[row.status] || 'Idle.';
 }
 
-function crewOf(row, leadLabel) {
+function crewOf(row, leadLabel, execution = {}) {
   const crew = [{
     role: 'Orchestrator',
     name: leadLabel || (row && row.orchestratorLabel) || ORCH_NAME,
@@ -115,14 +116,21 @@ function crewOf(row, leadLabel) {
   const dispatch = liveWorkers && Array.isArray(row.dispatch) ? row.dispatch : [];
   if (dispatch.length) {
     dispatch.forEach(part => {
+      const sub = (execution.subTasks || row.subTasks || []).find(sub => sub.id === part.subTaskId && (!part.megaTaskId || sub.megaTaskId === part.megaTaskId));
+      const retainedRole = part.activitySession?.role;
+      const role = retainedRole === 'reviewer' || (!retainedRole && assignmentRole(sub || part) === 'reviewer') ? 'Reviewer' : 'Worker';
       let doing = part.slice || 'On the plan';
+      if (part.historicalAssignment) {
+        crew.push({ role, name: part.label || part.modelId, doing: `${part.assignmentJobTitle || 'Historical assignment'}: ${part.activity || 'Original activity is not retained.'}` });
+        return;
+      }
       if (row.status === 'needs_approval') doing = `${part.slice || 'Whole job'}. Waiting for Approve.`;
       if (row.status === 'watching') doing = part.activity || row.workerActivity
         || `${part.slice || 'Whole job'}. ${part.pid ? `Process ${part.pid}${part.alive ? ' running' : ' stopped'}.` : 'Claimed.'}`;
       if (row.status === 'complete') doing = 'Evidence complete.';
       if (row.status === 'checkpointed') doing = checkpointTalk(row.checkpoint && row.checkpoint.reason).orch;
       if (row.status === 'blocked_no_worker') doing = 'No remaining provider usage.';
-      crew.push({ role: 'Worker', name: part.label || part.modelId, doing });
+      crew.push({ role, name: part.label || part.modelId, doing });
     });
   } else if (row && row.workerLabel && !String(row.workerLabel).includes(' + ')) {
     crew.push({
@@ -426,7 +434,7 @@ function packState(snap, row) {
       checkpoints: snap.execution.checkpoints.filter(cp => cp.projectId === row.id),
       repository: row.facts, notes: row.notes || []
     } : null,
-    researches: snap && Array.isArray(snap.researches) ? snap.researches : [],
+    researches: snap && Array.isArray(snap.researches) ? snap.researches.filter(research => !row || research.projectId === row.id) : [],
     mode: snap && snap.mode,
     grill: {
       propose: snap && snap.grillPropose !== false,
@@ -467,7 +475,7 @@ function packState(snap, row) {
       lastLog: lastActivity(row.workerTail)
     } : null,
     others: (snap && Array.isArray(snap.projects) ? snap.projects : [])
-      .filter(item => !row || item.id !== row.id)
+      .filter(() => !row)
       .map(item => ({ id: item.id, name: item.name, folder: item.folder || null, github: item.github || null, repository: item.repository || null, status: item.status, job: item.jobTitle || null })),
     fleet: (snap && Array.isArray(snap.fleet) ? snap.fleet : []).map(item => ({
       id: item.id,
@@ -509,7 +517,7 @@ function briefRow(row, lead) {
     bits.push(row.workerLabel ? `Worker: ${row.workerLabel}.` : 'No worker assigned.');
   }
   if (row.monitoring) {
-    bits.push(`I am monitoring processes, worker logs, and the project folder: ${row.monitoring.alive}/${row.monitoring.workers} alive, ${row.monitoring.folderFiles} files.`);
+    bits.push(`I am monitoring processes, worker logs, and the project folder: ${row.monitoring.alive}/${row.monitoring.workers} alive, ${Number.isFinite(row.monitoring.folderFiles) ? row.monitoring.folderFiles + ' files' : 'file count unavailable'}.`);
   }
   if (row.waitingFor) bits.push(`Waiting for: ${row.waitingFor}.`);
   if (row.next) bits.push(`Next: ${row.next}`);
@@ -577,7 +585,7 @@ function answerQuestion(question, snap, projectId) {
     return {
       ok: true,
       projectId: row.id,
-      answer: `${lead}: ${row.orchestratorDoing || 'not monitoring a run.'} ${row.monitoring ? `${row.monitoring.alive}/${row.monitoring.workers} processes alive, ${row.monitoring.folderFiles} files.` : ''} Waiting for: ${row.waitingFor || 'nothing named'}.`
+      answer: `${lead}: ${row.orchestratorDoing || 'not monitoring a run.'} ${row.monitoring ? `${row.monitoring.alive}/${row.monitoring.workers} processes alive, ${Number.isFinite(row.monitoring.folderFiles) ? row.monitoring.folderFiles + ' files' : 'file count unavailable'}.` : ''} Waiting for: ${row.waitingFor || 'nothing named'}.`
     };
   }
   if (/\b(next|prossimo|waiting|aspet)\b/i.test(q)) {
@@ -734,11 +742,14 @@ function fleetOf(models, projects, leadId, plans) {
           assignments.push({
             projectId: row.id,
             project: row.name,
-            status: row.status,
+            taskTitle: part.assignmentJobTitle || (part.historicalAssignment ? 'Historical assignment title not retained' : row.jobTitle) || '',
+            attemptId: part.attemptId || null,
+            historicalAssignment: Boolean(part.historicalAssignment),
+            status: part.assignmentStatus || row.status,
             slice: part.slice || '',
             pid: part.pid || null,
             alive: Boolean(part.alive),
-            activity: part.activity || row.workerActivity || ''
+            activity: part.activity || (part.historicalAssignment ? 'Original activity is not retained for this historical assignment.' : row.workerActivity || '')
           });
         });
       } else if (row.modelId === item.id) {
@@ -767,6 +778,7 @@ function fleetOf(models, projects, leadId, plans) {
       orchestratorEligible: item.orchestratorEligible ?? (item.kind === 'premium' || item.kind === 'default'),
       workerEligible: item.workerEligible !== false,
       reviewerEligible: item.reviewerEligible !== false,
+      supervisorEligible: roleEligibility(item).supervisor,
       roles: item.roles || withModelRoles(item).roles,
       roleEligibility: item.roleEligibility || roleEligibility(item),
       providerEnabled: item.providerEnabled !== false,
@@ -1802,17 +1814,29 @@ function createOrchestrator(options) {
         const row = entry(item.project.id);
         const latest = item.revisions.at(-1);
         const docs = Array.isArray(row.docs) && row.docs.length ? row.docs : collectDocs(row.facts);
+        const docsInspected = Boolean(row.facts && (!row.facts.folder || row.facts.folder === item.project.folder));
+        const docsAvailability = docs.length ? 'available' : !item.project.folder && !item.project.github ? 'unlinked' : docsInspected && !item.project.github ? 'none' : 'unknown';
         const terminal = ['complete', 'failed', 'checkpointed'].includes(row.status);
         // Stored process flags are historical evidence, not current liveness.
-        const dispatch = clone(row.dispatch || []).map(part => {
+        const dispatch = clone(row.dispatch || []).map((part, index) => {
           if (!part) return part;
           const alive = Boolean(part.pid) && typeof opts.isProcessAlive === 'function'
             ? Boolean(opts.isProcessAlive(part.pid)) : Boolean(part.pid && part.alive);
           const sub = row.subTasks?.find(sub => sub.id === part.subTaskId);
           const result = store.execution.results.find(result => result.attemptId === part.attemptId);
+          const assignmentMega = store.execution.megaTasks.find(mega => mega.id === (part.megaTaskId || result?.megaTaskId));
+          const historicalAssignment = Boolean(assignmentMega && assignmentMega.id !== row.megaTaskId);
           let diagnostic = null;
           try { diagnostic = JSON.parse(fs.readFileSync(part.resultPath + '.diagnostic.json', 'utf8')); } catch {}
-          return { ...part, diagnostic, observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !part.stoppedByUser && alive };
+          const activitySession = index < SESSION_LIMIT ? assignmentSession({
+            projectId: item.project.id, row, part: { ...part, megaTaskId: assignmentMega?.id || part.megaTaskId, observedAlive: !terminal && !historicalAssignment && alive }, execution: store.execution, historical: historicalAssignment,
+            tail: readRecordedTail(part.logPath, dir), index
+          }) : null;
+          return { ...part, diagnostic, activitySession, historicalAssignment,
+            assignmentJobTitle: assignmentMega?.title || null,
+            assignmentStatus: historicalAssignment ? ({ COMPLETE: 'complete', FAILED: 'failed', BLOCKED: 'blocked' }[result?.status] || 'historical') : row.status,
+            ...(historicalAssignment ? { activity: result?.summary || 'Original activity is not retained for this historical assignment.' } : {}),
+            observedAlive: alive, recordedSubTaskStatus: sub?.status || null, validatedResultStatus: result?.status || null, alive: !terminal && !historicalAssignment && !part.stoppedByUser && alive };
         });
         const workerAlive = !terminal && (dispatch.length ? dispatch.some(part => part && part.alive)
           : (Boolean(row.workerPid) && typeof opts.isProcessAlive === 'function'
@@ -1820,6 +1844,7 @@ function createOrchestrator(options) {
         return {
           id: item.project.id,
           name: item.project.name,
+          projectSkills: typeof opts.projectSkillState === 'function' ? clone(opts.projectSkillState(item.project.id)) : null,
           folder: item.project.folder || null,
           github: item.project.github || null,
           repository: row.repository && row.repository.folder === (item.project.folder || null) && row.repository.github === (item.project.github || null) ? clone(row.repository) : null,
@@ -1847,7 +1872,7 @@ function createOrchestrator(options) {
           next: row.megaTaskId ? executionNext(store.execution.megaTasks.find(mega => mega.id === row.megaTaskId && mega.projectId === item.project.id), store.execution) : row.next || '',
           step: stepOf(row),
           pipeline: pipelineOf(row),
-          crew: crewOf({ ...row, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME),
+          crew: crewOf({ ...row, dispatch, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME, store.execution),
           resultPath: row.resultPath || null,
           watchingSince: row.watchingSince || null,
           approved: Boolean(row.approved),
@@ -1860,10 +1885,15 @@ function createOrchestrator(options) {
           ),
           pendingAutoStart: Boolean(row.pendingAutoStart),
           dispatch,
+          activitySessionPagination: { available: true, total: pagedProjectActivitySessions({ projectId: item.project.id, row, history: store.workerHistory, execution: store.execution, offset: Number.MAX_SAFE_INTEGER }).total, pageSize: SESSION_LIMIT },
+          activitySessions: projectActivitySessions({ projectId: item.project.id, row, current: dispatch.map(part => part?.activitySession),
+            history: store.workerHistory, execution: store.execution, readTail: file => readRecordedTail(file, dir) }),
           checkpoint: row.checkpoint ? clone(row.checkpoint) : null,
           timing: ((item.tasks || []).find(task => task.status === 'running') || {}).timing || (row.pendingAutoStart && row.pendingAutoStart.timing) || null,
           deadlineAt: ((item.tasks || []).find(task => task.status === 'running') || {}).deadlineAt || (row.pendingAutoStart && row.pendingAutoStart.deadlineAt) || null,
-          canGrillDocs: docs.length > 0,
+          // Unknown linked projects can request explicit inspection; this is not a claim that docs exist.
+          canGrillDocs: docsAvailability === 'available' || docsAvailability === 'unknown',
+          docsAvailability,
           docs: clone(docs),
           grillSkipped: Boolean(row.grillSkipped),
           log: clone(row.log || []),
@@ -1910,12 +1940,15 @@ function createOrchestrator(options) {
 
   async function reviewSnapshot({ projectId, modelId, question, facts, history }) {
     const model = roster().find(model => model.id === modelId);
-    if (!model || !model.enabled || model.available === false || model.providerEnabled === false || !permitsAssignment(model, { kind: 'audit' })
+    if (!model || !model.enabled || model.available === false || model.providerEnabled === false || model.roles?.supervisor !== true
       || usagePolicy(model, plansLive).blocked || planExhausted(plansLive, model.quotaPoolId || model.plan)
-      || !require('./supervisor.cjs').supported(model)) throw new Error('The selected Reviewer is unavailable, not permitted, or blocked by quota. No fallback was used.');
+      || !model.providerCatalog && model.remaining < model.cost
+      || !require('./supervisor.cjs').supported(model)) throw new Error('The selected Supervisor is unavailable, not permitted, or blocked by quota. No fallback was used.');
     if (typeof askProvider !== 'function') throw new Error('The model transport is unavailable. Live evidence remains available.');
-    const invocation = ledger?.start({ role: 'reviewer', projectId, megaTaskId: facts.megaTaskId, provider: model.providerId || model.provider, model: model.cli, modelId, reason: 'Supervisor advisory question' });
+    const invocation = ledger?.start({ role: 'supervisor', projectId, megaTaskId: facts.megaTaskId, provider: model.providerId || model.provider, model: model.cli, modelId, accountKey: model.accountKey, accountType: model.accountType, reason: 'Supervisor advisory question' });
     try {
+      store.usage[model.id] = { used: usedOf(store.usage, model.id) + model.cost };
+      persist();
       const result = await askProvider({ purpose: 'supervisor', allowActions: false, question, projectId, model, folder: null,
         state: { facts, history } });
       ledger?.finish(invocation, result?.failure ? 'FAILED' : 'COMPLETE', result?.processExit, result?.tokens);
@@ -2406,7 +2439,8 @@ function createOrchestrator(options) {
         answer: 'Stopped.',
         thinking: live.thinking || null,
         ms: Number.isFinite(live.ms) ? live.ms : (Number.isFinite(started) ? Date.now() - started : null),
-        projectId: null,
+        projectId: live.projectId || null,
+        chatSessionId: live.chatSessionId || null,
         sessionId,
         orchestratorId: lead ? lead.id : null,
         order: 'abort'
@@ -2441,7 +2475,12 @@ function createOrchestrator(options) {
     if (projectId && mentionedProjects.some(row => row.id !== projectId)) return { ok: false, reason: 'Message names a different project from the selected recipient. Select the intended project before sending.' };
     if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
-    const conversation = chatSessionId ? store.asks.filter(item => item.chatSessionId === chatSessionId && item.projectId === projectId) : store.asks;
+    const contextProjectId = projectId || (mentionedProjects.length === 1 ? mentionedProjects[0].id : null);
+    // Project and chat are independent boundaries; a reused chat ID never grants
+    // access to another project's discussion or legacy unscoped records.
+    const conversation = store.asks.filter(item =>
+      (!contextProjectId || item.projectId === contextProjectId)
+      && (!chatSessionId || item.chatSessionId === chatSessionId && (contextProjectId || item.projectId == null)));
     const typedGrill = /^grill me[.!?]*$/i.test(q) ? 'me' : /^grill with (?:the )?docs[.!?]*$/i.test(q) ? 'docs' : null;
     const previousGrill = conversation.find(turn => turn.projectId === projectId)?.grillKind || null;
     const requestedGrill = requestedGrillKind || typedGrill;
@@ -2531,7 +2570,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
       const fallback = answerQuestion(q, snap, projectId);
       const lead = leadModel();
       const history = recentContext(conversation || []);
-      if (grillKind && opts.mattSkillsEnabled?.() === false) {
+      if (grillKind && opts.mattSkillsEnabled?.(row?.id || projectId) === false) {
         answer = 'Matt skills are disabled. Enable Use Matt skills to start Matt grilling.';
       } else if (grillKind && typeof opts.askModel !== 'function') {
         answer = 'An orchestrator model connection is required for Matt grilling. Select an available lead and retry.';
@@ -2542,6 +2581,8 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         const started = Date.now();
         thinkingLive = {
           question: q,
+          projectId: contextProjectId,
+          chatSessionId: chatSessionId || null,
           lead: lead.label,
           thinking: '',
           draft: '',
@@ -2557,11 +2598,13 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
             projectId: (row && row.id) || fallback.projectId,
             folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
             github: row && row.github || null,
-            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
+            state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: contextProjectId ? null : stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
             onProgress: part => {
               if (!part || typeof part !== 'object') return;
               thinkingLive = {
                 question: q,
+                projectId: contextProjectId,
+                chatSessionId: chatSessionId || null,
                 lead: lead.label,
                 thinking: typeof part.thinking === 'string' ? part.thinking : (thinkingLive && thinkingLive.thinking) || '',
                 draft: typeof part.answer === 'string' ? (/^\s*(\{|```)/.test(part.answer) ? '' : part.answer) : (thinkingLive && thinkingLive.draft) || '',
@@ -2619,7 +2662,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         } catch (error) {
           if (token !== askToken) return finishCancelled();
           ms = Date.now() - started;
-          diagnostic = grillKind && /Matt .*skill/i.test(error?.message || '') ? null : diagnoseProvider(lead, error?.message || 'CLI error');
+          diagnostic = error?.code === 'PROJECT_SKILL_INTERVIEW_UNAVAILABLE' || grillKind && /Matt .*skill/i.test(error?.message || '') ? null : diagnoseProvider(lead, error?.message || 'CLI error');
           answer = diagnostic ? diagnostic.message : error.message;
         }
         thinkingLive = null;
@@ -2688,7 +2731,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     if (!model) return { ok: false, reason: 'model not present' };
     if (enabled && !model.available && !model.providerCatalog) return { ok: false, reason: model.unavailableReason || 'model unavailable' };
     store.enabled[id] = Boolean(enabled);
-    store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role])]));
+    store.modelRoles[id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(enabled && roleEligibility(model)[role] && (role !== 'supervisor' || model.roles.supervisor))]));
     if (model.accountScope) store.accountModelRoles[model.accountScope][id] = { ...store.modelRoles[id] };
     persist();
     return { ok: true, snapshot: await tick() };
@@ -2715,7 +2758,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
   async function setModelRoles(id, roles) {
     const model = roster().find(model => model.id === id);
     if (!model) return { ok: false, reason: 'Model not present.' };
-    if (!roles || typeof roles !== 'object' || Array.isArray(roles) || !Object.keys(roles).length || Object.entries(roles).some(([role, enabled]) => !ROLE_IDS.includes(role) || typeof enabled !== 'boolean')) return { ok: false, reason: 'Roles must contain Orchestrator, Worker or Reviewer boolean flags.' };
+    if (!roles || typeof roles !== 'object' || Array.isArray(roles) || !Object.keys(roles).length || Object.entries(roles).some(([role, enabled]) => !ROLE_IDS.includes(role) || typeof enabled !== 'boolean')) return { ok: false, reason: 'Roles must contain Orchestrator, Worker, Reviewer or Supervisor boolean flags.' };
     const eligibility = roleEligibility(model);
     for (const [role, enabled] of Object.entries(roles)) if (enabled && !eligibility[role]) return { ok: false, reason: `This model is not compatible with the ${role} role.` };
     store.modelRoles[id] = { ...model.roles, ...roles };
@@ -2758,7 +2801,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     if (typeof input.showAll === 'boolean') store.catalogVisibility[provider.id] = input.showAll;
     if (typeof input.allModelsEnabled === 'boolean') for (const model of roster().filter(m => (m.providerId || m.provider) === provider.id)) {
       store.enabled[model.id] = input.allModelsEnabled;
-      store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role])]));
+      store.modelRoles[model.id] = Object.fromEntries(ROLE_IDS.map(role => [role, Boolean(input.allModelsEnabled && roleEligibility(model)[role] && (role !== 'supervisor' || model.roles.supervisor))]));
       if (model.accountScope) store.accountModelRoles[model.accountScope][model.id] = { ...store.modelRoles[model.id] };
     }
     persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) };
@@ -2809,18 +2852,20 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
   async function composeGrillRound(item, facts, kind) {
     const latest = item.revisions.at(-1);
     const docs = kind === 'docs' ? collectDocs(facts) : [];
-    const skillText = typeof opts.readSkill === 'function'
-      ? (opts.readSkill('skills/productivity/grilling/SKILL.md') || '')
+    const skillsEnabled = opts.mattSkillsEnabled?.(item.project.id) !== false;
+    const skillText = skillsEnabled && typeof opts.readSkill === 'function'
+      ? (opts.readSkill('skills/productivity/grilling/SKILL.md', item.project.id) || '')
       : '';
-    const docsSkill = kind === 'docs' && typeof opts.readSkill === 'function'
-      ? (opts.readSkill('skills/engineering/grill-with-docs/SKILL.md') || '')
+    const docsSkill = skillsEnabled && kind === 'docs' && typeof opts.readSkill === 'function'
+      ? (opts.readSkill('skills/engineering/grill-with-docs/SKILL.md', item.project.id) || '')
       : '';
     const lead = leadModel();
-    if (typeof opts.askModel === 'function' && lead) {
+    if (skillsEnabled && typeof opts.askModel === 'function' && lead) {
       try {
         const spoken = await opts.askModel({
           question: grillPrompt(item, facts, [docsSkill, skillText].filter(Boolean).join('\n\n'), docs),
           model: lead,
+          clarificationKind: kind,
           projectId: item.project.id,
           folder: item.project.folder || null,
           state: { name: item.project.name, goal: latest && latest.direction, folder: item.project.folder, docs },
@@ -2829,7 +2874,9 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         const text = spoken && typeof spoken === 'object' && !Array.isArray(spoken) ? spoken.answer : spoken;
         const parsed = parseGrillQuestions(leadEnvelope(text).answer);
         if (parsed.length) return parsed;
-      } catch (_) {}
+      } catch (error) {
+        if (error.code === 'PROJECT_SKILL_INTERVIEW_UNAVAILABLE') throw error;
+      }
     }
     return Plan.grillFrontier({
       name: item.project.name,
@@ -2906,9 +2953,15 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
       const wanted = store.grillKind === 'docs' || store.grillKind === 'me' ? store.grillKind : null;
       if (wanted === 'docs' && !docs.length) return { ok: false, reason: 'No docs in the folder to grill with' };
       const kind = wanted === 'me' ? 'me' : (wanted === 'docs' || docs.length ? 'docs' : 'me');
-      const questions = await composeGrillRound(item, facts, kind);
+      let questions;
+      try { questions = await composeGrillRound(item, facts, kind); } catch (error) {
+        row.pendingAutoStart = null;
+        note(projectId, 'Clarification interview unavailable: ' + error.message);
+        persist();
+        return { ok: false, reason: error.message };
+      }
       row.grillAsked = true;
-      note(projectId, opts.mattSkillsEnabled?.() === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: Matt grilling (${kind}) from mattpocock/skills main.`);
+      note(projectId, opts.mattSkillsEnabled?.(projectId) === false ? `Auto start: clarification (${kind}), Matt skills disabled.` : `Auto start: clarification interview (${kind}); inspect Skill delivery records for instruction provenance.`);
       persist();
       await tick(projectId);
       return {
@@ -3125,6 +3178,13 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     return null;
   }
 
+  async function activitySessionPage(projectId, offset = 0, limit = SESSION_LIMIT) {
+    const plan = await opts.readPlan();
+    if (!notebookProjects(plan).some(item => item.project.id === projectId)) throw new Error('Select an existing project.');
+    if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > SESSION_LIMIT) throw new Error('Invalid activity session page.');
+    return { projectId, ...pagedProjectActivitySessions({ projectId, row: store.projects[projectId] || {}, history: store.workerHistory, execution: store.execution, offset, limit, readTail: file => readRecordedTail(file, dir) }) };
+  }
+
   async function inspectRepository(projectId, options) {
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(item => item.project.id === projectId);
@@ -3149,7 +3209,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     try { bridge.stop(item, job, megaTaskId, true); return { ok: true, snapshot: await tick(projectId) }; }
     catch (error) { return { ok: false, reason: error.message }; }
   }
-  return { tick, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, activitySessionPage, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };
