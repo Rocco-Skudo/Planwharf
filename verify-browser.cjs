@@ -4,48 +4,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const Plan = require('./plan.js');
 const { createServer } = require('./server.cjs');
-const { spawn } = require('node:child_process');
+const { launch, connect } = require('./scripts/engineering/browser.cjs');
 const pause = ms => new Promise(resolve => setTimeout(resolve, ms));
 const output = process.env.PLANWHARF_VALIDATION_DIR || path.join(__dirname, 'validation', 'browser-' + Date.now());
 fs.mkdirSync(output, { recursive: true });
-const profile = path.join(output, `edge-profile-${Date.now()}`);
 const planFile = path.join(output, `browser-plan-${Date.now()}.json`);
 fs.writeFileSync(planFile, fs.readFileSync(path.join(__dirname, 'fixtures', 'notebook.json')));
 const server = createServer({ skillsEnabled: false, planFile, models: [], fetchPlans: async () => [] });
 let browser;
-let ws;
+let session;
 let command;
-let browserError;
 (async () => {
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
   const appUrl = `http://127.0.0.1:${server.address().port}`;
-  browser = spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe', ['--headless=new', '--disable-gpu', '--disable-extensions', '--disable-background-networking', ...(process.env.PLANWHARF_TEST_NO_SANDBOX === '1' ? ['--no-sandbox'] : []), '--no-first-run', '--no-default-browser-check', '--remote-debugging-port=0', `--user-data-dir=${profile}`, appUrl], { windowsHide: true, stdio: 'ignore' });
-  browser.on('error', error => { browserError = error; });
-  let port;
-  for (let i = 0; i < 100; i++) {
-    if (browserError) throw browserError;
-    try { port = Number(fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0]); if (port) break; } catch (_) {}
-    await pause(100);
-  }
-  assert.ok(port, 'Edge DevTools did not start');
-  const pages = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
-  const page = pages.find(target => target.type === 'page');
-  assert.ok(page, 'Edge page missing');
-  ws = new WebSocket(page.webSocketDebuggerUrl);
-  await new Promise((resolve, reject) => { ws.addEventListener('open', resolve, { once: true }); ws.addEventListener('error', reject, { once: true }); });
-  let sequence = 0;
-  const waiting = new Map();
-  ws.addEventListener('message', event => {
-    const response = JSON.parse(event.data);
-    const pending = waiting.get(response.id);
-    if (pending) { clearTimeout(pending.timer); waiting.delete(response.id); response.error ? pending.reject(new Error(response.error.message)) : pending.resolve(response.result); }
-  });
-  command = (method, params = {}) => new Promise((resolve, reject) => {
-    const id = ++sequence;
-    const timer = setTimeout(() => { waiting.delete(id); reject(new Error(`Timeout: ${method}`)); }, 30000);
-    waiting.set(id, { resolve, reject, timer });
-    ws.send(JSON.stringify({ id, method, params }));
-  });
+  browser = await launch();
+  console.log(`Browser: ${browser.kind} ${browser.version}`);
+  session = await connect(browser);
+  command = session.command;
   const evaluate = async expression => {
     const result = await command('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
     if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
@@ -161,13 +136,14 @@ let browserError;
     await pause(50);
   }
   assert.equal(await evaluate("document.getElementById('revision-badge').textContent"), 'R2 · import · Current');
-  const report = 'PASS: real Edge project home, revisions, Grill, mobile layout, and isolated projects.\n';
+  assert.equal(session.consoleFailures.length, 0, 'Application browser console failures');
+  const report = 'PASS: real selected Edge/Chrome project home, revisions, Grill, mobile layout, and isolated projects.\n';
   fs.writeFileSync(path.join(output, 'report.txt'), report);
   console.log(report.trim());
 })().catch(error => { console.error(error); process.exitCode = 1; }).finally(async () => {
   if (command) { try { await command('Browser.close'); } catch (_) {} }
-  if (ws) ws.close();
-  if (browser) browser.kill();
+  session?.close();
+  await browser?.close();
   if (server.listening) await new Promise(resolve => server.close(resolve));
   fs.rmSync(planFile, { force: true });
 });
