@@ -59,7 +59,7 @@ function createRepositoryInspector({ execute = run, ttlMs = 60000, fetchRemote =
         if (result.local.git) {
           const rows = await Promise.all([
             git(['symbolic-ref', '--quiet', '--short', 'HEAD']), git(['rev-parse', '--verify', 'HEAD']),
-            git(['status', '--porcelain']), git(['remote', 'get-url', 'origin']), git(['rev-parse', '--is-shallow-repository'])
+            git(['status', '--ignore-submodules=all', '--porcelain']), git(['remote', 'get-url', 'origin']), git(['rev-parse', '--is-shallow-repository'])
           ]);
           result.local.gitRoot = root.stdout;
           result.local.branch = rows[0].ok ? rows[0].stdout : null;

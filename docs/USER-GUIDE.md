@@ -4,6 +4,8 @@ Implementation and audit workers run in the linked project folder. If that folde
 
 Git evidence is unavailable for inherited parent repositories, external Git worktrees, shared object stores, or redirected/symlinked Git metadata. Linking a real project directory still permits worker launch; unavailable Git evidence is reported conservatively.
 
+Git status and diff inspection exclude submodules, including submodule worktree changes. Inspect a submodule separately by linking its own project directory when its Git metadata satisfies the same containment checks.
+
 This guide describes the current application, including model role permissions. Start with the [quick guide](QUICKSTART.md) if you want to create your first project immediately. The application, current documentation and product messages use English; personal content and original historical evidence keep their original language.
 
 ## Planwharf and Orchestrator

@@ -900,8 +900,8 @@ function defaultInspect(folder) {
     const lastCommit = git ? runGit(folder, ['log', '-1', '--format=%h %s']) : '';
     const lastSubject = git ? runGit(folder, ['log', '-1', '--format=%s']) : '';
     const recent = git ? runGit(folder, ['log', '-5', '--oneline']).split(/\r?\n/).filter(Boolean).slice(0, 5) : [];
-    const dirty = git ? runGit(folder, ['status', '--porcelain', '--no-renames']).split(/\r?\n/).filter(Boolean).slice(0, 20) : [];
-    const diffStat = git ? runGit(folder, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--stat', 'HEAD']) : '';
+    const dirty = git ? runGit(folder, ['status', '--ignore-submodules=all', '--porcelain', '--no-renames']).split(/\r?\n/).filter(Boolean).slice(0, 20) : [];
+    const diffStat = git ? runGit(folder, ['diff', '--ignore-submodules=all', '--submodule=short', '--no-ext-diff', '--no-textconv', '--no-renames', '--stat', 'HEAD']) : '';
     const docs = listDocs(folder);
     return {
       folder,

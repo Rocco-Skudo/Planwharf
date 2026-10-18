@@ -33,7 +33,8 @@ async function localGit(folder, { planFile } = {}) {
   // Every Git command runs at the canonical linked folder with an explicit scope.
   const files = ['--', '.'];
   if (relative && !relative.startsWith('../') && !path.isAbsolute(relative)) files.push(`:(exclude,literal)${relative}`);
-  const [head, status, diff] = await Promise.all([git(root, ['rev-parse', '--verify', 'HEAD']), git(root, ['status', '--porcelain=v1', '--no-renames', '-uall', ...files]), git(root, ['diff', '--relative', '--no-renames', '--no-ext-diff', '--no-textconv', 'HEAD', ...files])]);
+  // Submodule worktrees may redirect to foreign Git metadata; inspect only this repository.
+  const [head, status, diff] = await Promise.all([git(root, ['rev-parse', '--verify', 'HEAD']), git(root, ['status', '--ignore-submodules=all', '--porcelain=v1', '--no-renames', '-uall', ...files]), git(root, ['diff', '--ignore-submodules=all', '--submodule=short', '--relative', '--no-renames', '--no-ext-diff', '--no-textconv', 'HEAD', ...files])]);
   // Include untracked contents so edits to an already-dirty file are visible.
   const untracked = await git(root, ['ls-files', '--others', '--exclude-standard', '-z', ...files]);
   let fingerprint = null;
@@ -53,7 +54,7 @@ async function localGit(folder, { planFile } = {}) {
       fingerprint = hash(JSON.stringify([status, diff, contents]));
     } catch { /* Unknown is preferable to a fabricated comparison. */ }
   }
-  const paths = await git(root, ['status', '--porcelain=v1', '--no-renames', '-z', '-uall', ...files]);
+  const paths = await git(root, ['status', '--ignore-submodules=all', '--porcelain=v1', '--no-renames', '-z', '-uall', ...files]);
   const changed = [];
   const records = (paths || '').split('\0');
   let detailBytes = 0;

@@ -94,3 +94,48 @@ test('Git inspection rejects redirected HEAD metadata before reading another pro
   try { await fs.symlink(path.join(beta, 'private-head'), path.join(alpha, '.git', 'HEAD')); } catch (error) { if (error.code === 'EPERM') { t.skip('File symlinks unavailable'); return; } throw error; }
   assert.equal((await localGit(alpha)).readable, false);
 });
+
+test('Git inspection ignores a submodule redirected to another project but observes local edits', async t => {
+  const root = await fixture(t), alpha = path.join(root, 'alpha'), beta = path.join(root, 'beta');
+  const git = (folder, ...args) => execFileSync('git', ['-C', folder, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  for (const folder of [alpha, beta]) {
+    await fs.mkdir(folder);
+    git(folder, 'init', '-q');
+    git(folder, 'config', 'user.name', 'Fixture');
+    git(folder, 'config', 'user.email', 'fixture@example.invalid');
+  }
+  await fs.writeFile(path.join(beta, 'private'), 'Foreign initial content');
+  git(beta, 'add', '.'); git(beta, 'commit', '-qm', 'Foreign fixture');
+  await fs.mkdir(path.join(alpha, 'sub'));
+  await fs.writeFile(path.join(alpha, 'sub', '.git'), `gitdir: ${path.join(beta, '.git')}\n`);
+  git(alpha, 'update-index', '--add', '--cacheinfo', `160000,${git(beta, 'rev-parse', 'HEAD')},sub`);
+  await fs.writeFile(path.join(alpha, 'local.txt'), 'Local initial content');
+  git(alpha, 'add', 'local.txt'); git(alpha, 'commit', '-qm', 'Local fixture');
+  git(alpha, 'config', 'diff.submodule', 'log');
+  git(alpha, 'config', 'submodule.sub.ignore', 'none');
+  const { defaultInspect } = require('./orchestrator.js');
+  const { createRepositoryInspector } = require('./repository.cjs');
+  const inspectRepository = createRepositoryInspector();
+  async function capture() {
+    const facts = defaultInspect(alpha), home = await localGit(alpha);
+    const repository = await inspectRepository({ folder: alpha }, { force: true });
+    assert.equal(facts.git, true);
+    assert.equal(home.readable, true);
+    assert.equal(typeof home.fingerprint, 'string');
+    assert.equal(repository.local.git, true);
+    return { dirty: facts.dirty, diffStat: facts.diffStat, fingerprint: home.fingerprint, changes: repository.local.changes };
+  }
+  const before = await capture();
+  assert.deepEqual(before.dirty, []);
+  assert.deepEqual(before.changes, []);
+  assert.equal(before.diffStat, '');
+  await fs.writeFile(path.join(beta, 'private'), 'Foreign changed content');
+  git(beta, 'commit', '-qam', 'Foreign changed fixture');
+  assert.deepEqual(await capture(), before, 'Foreign commits cannot change the selected project inspection');
+  await fs.writeFile(path.join(alpha, 'local.txt'), 'Local changed content');
+  const local = await capture();
+  assert.notEqual(local.fingerprint, before.fingerprint, 'Local edits remain visible');
+  assert.match(local.diffStat, /local\.txt/);
+  assert.ok(local.dirty.some(line => line.endsWith('local.txt')));
+  assert.ok(local.changes.some(line => line.endsWith('local.txt')));
+});

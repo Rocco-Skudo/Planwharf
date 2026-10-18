@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawnWorker } = require('./runner.cjs');
+const { spawnWorker, isProcessAlive, killWorker } = require('./runner.cjs');
 
 test('implementation launch rejects missing real linked folder before creating launch artifacts', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-containment-'));
@@ -93,12 +93,14 @@ test('runner rejects a provider specification that changes the launch cwd', () =
 test('canonical linked directory survives the runner job file and research keeps its isolated directory', async () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-containment-'));
   const previous = process.env.PLANWHARF_CODEX;
+  const pids = [];
   try {
     process.env.PLANWHARF_CODEX = process.execPath; // Owned Node fixture cannot invoke a configured provider.
     const alpha = path.join(root, 'alpha'); fs.mkdirSync(alpha);
     for (const kind of ['audit', 'research']) {
       const resultPath = path.join(root, kind + '.txt');
       const receipt = spawnWorker({ linkedFolder: kind === 'research' ? undefined : alpha, folder: alpha, resultPath, worker: { provider: 'codex', cli: 'gpt-fixture' }, job: { kind } });
+      pids.push(receipt.pid);
       const input = JSON.parse(fs.readFileSync(receipt.inputPath, 'utf8'));
       assert.equal(input.folder, fs.realpathSync(alpha));
       assert.equal(input.linkedFolder, kind === 'research' ? '' : fs.realpathSync(alpha));
@@ -108,26 +110,35 @@ test('canonical linked directory survives the runner job file and research keeps
     }
   } finally {
     if (previous === undefined) delete process.env.PLANWHARF_CODEX; else process.env.PLANWHARF_CODEX = previous;
+    // The result can be written before the detached runner releases its Windows cwd.
+    for (const pid of pids) {
+      for (let i = 0; i < 100 && isProcessAlive(pid); i++) await new Promise(resolve => setTimeout(resolve, 20));
+      if (isProcessAlive(pid)) killWorker(pid);
+    }
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-test('repository inspection rejects external gitdir files and symlinked Git metadata before commands', async () => {
+for (const redirected of ['gitdir', 'HEAD']) test(`repository inspection rejects redirected ${redirected} metadata before commands`, async t => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-containment-'));
   try {
     const alpha = path.join(root, 'alpha'), beta = path.join(root, 'beta'); fs.mkdirSync(alpha); fs.mkdirSync(beta);
     require('node:child_process').execFileSync('git', ['init', '--quiet', beta]);
-    fs.writeFileSync(path.join(alpha, '.git'), 'gitdir: ' + path.join(beta, '.git') + '\n');
-    for (const redirected of ['gitdir', 'HEAD']) {
-      if (redirected === 'HEAD') {
-        fs.unlinkSync(path.join(alpha, '.git'));
-        require('node:child_process').execFileSync('git', ['init', '--quiet', alpha]);
-        fs.unlinkSync(path.join(alpha, '.git', 'HEAD'));
+    if (redirected === 'gitdir') {
+      fs.writeFileSync(path.join(alpha, '.git'), 'gitdir: ' + path.join(beta, '.git') + '\n');
+    } else {
+      require('node:child_process').execFileSync('git', ['init', '--quiet', alpha]);
+      fs.unlinkSync(path.join(alpha, '.git', 'HEAD'));
+      try {
         fs.symlinkSync(path.join(beta, '.git', 'HEAD'), path.join(alpha, '.git', 'HEAD'));
+      } catch (error) {
+        if (error.code !== 'EPERM') throw error;
+        t.skip('File symlinks unavailable');
+        return;
       }
-      const commands = [];
-      const inspect = createRepositoryInspector({ execute: async (...args) => { commands.push(args); return { ok: true, stdout: alpha }; } });
-      assert.equal((await inspect({ folder: alpha })).local.git, false);
-      assert.deepEqual(commands, []);
     }
+    const commands = [];
+    const inspect = createRepositoryInspector({ execute: async (...args) => { commands.push(args); return { ok: true, stdout: alpha }; } });
+    assert.equal((await inspect({ folder: alpha })).local.git, false);
+    assert.deepEqual(commands, []);
   } finally { fs.rmSync(root, { recursive: true, force: true }); }
 });
