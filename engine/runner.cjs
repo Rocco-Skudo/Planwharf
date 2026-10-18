@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { requireWorkerWorkspace, linkedWorkspace } = require('./project-workspace.cjs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
@@ -45,7 +46,7 @@ function parseArgs(argv) {
     if (args.length !== 2 || !args[1]) throw new Error('--job-file requires one input file');
     const job = JSON.parse(fs.readFileSync(args[1], 'utf8'));
     if (!job || typeof job !== 'object' || Array.isArray(job)) throw new Error('Worker job input must be an object');
-    const fields = ['folder', 'result', 'title', 'detail', 'worker', 'attempt', 'slice', 'kind', 'structuredResultPath', 'exitPath', 'megaTaskId', 'subTaskId', 'resultId', 'projectId', 'skillsPrompt'];
+    const fields = ['linkedFolder', 'folder', 'result', 'title', 'detail', 'worker', 'attempt', 'slice', 'kind', 'structuredResultPath', 'exitPath', 'megaTaskId', 'subTaskId', 'resultId', 'projectId', 'skillsPrompt'];
     for (const key of fields) {
       if (job[key] != null && typeof job[key] !== 'string') throw new Error('Worker job ' + key + ' must be a string');
       opts[key] = job[key] || '';
@@ -61,7 +62,8 @@ function parseArgs(argv) {
   }
   for (let i = 0; i < args.length; i++) {
     const token = args[i];
-    if (token === '--folder') opts.folder = args[++i] || '';
+    if (token === '--linked-folder') opts.linkedFolder = args[++i] || '';
+    else if (token === '--folder') opts.folder = args[++i] || '';
     else if (token === '--result') opts.result = args[++i] || '';
     else if (token === '--title') opts.title = args[++i] || '';
     else if (token === '--detail') opts.detail = args[++i] || '';
@@ -461,11 +463,12 @@ function askOrchestrator(info) {
 function spawnWorker(info) {
   if (!info || typeof info !== 'object') throw new Error('worker launch requires job info');
   if (!info.folder || !info.resultPath) throw new Error('worker launch requires folder and resultPath');
+  info = { ...info, ...requireWorkerWorkspace(info) };
   const logPath = info.logPath || path.join(path.dirname(info.resultPath), '..', 'logs', `${info.attemptId || 'worker'}.log`);
   fs.mkdirSync(path.dirname(logPath), { recursive: true });
   const inputPath = path.join(path.dirname(logPath), `worker-input-${require('node:crypto').randomUUID()}.json`);
   fs.writeFileSync(inputPath, JSON.stringify({
-    folder: info.folder, result: info.resultPath,
+    linkedFolder: info.linkedFolder, folder: info.folder, result: info.resultPath,
     title: (info.job && info.job.title) || '', detail: (info.job && info.job.detail) || '',
     worker: (info.worker && (info.worker.label || info.worker.id)) || 'worker',
     attempt: info.attemptId || '', slice: info.slice || (info.job && info.job.slice) || '',
@@ -477,7 +480,7 @@ function spawnWorker(info) {
   const logFd = fs.openSync(logPath, 'a');
   try {
     const child = spawn(process.execPath, [__filename, '--job-file', inputPath], {
-      detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, env: { ...process.env }
+      cwd: info.folder, detached: true, stdio: ['ignore', logFd, logFd], windowsHide: true, env: { ...process.env }
     });
     child.unref();
     return { pid: child.pid, logPath, inputPath };
@@ -493,10 +496,18 @@ function run(argv = process.argv) {
     process.exitCode = 1;
     return;
   }
-  if (opts.structuredResultPath) fs.writeFileSync(opts.exitPath + '.process.json', JSON.stringify({ pid: process.pid, attemptId: opts.attempt, createdAt: new Date().toISOString() }) + '\n');
   let spec;
   let receipt;
-  try { const prompt = promptFor(opts); spec = launchSpec({ ...opts.model, apiResultOutputPath: opts.structuredResultPath, apiResultIdentity: { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId } }, opts.folder, prompt, false, opts.kind === 'research'); receipt = skillReceipt(opts, spec, prompt); }
+  try {
+    Object.assign(opts, requireWorkerWorkspace(opts));
+    const prompt = promptFor(opts);
+    spec = launchSpec({ ...opts.model, apiResultOutputPath: opts.structuredResultPath,
+      apiResultIdentity: { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId } }, opts.folder, prompt, false, opts.kind === 'research');
+    const cwd = linkedWorkspace(spec.cwd);
+    if (!cwd || cwd !== opts.folder) throw new Error('Provider launch cwd escapes the linked project folder.');
+    spec.cwd = cwd;
+    receipt = skillReceipt(opts, spec, prompt);
+  }
   catch (error) {
     const diagnostic = diagnoseProvider(opts.model || {}, error.message);
     fs.writeFileSync(opts.result + '.diagnostic.json', JSON.stringify(diagnostic, null, 2));
@@ -504,6 +515,7 @@ function run(argv = process.argv) {
     process.exitCode = 1;
     return;
   }
+  if (opts.structuredResultPath) fs.writeFileSync(opts.exitPath + '.process.json', JSON.stringify({ pid: process.pid, attemptId: opts.attempt, createdAt: new Date().toISOString() }) + '\n');
   console.log(JSON.stringify({ event: 'provider-launch', at: new Date().toISOString(), provider: spec.provider, model: spec.model, executable: spec.command, cwd: spec.cwd, attempt: opts.attempt }));
   let finalStatus = null;
   let settled = false;

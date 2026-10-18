@@ -20,6 +20,7 @@ test('targeted approve, stop and resume never inspect or dispatch the other proj
   const { createAttemptEngine } = require('./attempts.js');
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-scoped-actions-'));
   const plan = { schema: 2, projects: ['ai-companion-desktop', 'raceengineer'].map(id => ({ project: { id, name: id, folder: path.join(dir, id) }, revisions: [{ id: 1, direction: 'safe fixture', open: [] }], tasks: [{ id: id + '-task', title: 'Implement fixture', detail: 'Isolated test', status: 'running', executionVersion: 2, revision_id: 1 }] })) };
+  for (const item of plan.projects) fs.mkdirSync(item.project.folder);
   const inspected = [], launches = [], live = new Set();
   const orchestra = createOrchestrator({ dir, phase2: true, readPlan: async () => plan, attempts: createAttemptEngine({ dir }), models: [{ id: 'fixture', provider: 'codex', cli: 'gpt-6-luna', enabled: true, available: true }], fetchPlans: null,
     inspectFolder: folder => { inspected.push(folder); return { git: false, dirty: [] }; }, spawnWorker: info => { const pid = 2000 + launches.length; launches.push(info); live.add(pid); return { pid }; }, isProcessAlive: pid => live.has(pid), killWorker: pid => live.delete(pid) });

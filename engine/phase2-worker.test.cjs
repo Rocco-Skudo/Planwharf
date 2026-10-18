@@ -17,7 +17,7 @@ async function until(check) { for (let n = 0; n < 200; n++) { if (check()) retur
   for (const mode of ['valid', 'bom', 'missing', 'wrong-identity', 'bom-wrong-identity', 'failed', 'blocked']) {
     const folder = path.join(dir, mode); fs.mkdirSync(folder);
     const resultPath = path.join(folder, 'result.txt'), structuredResultPath = path.join(folder, 'result.json'), exitPath = path.join(folder, 'exit.json');
-    const info = { folder, resultPath, structuredResultPath, exitPath, logPath: path.join(folder, 'worker.log'), worker: model, megaTaskId: 'MT-fixture', subTaskId: 'MT-fixture-ST-01', attemptId: 'attempt-' + mode, resultId: 'R-' + mode,
+    const info = { linkedFolder: folder, folder, resultPath, structuredResultPath, exitPath, logPath: path.join(folder, 'worker.log'), worker: model, megaTaskId: 'MT-fixture', subTaskId: 'MT-fixture-ST-01', attemptId: 'attempt-' + mode, resultId: 'R-' + mode,
       job: { title: 'Isolated structured worker', detail: 'Unicode telemetry è 日本語\n'.repeat(18000) } };
     const expected = { resultId: info.resultId, attemptId: info.attemptId, subTaskId: info.subTaskId, megaTaskId: info.megaTaskId,
       status: mode === 'blocked' ? 'BLOCKED' : mode === 'failed' ? 'FAILED' : 'COMPLETE', summary: 'Isolated provider wrote its structured findings.', filesChanged: [], tests: [], blockers: [], nextAction: 'Review findings.', createdAt: new Date().toISOString() };

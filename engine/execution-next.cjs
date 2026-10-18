@@ -40,4 +40,21 @@ function executionNext(mega, durable = {}) {
   return 'Review execution state.';
 }
 
-module.exports = { executionNext };
+// Home presents one deterministic action; imported continuation metadata is not authority.
+function homeNext(item, row = {}, durable = {}) {
+  const { linkedWorkspace } = require('./project-workspace.cjs');
+  if (!linkedWorkspace(item?.project?.folder)) return 'Relink the project folder on this PC.';
+  const tasks = (durable.megaTasks || []).filter(task => task.projectId === item.project.id);
+  const mega = tasks.find(task => task.id === row?.megaTaskId) || tasks.at(-1);
+  if (mega?.status === 'READY_FOR_APPROVAL') return 'Approve the prepared MegaTask.';
+  if (mega) {
+    if (['PAUSED', 'FAILED'].includes(mega.status) && (durable.checkpoints || []).some(cp => cp.projectId === item.project.id && cp.megaTaskId === mega.id)) return 'Resume from checkpoint.';
+    return executionNext(mega, durable);
+  }
+  if (row?.status === 'needs_approval') return 'Approve the prepared job.';
+  if (row?.canResume) return 'Resume from checkpoint.';
+  if (item.revisions?.at(-1)?.open?.length) return 'Answer the current Grill question.';
+  return 'Review the Living Plan.';
+}
+
+module.exports = { executionNext, homeNext };

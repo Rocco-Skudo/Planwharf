@@ -8,7 +8,8 @@ const { planExhausted, emptyPlans } = require('./planUsage.js');
 const { createRepositoryInspector } = require('./repository.cjs');
 const { modelRouteError } = require('./model-routing.cjs');
 const { createExecutionBridge } = require('./execution.cjs');
-const { executionNext } = require('./execution-next.cjs');
+const { linkedWorkspace, requireWorkerWorkspace, within, safeGitWorkspace, gitEnvironment } = require('./project-workspace.cjs');
+const { executionNext, homeNext } = require('./execution-next.cjs');
 const { loadCatalog, providerViews } = require('./provider-catalog.cjs');
 const { adapterFor } = require('./provider-adapters.cjs');
 const { diagnoseProvider } = require('./provider-diagnostics.cjs');
@@ -310,7 +311,7 @@ function listDocs(folder) {
     }
     const docsDir = path.join(folder, 'docs');
     try {
-      if (fs.statSync(docsDir).isDirectory()) {
+      if (within(folder, fs.realpathSync(docsDir)) && fs.statSync(docsDir).isDirectory()) {
         for (const name of fs.readdirSync(docsDir)) {
           if (/\.md$/i.test(name)) found.push('docs/' + name);
         }
@@ -443,7 +444,7 @@ function packState(snap, row) {
     focus: row ? {
       id: row.id,
       name: row.name,
-      folder: row.folder || (facts && facts.folder) || null,
+      folder: linkedWorkspace(row.folder),
       github: row.github || null,
       repository: row.repository || null,
       status: row.status,
@@ -870,6 +871,7 @@ function runGit(folder, args) {
     const { spawnSync } = require('node:child_process');
     const result = spawnSync('git', ['--no-optional-locks', '-C', folder, ...args], {
       encoding: 'utf8',
+      env: gitEnvironment(),
       timeout: 4000,
       windowsHide: true,
       maxBuffer: 65536
@@ -889,7 +891,7 @@ function defaultInspect(folder) {
     if (!st.isDirectory()) return { error: 'not a directory', folder };
     const names = fs.readdirSync(folder).filter(name => name !== '.' && name !== '..');
     const gitDir = path.join(folder, '.git');
-    const git = fs.existsSync(gitDir);
+    const git = Boolean(safeGitWorkspace(folder)) && linkedWorkspace(runGit(folder, ['rev-parse', '--show-toplevel'])) === folder;
     let head = '';
     if (git) {
       try { head = fs.readFileSync(path.join(gitDir, 'HEAD'), 'utf8').trim(); } catch (_) {}
@@ -898,8 +900,8 @@ function defaultInspect(folder) {
     const lastCommit = git ? runGit(folder, ['log', '-1', '--format=%h %s']) : '';
     const lastSubject = git ? runGit(folder, ['log', '-1', '--format=%s']) : '';
     const recent = git ? runGit(folder, ['log', '-5', '--oneline']).split(/\r?\n/).filter(Boolean).slice(0, 5) : [];
-    const dirty = git ? runGit(folder, ['status', '--porcelain']).split(/\r?\n/).filter(Boolean).slice(0, 20) : [];
-    const diffStat = git ? runGit(folder, ['diff', '--stat', 'HEAD']) : '';
+    const dirty = git ? runGit(folder, ['status', '--porcelain', '--no-renames']).split(/\r?\n/).filter(Boolean).slice(0, 20) : [];
+    const diffStat = git ? runGit(folder, ['diff', '--no-ext-diff', '--no-textconv', '--no-renames', '--stat', 'HEAD']) : '';
     const docs = listDocs(folder);
     return {
       folder,
@@ -1034,9 +1036,11 @@ function createOrchestrator(options) {
   const models = opts.providers ? opts.models || catalog.models : Array.isArray(opts.models) ? opts.models : catalog.models;
   const providerDefinitions = opts.providers || catalog.providers;
   const sessionId = opts.sessionId || crypto.randomUUID();
-  const inspect = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
+  const inspectFolder = typeof opts.inspectFolder === 'function' ? opts.inspectFolder : defaultInspect;
+  const inspect = folder => { const canonical = linkedWorkspace(folder); return canonical ? { ...inspectFolder(canonical), folder: canonical } : { error: 'Relink a real local project folder before inspection.' }; };
   const repositoryPending = new Map();
-  const readRepository = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
+  const inspectRepositorySource = typeof opts.readRepository === 'function' ? opts.readRepository : createRepositoryInspector();
+  const readRepository = (project, options) => inspectRepositorySource({ ...project, folder: linkedWorkspace(project.folder) }, options);
   const now = typeof opts.now === 'function' ? opts.now : () => new Date().toISOString();
   const dir = typeof opts.dir === 'string' && opts.dir.trim() ? opts.dir : null;
   const stateFile = dir ? path.join(dir, 'orchestrator.json') : null;
@@ -1059,7 +1063,9 @@ function createOrchestrator(options) {
     } catch (error) { ledger.finish(id, 'FAILED'); throw error; }
     finally { if (activeLeadInvocation === id) activeLeadInvocation = null; }
   };
-  if (typeof launchWorker === 'function' && ledger) opts.spawnWorker = info => {
+  if (typeof launchWorker === 'function') opts.spawnWorker = info => {
+    info = { ...info, ...requireWorkerWorkspace(info) };
+    if (!ledger) return launchWorker(info);
     const id = ledger.start({ role: 'worker', projectId: info.projectId, megaTaskId: info.megaTaskId, subTaskId: info.subTaskId, attemptId: info.attemptId,
       provider: info.worker.providerId || info.worker.provider, model: info.worker.cli, modelId: info.worker.id, accountKey: info.worker.accountKey, accountType: info.worker.accountType, reason: info.job?.kind === 'research' ? 'approved research' : 'approved work' });
     try { const receipt = options.spawnWorker(info); ledger.update(id, { pid: receipt?.pid, exitPath: info.exitPath, resultPath: info.resultPath }); if (!receipt?.pid) ledger.finish(id, 'FAILED'); return receipt; }
@@ -1453,6 +1459,7 @@ function createOrchestrator(options) {
           const part = row.dispatch[index];
           const launched = opts.spawnWorker({
             projectId: item.project.id,
+            linkedFolder: item.project.folder,
             folder: item.project.folder,
             resultPath: part.resultPath,
             job: {
@@ -1869,7 +1876,7 @@ function createOrchestrator(options) {
           modelId: row.modelId,
           workerLabel: row.workerLabel || null,
           waitingFor: row.waitingFor || '',
-          next: row.megaTaskId ? executionNext(store.execution.megaTasks.find(mega => mega.id === row.megaTaskId && mega.projectId === item.project.id), store.execution) : row.next || '',
+          next: homeNext(item, row, store.execution),
           step: stepOf(row),
           pipeline: pipelineOf(row),
           crew: crewOf({ ...row, dispatch, orchestratorDoing: orchestratorDoing(row), orchestratorLabel: lead ? lead.label : ORCH_NAME }, lead ? lead.label : ORCH_NAME, store.execution),
@@ -2014,7 +2021,7 @@ function createOrchestrator(options) {
       try {
         const existing = bridge.find(id, job.id);
         // Unapproved or paused work has no reason to inspect its source on every poll.
-        const facts = existing && existing.status !== 'RUNNING' && row.facts ? row.facts : inspect(item.project.folder); row.facts = facts;
+        const facts = existing && existing.status !== 'RUNNING' && row.facts?.folder === linkedWorkspace(item.project.folder) ? row.facts : inspect(item.project.folder); row.facts = facts;
         const parts = job.proposedSubTasks?.length ? job.proposedSubTasks.map(sub => ({ ...sub, modelId: job.goldModel && assignmentRole(sub) === 'worker' ? job.goldModel.id : sub.assignedModelId, slice: sub.title }))
           : dispatchPlan(pickWorkers(roster(), { job, usage: store.usage, facts, plans: plansLive }), job, facts);
         return bridge.advance(item, job, parts);
@@ -2471,7 +2478,7 @@ function createOrchestrator(options) {
       const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp(`^(?:start|stop|resume|approve(?: run)?|avvia|ferma|riprendi|approva)\\s+${escaped}[.!?]*$`, 'i').test(q);
     }));
-    if (opts.phase2 && explicitlyNamedCommand) projectId = explicitlyNamedCommand.id;
+    if (opts.phase2 && explicitlyNamedCommand && !projectId) projectId = explicitlyNamedCommand.id;
     if (projectId && mentionedProjects.some(row => row.id !== projectId)) return { ok: false, reason: 'Message names a different project from the selected recipient. Select the intended project before sending.' };
     if (!projectId && mentionedProjects.length > 1) return { ok: false, reason: 'Message names multiple projects. Select the intended recipient.' };
     if (token !== askToken) return finishCancelled();
@@ -2596,7 +2603,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
             model: lead,
             ...(grillKind ? { grillKind, allowActions: false } : {}),
             projectId: (row && row.id) || fallback.projectId,
-            folder: row && (row.folder || (row.facts && row.facts.folder)) || null,
+            folder: linkedWorkspace(row && row.folder),
             github: row && row.github || null,
             state: Object.assign({}, compactState(packState(snap, row), store.briefingBaselines[row?.id]), { history, contextArchive: contextProjectId ? null : stateFile, earlierTurns: Math.max(0, (conversation || []).length - history.length), currentRequest: { projectId: row?.id || null, text: q, taskId: currentTask?.id || null, requestMode, goldModel, grillKind } }),
             onProgress: part => {
@@ -2815,9 +2822,9 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     const latest = item.revisions.at(-1);
     if (latest.open && latest.open.length && !(item.tasks || []).some(task => task.status === 'running' && task.source === 'chat')) return { ok: false, reason: 'open questions remain' };
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
-    if (!item.project.folder) return { ok: false, reason: 'no folder' };
-    const row = entry(projectId);
     const job = item.tasks.find(task => task.status === 'running');
+    if (job.kind !== 'research' && !linkedWorkspace(item.project.folder)) return { ok: false, reason: 'Relink a real local project folder before approval.' };
+    const row = entry(projectId);
     if (megaTaskId && job.executionVersion !== 2) return { ok: false, reason: 'The legacy job has no matching MegaTask approval target.' };
     if (job.executionVersion === 2) {
       decide(item);
@@ -2993,6 +3000,8 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     const plan = await opts.readPlan();
     const item = notebookProjects(plan).find(row => row.project.id === projectId);
     if (!item) return { ok: false, reason: 'project not found' };
+    const sourceJob = (item.tasks || []).find(task => task.status === 'running') || (item.tasks || []).at(-1);
+    if (sourceJob?.kind !== 'research' && !linkedWorkspace(item.project.folder)) return { ok: false, reason: 'Relink a real local project folder before Resume.' };
     if (!(item.tasks || []).some(task => task.status === 'running')) return { ok: false, reason: 'no running job' };
     const row = entry(projectId);
     const job = item.tasks.find(task => task.status === 'running');

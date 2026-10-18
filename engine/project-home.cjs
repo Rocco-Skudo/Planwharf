@@ -6,22 +6,34 @@ const { execFile } = require('node:child_process');
 const { activityMessages, workerReport } = require('./activity.cjs');
 const { summarizeTimeline, checkpointDiff } = require('./project-history.cjs');
 const { repoState } = require('./execution.cjs');
-const { executionNext } = require('./execution-next.cjs');
+const { homeNext } = require('./execution-next.cjs');
+const { linkedWorkspace, safeGitWorkspace, gitEnvironment } = require('./project-workspace.cjs');
 const hash = value => crypto.createHash('sha256').update(value).digest('hex');
 function git(folder, args) {
-  return new Promise(resolve => execFile('git', ['--no-optional-locks', '-C', folder, ...args], { windowsHide: true, timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : args.includes('-z') ? stdout : stdout.trim())));
+  return new Promise(resolve => execFile('git', ['--no-optional-locks', '-C', folder, ...args], { windowsHide: true, env: gitEnvironment(process.env), timeout: 5000, maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => resolve(error ? null : args.includes('-z') ? stdout : stdout.trim())));
+}
+async function containedParent(root, file) {
+  try {
+    const parent = await fs.realpath(path.dirname(file));
+    const relative = path.relative(root, parent);
+    return relative === '' || relative !== '..' && !relative.startsWith('..' + path.sep) && !path.isAbsolute(relative);
+  } catch { return false; }
 }
 async function localGit(folder, { planFile } = {}) {
-  if (!folder) return { readable: false, reason: 'No local folder linked.' };
-  const root = await git(folder, ['rev-parse', '--show-toplevel']);
-  if (!root) return { readable: false, reason: 'Local Git history unavailable.' };
+  const linked = linkedWorkspace(folder);
+  if (!linked) return { readable: false, reason: 'No local folder linked.' };
+  const root = safeGitWorkspace(linked);
+  if (!root) return { readable: false, reason: 'Contained local Git history unavailable.' };
+  const gitRoot = await git(root, ['rev-parse', '--show-toplevel']);
+  if (!gitRoot) return { readable: false, reason: 'Local Git history unavailable.' };
   const relative = planFile ? path.relative(root, path.resolve(planFile)).replace(/\\/g, '/') : null;
-  const scope = path.relative(root, path.resolve(folder)).replace(/\\/g, '/') || '.';
-  // Visit-marker persistence must not manufacture a local source change.
-  // Notebook revisions and jobs are compared separately from source files.
-  const files = ['--', scope];
+  const scope = '.';
+  const prefix = path.relative(gitRoot, root).replace(/\\/g, '/');
+  const localName = name => prefix ? name.startsWith(prefix + '/') ? name.slice(prefix.length + 1) : null : name;
+  // Every Git command runs at the canonical linked folder with an explicit scope.
+  const files = ['--', '.'];
   if (relative && !relative.startsWith('../') && !path.isAbsolute(relative)) files.push(`:(exclude,literal)${relative}`);
-  const [head, status, diff] = await Promise.all([git(root, ['rev-parse', '--verify', 'HEAD']), git(root, ['status', '--porcelain=v1', '-uall', ...files]), git(root, ['diff', '--no-ext-diff', '--no-textconv', 'HEAD', ...(files.length ? files : ['--'])])]);
+  const [head, status, diff] = await Promise.all([git(root, ['rev-parse', '--verify', 'HEAD']), git(root, ['status', '--porcelain=v1', '--no-renames', '-uall', ...files]), git(root, ['diff', '--relative', '--no-renames', '--no-ext-diff', '--no-textconv', 'HEAD', ...files])]);
   // Include untracked contents so edits to an already-dirty file are visible.
   const untracked = await git(root, ['ls-files', '--others', '--exclude-standard', '-z', ...files]);
   let fingerprint = null;
@@ -32,7 +44,7 @@ async function localGit(folder, { planFile } = {}) {
       if (untracked.split('\0').length > 2000) throw new Error('Too many files for reliable comparison');
       for (const name of untracked.split('\0').filter(Boolean)) {
         const file = path.resolve(root, name);
-        if (!file.startsWith(path.resolve(root) + path.sep)) throw new Error('Outside repository');
+        if (!file.startsWith(root + path.sep) || !await containedParent(root, file)) throw new Error('Outside linked folder');
         const stat = await fs.lstat(file);
         bytes += stat.size;
         if (bytes > 8 * 1024 * 1024) throw new Error('Files too large for reliable comparison');
@@ -41,19 +53,20 @@ async function localGit(folder, { planFile } = {}) {
       fingerprint = hash(JSON.stringify([status, diff, contents]));
     } catch { /* Unknown is preferable to a fabricated comparison. */ }
   }
-  const paths = await git(root, ['status', '--porcelain=v1', '-z', '-uall', ...files]);
+  const paths = await git(root, ['status', '--porcelain=v1', '--no-renames', '-z', '-uall', ...files]);
   const changed = [];
   const records = (paths || '').split('\0');
   let detailBytes = 0;
   for (let index = 0; index < records.length; index++) {
     const record = records[index];
     if (!record) continue;
-    const statusCode = record.slice(0, 2), name = record.slice(3);
-    const from = /R|C/.test(statusCode) ? records[++index] : null;
+    const statusCode = record.slice(0, 2), name = localName(record.slice(3));
+    const from = /R|C/.test(statusCode) ? localName(records[++index]) : null;
+    if (!name) continue;
     let fileFingerprint = null;
     try {
       const target = path.resolve(root, name);
-      if (!target.startsWith(path.resolve(root) + path.sep)) throw new Error('Outside repository');
+      if (!target.startsWith(root + path.sep) || !await containedParent(root, target)) throw new Error('Outside linked folder');
       const stat = await fs.lstat(target);
       detailBytes += stat.size;
       if (detailBytes <= 8 * 1024 * 1024) fileFingerprint = hash(stat.isSymbolicLink() ? await fs.readlink(target) : await fs.readFile(target));
@@ -157,7 +170,7 @@ async function projectHome(project, snapshot, baseline, options) {
   const evidence = await execution(row, researches);
   const durable = snapshot.execution || {};
   const megaTasks = (durable.megaTasks || []).filter(mega => mega.projectId === project.project.id);
-  const mega = megaTasks.at(-1);
+  const mega = megaTasks.find(task => task.id === row?.megaTaskId) || megaTasks.at(-1);
   const subTasks = (durable.subTasks || []).filter(sub => sub.megaTaskId === mega?.id);
   const results = (durable.results || []).filter(result => megaTasks.some(mega => mega.id === result.megaTaskId));
   const technicalTimeline = (durable.timeline || []).filter(event => event.projectId === project.project.id);
@@ -167,8 +180,8 @@ async function projectHome(project, snapshot, baseline, options) {
   const current = { viewedAt: new Date().toISOString(), timelineEventIds: technicalTimeline.map(event => event.id), noteIds: (project.home?.notes || []).map(note => note.id), revisionIds: project.revisions.map(r => r.id), revisions: [{ id: revision.id, title: revision.title, state: revision.state, direction: revision.direction, closed: revision.closed }], git: local, execution: evidence ? { ...executionBaseline, reportFingerprint: hash(JSON.stringify(reports)) } : null };
   const running = (row?.dispatch || []).filter(p => p.alive).length + researches.filter(r => r.alive && r.status === 'watching').length;
   const labels = { watching: running ? 'Workers running' : 'Waiting for worker progress', needs_approval: 'Waiting for approval', waiting_on_you: 'Waiting for your answer', propose_grill: 'Waiting for your answer', checkpointed: 'Paused — checkpoint saved', complete: 'Completed', failed: 'Blocked', blocked_no_worker: 'Blocked', blocked_no_folder: 'Blocked', idle: 'Idle' };
-  const next = mega ? executionNext(mega, durable) : row?.status === 'needs_approval' ? 'Approve the prepared job' : row?.canResume ? 'Resume from checkpoint' : revision.open.length ? `Answer the current Grill question: ${revision.open[0]}` : row?.next || 'No next action defined';
-  const action = mega ? mega.status === 'READY_FOR_APPROVAL' ? 'approve' : ['PAUSED', 'FAILED'].includes(mega.status) && resumeTargets.length ? 'resume' : null
+  const next = homeNext(project, row, durable);
+  const action = !linkedWorkspace(project.project.folder) ? null : mega ? mega.status === 'READY_FOR_APPROVAL' ? 'approve' : ['PAUSED', 'FAILED'].includes(mega.status) && resumeTargets.length ? 'resume' : null
     : row?.status === 'needs_approval' ? 'approve' : row?.canResume ? 'resume' : revision.open.length ? 'grill' : null;
   const completed = results.filter(result => result.status === 'COMPLETE');
   const workers = results.filter(result => result.megaTaskId === mega?.id && result.pid).map(result => ({ modelId: result.assignedModelId, provider: result.provider, cli: result.cli, subTaskId: result.subTaskId, attemptId: result.attemptId, status: result.status }));
@@ -181,7 +194,7 @@ async function projectHome(project, snapshot, baseline, options) {
     progressDetails: { jobTitle: row?.jobTitle || '', status: row?.status || 'idle', actions: mega ? [] : current.execution?.actions || [], reports: mega ? [] : reports, files: local.files || [], megaTask: mega || null, subTasks, results,
       completed: completed.map(result => result.summary), pending: subTasks.filter(sub => sub.status !== 'COMPLETE'), tests: results.flatMap(result => result.tests), blockers: [...(mega?.blockers || []), ...results.filter(result => subTasks.some(sub => ['FAILED', 'BLOCKED'].includes(sub.status) && sub.resultId === result.resultId)).flatMap(result => result.blockers)],
       workers, gitProgress: mega?.repoAfter || mega?.repoBefore || null },
-    timeline: technicalTimeline, timelineSummary: timeline, technicalTimeline, checkpointDiffs: resumeTargets.map(cp => ({ checkpointId: cp.id, ...checkpointDiff(cp, repoState(project.project.folder, require('./orchestrator.js').defaultInspect(project.project.folder)), revision.id, subTasks.filter(sub => sub.status === 'COMPLETE').map(sub => sub.id)) })), resumeTargets, actionTarget: { projectId: project.project.id, ...(mega ? { megaTaskId: mega.id } : {}), ...(action === 'resume' && resumeTargets.length === 1 ? { checkpointId: resumeTargets[0].id, megaTaskId: resumeTargets[0].megaTaskId, researchId: resumeTargets[0].researchId } : mega?.detached ? { researchId: snapshot.researches.find(record => record.megaTaskId === mega.id)?.id } : {}) },
+    timeline: technicalTimeline, timelineSummary: timeline, technicalTimeline, checkpointDiffs: resumeTargets.map(cp => ({ checkpointId: cp.id, ...checkpointDiff(cp, repoState(linkedWorkspace(project.project.folder), require('./orchestrator.js').defaultInspect(linkedWorkspace(project.project.folder))), revision.id, subTasks.filter(sub => sub.status === 'COMPLETE').map(sub => sub.id)) })), resumeTargets, actionTarget: { projectId: project.project.id, ...(mega ? { megaTaskId: mega.id } : {}), ...(action === 'resume' && resumeTargets.length === 1 ? { checkpointId: resumeTargets[0].id, megaTaskId: resumeTargets[0].megaTaskId, researchId: resumeTargets[0].researchId } : mega?.detached ? { researchId: snapshot.researches.find(record => record.megaTaskId === mega.id)?.id } : {}) },
     local, now: running ? 'Workers running' : mega && ['PAUSED', 'FAILED'].includes(mega.status) ? `${mega.status === 'FAILED' ? 'Failed' : 'Paused'} — checkpoint saved (${subTasks.filter(sub => sub.status !== 'COMPLETE').length} slices remaining)` : mega?.status === 'COMPLETE' ? 'Completed' : mega?.status === 'READY_FOR_APPROVAL' ? 'Waiting for approval' : labels[row?.status] || 'Idle', running, jobTitle: mega?.title || row?.jobTitle || '', next, action,
     notes: project.home?.notes || [], baseline: baseline === undefined ? project.home?.lastVisit || null : baseline, current,
     since };
