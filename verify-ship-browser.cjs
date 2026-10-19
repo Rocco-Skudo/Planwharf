@@ -30,6 +30,17 @@ async function click(selector){await evaluate(`document.querySelector(${JSON.str
 async function shot(name){const shot=await cdp('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});fs.writeFileSync(path.join(out,name+'.png'),Buffer.from(shot.data,'base64'));}
 async function settings(values){await click('#harbor-settings-button');await evaluate(`(()=>{const f=document.getElementById('harbor-settings-form');for(const [k,v]of Object.entries(${JSON.stringify(values)})){if(typeof v==='boolean')f.elements[k].checked=v;else f.elements[k].value=v;}f.requestSubmit();})()`);assert.equal(await evaluate("document.getElementById('harbor-dialog').open"),false);}
 async function state(value){await until(()=>evaluate(`document.getElementById('harbor-background')?.dataset.state===${JSON.stringify(value)}`),'state '+value);const snapshot=await request('/api/orchestrator?readOnly=1');evidence.push({expected:value,projects:snapshot.projects.map(row=>({id:row.id,status:row.status,workerAlive:row.workerAlive}))});}
+async function captain(helm, moving=false){
+ const pose=await evaluate(`(()=>{const style=s=>getComputedStyle(document.querySelector(s));return {helm:style('.harbor-captain-helm').display!=='none',lookout:style('.harbor-captain-lookout').display!=='none',wheel:style('.harbor-captain-wheel').animationName,body:style('.harbor-captain-body').animationName};})()`);
+ assert.equal(pose.helm,helm,'Captain helm pose follows lifecycle facts');assert.equal(pose.lookout,!helm,'Lookout and helm are exclusive');
+ assert.equal(pose.wheel,moving?'harbor-steer':'none','Actual wheel and hands animate only during running full motion');assert.equal(pose.body,moving?'harbor-helmsman':'none');
+}
+async function steeringEvidence(weather){
+ await settings({animations:'full',weatherMode:'manual',seaCondition:weather});await captain(true,true);
+ const before=await evaluate("getComputedStyle(document.querySelector('.harbor-captain-wheel')).transform");await shot('captain-running-'+weather+'-a');await pause(900);
+ const after=await evaluate("getComputedStyle(document.querySelector('.harbor-captain-wheel')).transform");assert.notEqual(after,before,'Rendered wheel matrix changes between frames in '+weather);await shot('captain-running-'+weather+'-b');
+ const detail=await evaluate("(()=>{const s=getComputedStyle(document.querySelector('.harbor-captain-wheel'));return {turn:s.getPropertyValue('--captain-turn').trim(),duration:s.animationDuration,ship:getComputedStyle(document.querySelector('.harbor-ship')).animationDuration};})()");assert.equal(detail.duration,detail.ship,'Ship and steering share weather cadence');evidence.push({steeringWeather:weather,before,after,...detail});return detail;
+}
 async function notice(kind){await until(()=>evaluate(`!!document.querySelector('#ship-notifications [data-kind=${JSON.stringify(kind)}]')`),'notice '+kind);}
 async function propose(count=2){const result=await request('/api/orchestrator/propose',{projectId:'ship-alpha',title:'Ship fixture lifecycle',goal:'Isolated browser verification',subTasks:Array.from({length:count},(_,i)=>({title:'Fixture slice '+i,detail:'No provider',assignedModelId:'ship-fixture',type:i?'AUDIT':'IMPLEMENTATION',dependsOn:i?[i-1]:[]}))},201);return result.snapshot.projects.find(row=>row.id==='ship-alpha').megaTaskId;}
 function finish(info,status='COMPLETE',keepAlive=false){fs.writeFileSync(info.structuredResultPath,JSON.stringify({resultId:info.resultId,attemptId:info.attemptId,subTaskId:info.subTaskId,megaTaskId:info.megaTaskId,status,summary:'Explicit local transport fixture result',filesChanged:[],tests:[],blockers:status==='COMPLETE'?[]:['Fixture blocker'],nextAction:'Review fixture',createdAt:new Date().toISOString()}));fs.writeFileSync(info.exitPath,JSON.stringify({attemptId:info.attemptId,exitCode:status==='FAILED'?1:0,provider:info.worker.provider,model:info.worker.cli}));fs.writeFileSync(info.resultPath,'STATUS: '+status+'\n');if(!keepAlive)live.delete(info.pid);}
@@ -39,11 +50,13 @@ async function launchBrowser(){browserStage='launch';const profile=path.join(fix
  await launchBrowser();await cdp('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});browserStage='application-navigation';await cdp('Page.navigate',{url:base+'/#orchestrator'});
  await until(()=>evaluate("document.getElementById('project-select')?.options.length===2 && !!document.getElementById('ship-view-button')"),'actual app ready');
  await evaluate("(()=>{const select=document.getElementById('project-select');select.value='ship-alpha';select.dispatchEvent(new Event('change',{bubbles:true}));})()");await state('idle');
+ await captain(false);
  await settings({weatherMode:'manual',seaCondition:'storm',notificationDensity:'all'});
  assert.equal(await evaluate("document.getElementById('harbor-background').dataset.weather"),'storm');
  assert.equal((await request('/api/orchestrator?readOnly=1')).projects.find(row=>row.id==='ship-alpha').status,'idle','Manual weather cannot launch execution');
  for(const flag of ['classic','tech','exploration','merchant','pirate']){await settings({flag});assert.equal(await evaluate("document.getElementById('harbor-background').dataset.flag"),flag);}
  const mega=await propose();await state('preparing');await notice('approval');
+ await captain(true);
  await request('/api/orchestrator/approve',{projectId:'ship-alpha',megaTaskId:mega});await state('running');assert.equal(launches.length,1);
  await evaluate("(()=>{const input=document.querySelector('#dashboard-orch-ask-form textarea')||document.getElementById('dashboard-orch-ask');input.value='Unsent ship fixture draft';input.dataset.shipDraft='yes';input.focus();})()");
  const draftSelector='[data-ship-draft=yes]';const saved=await evaluate("({selected:document.getElementById('project-select').value,layout:localStorage.getItem('planwharf_layout_v1'),scroll:scrollY})");
@@ -53,26 +66,34 @@ async function launchBrowser(){browserStage='launch';const profile=path.join(fix
  assert.equal(await evaluate("document.querySelector('[data-ship-draft=yes]').value"),'Unsent ship fixture draft');
  assert.equal((await request('/api/orchestrator?readOnly=1')).projects.find(row=>row.id==='ship-alpha').workerAlive,true,'Execution remains active in Ship View');
  await shot('ship-dark-running-storm');
+ const calmSteering=await steeringEvidence('calm'),stormSteering=await steeringEvidence('storm');assert.ok(parseFloat(stormSteering.turn)>parseFloat(calmSteering.turn),'Storm corrections are stronger than calm');assert.ok(parseFloat(stormSteering.duration)<parseFloat(calmSteering.duration),'Storm corrections are more frequent');
+ await request('/api/supervisor/settings',{name:'Captain <Rocco & crew>',modelId:'',autoReview:false});await until(()=>evaluate("document.querySelector('.harbor-captain title').textContent==='Captain <Rocco & crew>'"),'Captain preserves Supervisor name as text');
  await cdp('Input.dispatchKeyEvent',{type:'keyDown',key:'Escape',code:'Escape',windowsVirtualKeyCode:27});
  assert.equal(await evaluate("document.body.classList.contains('ship-view')"),false);
  assert.equal(await evaluate("document.querySelector('[data-ship-draft=yes]').value"),'Unsent ship fixture draft');
  assert.deepEqual(await evaluate("({selected:document.getElementById('project-select').value,layout:localStorage.getItem('planwharf_layout_v1'),scroll:scrollY})"),saved);
  await settings({weatherMode:'adaptive',animations:'reduced'});assert.equal(await evaluate("document.getElementById('harbor-background').dataset.weatherMode"),'adaptive');
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-ship')).animationName"),'none');
+ await captain(true);
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-water path')).transitionDuration"),'0s','Reduced disables wave geometry transitions');
  await settings({weatherMode:'random',animations:'full'});assert.equal(await evaluate("document.getElementById('harbor-background').dataset.weatherMode"),'random');
  assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-water path')).transitionDuration"),'12s','Full motion enables gradual wave transitions');
  await cdp('Emulation.setEmulatedMedia',{features:[{name:'prefers-reduced-motion',value:'reduce'}]});assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-ship')).animationName"),'none');assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-water path')).transitionDuration"),'0s','OS reduced motion disables wave geometry transitions');await cdp('Emulation.setEmulatedMedia',{features:[]});
  const otherTab=await cdp('Target.createTarget',{url:'about:blank',background:false});await until(()=>evaluate("document.hidden && document.getElementById('harbor-background').dataset.suspended==='true'"),'background tab suspension');await cdp('Page.bringToFront');await until(()=>evaluate("!document.hidden && document.getElementById('harbor-background').dataset.suspended==='false'"),'visible tab resume');await cdp('Target.closeTarget',{targetId:otherTab.targetId});
  await settings({animations:'off',weatherMode:'manual',seaCondition:'calm'});assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-water')).animationName"),'none');assert.equal(await evaluate("getComputedStyle(document.querySelector('.harbor-water path')).transitionDuration"),'0s','Off disables manual wave transitions');
+ await captain(true);
  await click('#ship-view-button');await request('/api/orchestrator/pause',{projectId:'ship-alpha',megaTaskId:mega});await state('pausing');finish(launches[0]);await state('checkpoint');await notice('checkpoint');
+ await settings({animations:'full'});await captain(true);
  let cp=(await request('/api/execution?projectId=ship-alpha')).checkpoints.at(-1);await request('/api/orchestrator/resume',{projectId:'ship-alpha',megaTaskId:mega,checkpointId:cp.id});await state('running');
  finish(launches.at(-1),'COMPLETE',true);await pause(4500);assert.equal(await evaluate("document.getElementById('harbor-background').dataset.state"),'running','Result file is not completion while worker active');live.delete(launches.at(-1).pid);await state('completed');await notice('review-result');await notice('completed');
  assert.equal(await evaluate("document.body.classList.contains('ship-view')"),true,'Completion does not exit Ship View');
+ await captain(false);
  await click('#ship-notifications [data-kind=completed] button');assert.equal(await evaluate("document.body.classList.contains('ship-view')"),false,'Notice returns to relevant project');
  assert.equal(await evaluate("document.getElementById('project-select').value"),'ship-alpha');
  const failure=await propose(1);await request('/api/orchestrator/approve',{projectId:'ship-alpha',megaTaskId:failure});await state('running');await settings({notificationDensity:'action'});await click('#ship-view-button');finish(launches.at(-1),'FAILED');await state('failed');await notice('worker-failed');await notice('anomaly');
+ await captain(true);assert.notEqual(await evaluate("getComputedStyle(document.querySelector('.harbor-captain-body')).transform"),'none','Failure has a restrained distinct static pose');
  cp=(await request('/api/execution?projectId=ship-alpha')).checkpoints.at(-1);await request('/api/orchestrator/resume',{projectId:'ship-alpha',megaTaskId:failure,checkpointId:cp.id});await state('running');finish(launches.at(-1),'BLOCKED');await state('checkpoint');await notice('blocked');
+ await captain(true);assert.equal(await evaluate("document.getElementById('harbor-background').dataset.captainReaction"),'concerned','Blocked checkpoint differs from an ordinary paused hold');
  await click('#ship-view-exit');await click('#theme-toggle');assert.equal(await evaluate("document.documentElement.dataset.theme"),'light');await settings({weatherMode:'manual',seaCondition:'moderate'});assert.match(await evaluate("document.getElementById('ship-scene-label').textContent"),/moderate/);await click('#ship-view-button');await shot('ship-light-moderate');
  await cdp('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await shot('ship-mobile-light');
  assert.equal(await evaluate("document.documentElement.scrollWidth<=innerWidth"),true);assert.equal(await evaluate("(()=>{const r=document.getElementById('ship-view-exit').getBoundingClientRect();return r.width>0&&r.right<=innerWidth;})()"),true);

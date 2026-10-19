@@ -91,7 +91,17 @@
       <image class="harbor-vessel harbor-vessel-classic" href="/assets/harbor/vessel.png" x="-520" y="-680" width="1000" height="666.667"/>
       <image class="harbor-vessel harbor-vessel-pirate" href="/assets/harbor/vessel-pirate.png" x="-520" y="-680" width="1000" height="666.667"/>
       <g class="harbor-flag-mount" transform="translate(57 -668)"><g class="harbor-flag" transform="scale(.42)"></g></g>
-      <svg class="harbor-captain" x="340" y="-300" width="88" height="88" viewBox="0 0 100 100" overflow="hidden"><defs><clipPath id="harbor-captain-crop"><rect width="100" height="100"/></clipPath></defs><image clip-path="url(#harbor-captain-crop)" href="/assets/harbor/captains-caribbean.png" width="500" height="200" preserveAspectRatio="none"/></svg>
+      <svg class="harbor-captain" x="330" y="-308" width="100" height="100" viewBox="0 0 100 100" overflow="hidden"><title>Supervisor</title><defs>
+        <clipPath id="harbor-captain-crop"><rect width="100" height="100"/></clipPath>
+        <clipPath id="harbor-wheel-crop"><circle cx="48" cy="55" r="23"/></clipPath>
+        <mask id="harbor-captain-body-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="100" height="100"><rect width="100" height="100" fill="white"/><circle cx="48" cy="55" r="23" fill="black"/></mask>
+      </defs><g clip-path="url(#harbor-captain-crop)">
+        <g class="harbor-captain-lookout"><image class="harbor-captain-art" href="/assets/harbor/captains-caribbean.png" width="500" height="200" preserveAspectRatio="none"/></g>
+        <g class="harbor-captain-helm"><g class="harbor-captain-body">
+          <g mask="url(#harbor-captain-body-mask)"><image class="harbor-captain-art" y="-100" href="/assets/harbor/captains-caribbean.png" width="500" height="200" preserveAspectRatio="none"/></g>
+          <g class="harbor-captain-wheel"><g clip-path="url(#harbor-wheel-crop)"><image class="harbor-captain-art" y="-100" href="/assets/harbor/captains-caribbean.png" width="500" height="200" preserveAspectRatio="none"/></g></g>
+        </g></g>
+      </g></svg>
       <circle class="harbor-captain-anchor" cx="384" cy="-300" r="0"/>
       <circle class="harbor-portholes harbor-beacon" cx="435" cy="-94" r="3" fill="var(--harbor-ensign-ink)"/>
       <g class="harbor-vessel-title" style="display:none"><title></title><defs><path id="harbor-name-curve" d="M-162-65 C-118-61-61-60 32-60"/></defs><text class="harbor-project-name" text-anchor="middle"><textPath href="#harbor-name-curve" startOffset="50%"></textPath></text></g>
@@ -152,6 +162,9 @@
       this.root.style.setProperty('--harbor-ensign-ink', FLAGS[flag].ink);
       }
       this.applyMotion();
+      // Livery selects the matching original Captain artwork in both poses.
+      const column = Object.keys(FLAGS).indexOf(flag);
+      this.root.querySelectorAll('.harbor-captain-art').forEach(image => image.setAttribute('x', String(-100 * column)));
       this.applyWeather(); this.renderNotices();
     }
     update() {
@@ -165,6 +178,13 @@
       this.root.dataset.switching = String(switched);
       if (next !== prior || switched) this.root.dataset.arrived = String(next === 'completed' && !['running', 'pausing'].includes(prior));
       this.state = next; this.executionId = execution;
+      // Current slice facts distinguish a blocked checkpoint from a user pause.
+      // Historical results never choose a pose, and running always steers.
+      const blocked = next === 'checkpoint' && Boolean(row?.megaTaskId) &&
+        row.checkpoint?.megaTaskId === row.megaTaskId && row.checkpoint.reason === 'blocked worker' &&
+        (row.subTasks || []).some(sub => sub.megaTaskId === row.megaTaskId && sub.status === 'BLOCKED');
+      this.root.dataset.captainReaction = next === 'failed' || blocked ? 'concerned' : 'none';
+      this.root.querySelector('.harbor-captain title').textContent = nameLabel(this.snapshot?.supervisor?.name);
       // Project changes snap to the new project's facts, rather than animating a
       // previous project's voyage. Subsequent same-project updates may transition.
       if (switched) { this.root.querySelector('.harbor-route').getBoundingClientRect(); this.root.querySelector('.harbor-pier').getBoundingClientRect(); }
