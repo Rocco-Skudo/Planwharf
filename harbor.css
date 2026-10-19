@@ -186,3 +186,25 @@ html[data-theme="light"] .harbor-landscape { filter: brightness(1.05) saturate(.
 body.ship-view .harbor-background::after { background: #07142022; }
 body.ship-view .harbor-landscape { filter: brightness(.9) saturate(.8); }
 body.ship-view .harbor-vessel { filter: brightness(.95) saturate(.8); }
+
+/* Captain poses follow execution facts. Weather only sets motion intensity.
+   The circular wheel/hand crop rotates as one piece around the actual hub;
+   the complementary body mask prevents a second stationary wheel beneath it. */
+.harbor-background { --captain-turn: 5deg; --captain-lean: 1deg; --captain-cadence: 7s; --ship-roll: .12deg; }
+.harbor-background[data-weather="light"] { --captain-turn: 7deg; }
+.harbor-background[data-weather="moderate"] { --captain-turn: 10deg; --captain-lean: 1.5deg; --captain-cadence: 6s; --ship-roll: .3deg; }
+.harbor-background[data-weather="rough"] { --captain-turn: 15deg; --captain-lean: 2deg; --captain-cadence: 5s; --ship-roll: .6deg; }
+.harbor-background[data-weather="storm"] { --captain-turn: 20deg; --captain-lean: 3deg; --captain-cadence: 4s; --ship-roll: 1deg; }
+.harbor-captain-helm { display: none; }
+.harbor-background:is([data-state="running"], [data-state="resuming"], [data-state="preparing"], [data-state="pausing"], [data-state="checkpoint"], [data-state="failed"]) .harbor-captain-helm { display: block; }
+.harbor-background:is([data-state="running"], [data-state="resuming"], [data-state="preparing"], [data-state="pausing"], [data-state="checkpoint"], [data-state="failed"]) .harbor-captain-lookout { display: none; }
+.harbor-captain-body { transform-origin: 51px 88px; }
+.harbor-captain-wheel { transform-origin: 48px 55px; }
+.harbor-background[data-state="preparing"] .harbor-captain-body { transform: rotate(-2deg); }
+.harbor-background[data-captain-reaction="concerned"] .harbor-captain-body { transform: translateY(2px) rotate(4deg); }
+.harbor-background[data-motion="full"]:is([data-state="running"], [data-state="resuming"]) .harbor-captain-wheel { animation: harbor-steer var(--captain-cadence) ease-in-out infinite; }
+.harbor-background[data-motion="full"]:is([data-state="running"], [data-state="resuming"]) .harbor-captain-body { animation: harbor-helmsman var(--captain-cadence) ease-in-out infinite; }
+.harbor-background[data-motion="full"][data-underway="true"] .harbor-ship { transform-origin: 0 -20px; animation: harbor-sailing var(--captain-cadence) ease-in-out infinite; }
+@keyframes harbor-steer { 0%,100% { transform: rotate(calc(-1 * var(--captain-turn))); } 50% { transform: rotate(var(--captain-turn)); } }
+@keyframes harbor-helmsman { 0%,100% { transform: rotate(var(--captain-lean)); } 50% { transform: rotate(calc(-1 * var(--captain-lean))); } }
+@keyframes harbor-sailing { 0%,100% { transform: translateY(0) rotate(calc(-1 * var(--ship-roll))); } 50% { transform: translateY(var(--ship-bob)) rotate(var(--ship-roll)); } }
