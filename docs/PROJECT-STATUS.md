@@ -1,5 +1,14 @@
 # Planwharf project status
 
+Soundtrack adds optional local music through existing workspace settings and a
+single workspace/Ship View player. Adaptive playback follows the selected
+project; Manual and Continuous modes are independent of execution. Four CC0
+recordings and six protected theme playlists are bundled, with author license
+sources and hashes. Personal audio can remain temporary or be copied into
+browser-local storage with explicit consent. Playback never starts automatically
+on opening/reloading the app and adds no model calls or backend polling. See
+[Soundtrack](SOUNDTRACK.md) for controls and storage limits.
+
 Task: `PLANWHARF-FINAL`. The final-scope acceptance is retained. The owner subsequently requested model role permissions and English publication guides; these additions do not introduce a new development phase or roadmap.
 
 ## Purpose

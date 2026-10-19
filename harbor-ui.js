@@ -315,6 +315,7 @@
   const exports = { FLAGS, SETTINGS_KEY, SESSION_KEY, nameLabel, settingsFrom, flagSvg, resolveState, shipSettingsFrom, weatherCondition, snapshotNotices, visibleNotice, CONDITIONS, WEATHER_INTERVAL, HarborUI };
   if (typeof module !== 'undefined' && module.exports) module.exports = exports;
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    window.PlanwharfShipState = resolveState;
     const boot = () => { const ui = new HarborUI(); ui.init(); };
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot, { once: true }); else boot();
   }

@@ -425,6 +425,15 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
   staticFiles['/browser-settings-ui.js'] = ['browser-settings-ui.js', 'text/javascript'];
   staticFiles['/workspace-ui.js'] = ['workspace-ui.js', 'text/javascript'];
   staticFiles['/workspace.css'] = ['workspace.css', 'text/css'];
+  for (const name of ['soundtrack', 'soundtrack-library', 'soundtrack-ui']) staticFiles['/' + name + '.js'] = [name + '.js', 'text/javascript'];
+  staticFiles['/soundtrack.css'] = ['soundtrack.css', 'text/css'];
+  staticFiles['/assets/soundtrack/manifest.json'] = ['assets/soundtrack/manifest.json', 'application/json'];
+  // Only shipped manifest filenames are served. Personal music never enters HTTP storage.
+  const audioTypes = { mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav', flac: 'audio/flac' };
+  for (const track of require('./assets/soundtrack/manifest.json').tracks) {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]*\.(mp3|ogg|wav|flac)$/i.test(track.file)) throw new Error('Invalid bundled Soundtrack filename.');
+    staticFiles['/assets/soundtrack/' + track.file] = ['assets/soundtrack/' + track.file, audioTypes[track.file.split('.').at(-1).toLowerCase()]];
+  }
   for (const name of ['port-dusk', 'vessel', 'vessel-pirate', 'captains-caribbean']) staticFiles['/assets/harbor/' + name + '.png'] = ['assets/harbor/' + name + '.png', 'image/png'];
   staticFiles['/assets/fonts/cinzel-variable.ttf'] = ['assets/fonts/cinzel-variable.ttf', 'font/ttf'];
   staticFiles['/assets/fonts/im-fell-english-sc.ttf'] = ['assets/fonts/im-fell-english-sc.ttf', 'font/ttf'];
@@ -1119,6 +1128,22 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
       if (request.method === 'GET' && staticFiles[pathname]) {
         const [file, type] = staticFiles[pathname];
         const content = await fs.readFile(path.join(__dirname, file));
+        if (type.startsWith('audio/')) {
+          const headers = { 'Content-Type': type, 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' };
+          if (request.headers.range) {
+            const match = /^bytes=(\d+)-(\d*)$/.exec(request.headers.range);
+            const start = match ? Number(match[1]) : NaN;
+            const end = match?.[2] ? Math.min(Number(match[2]), content.length - 1) : content.length - 1;
+            if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || start >= content.length || end < start) {
+              response.writeHead(416, { ...headers, 'Content-Range': 'bytes */' + content.length });
+              return response.end();
+            }
+            response.writeHead(206, { ...headers, 'Content-Length': end - start + 1, 'Content-Range': `bytes ${start}-${end}/${content.length}` });
+            return response.end(content.subarray(start, end + 1));
+          }
+          response.writeHead(200, { ...headers, 'Content-Length': content.length });
+          return response.end(content);
+        }
         response.writeHead(200, { 'Content-Type': `${type}; charset=utf-8`, 'Cache-Control': 'no-store' });
         return response.end(content);
       }
