@@ -1,5 +1,11 @@
 # Planwharf complete user guide
 
+Implementation and audit workers run in the linked project folder. If that folder is unlinked, missing, or not a directory, launch is blocked. Use **Set place** to relink it on this PC. Home **Next** prioritizes relinking, approval of a prepared MegaTask, and checkpoint Resume, followed by the existing execution next step, the current Grill question, or plan review. An import without a confirmed folder asks to relink even when its saved checkpoint is resumable. Launch and inspection paths are checked; this does not impose an operating-system sandbox on provider commands.
+
+Git evidence is unavailable for inherited parent repositories, external Git worktrees, shared object stores, or redirected/symlinked Git metadata. Linking a real project directory still permits worker launch; unavailable Git evidence is reported conservatively.
+
+Git status and diff inspection exclude submodules, including submodule worktree changes. Inspect a submodule separately by linking its own project directory when its Git metadata satisfies the same containment checks.
+
 This guide describes the current application, including model role permissions. Start with the [quick guide](QUICKSTART.md) if you want to create your first project immediately. The application, current documentation and product messages use English; personal content and original historical evidence keep their original language.
 
 ## Planwharf and Orchestrator

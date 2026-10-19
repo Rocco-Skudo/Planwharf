@@ -1,5 +1,11 @@
 # Planwharf
 
+Workers run in the linked project folder. Implementation and audit launches require an existing directory; a missing or unlinked folder blocks launch. Planwharf resolves the folder and rejects a launch working directory outside it. This is a launch and inspection boundary, not an operating-system sandbox for arbitrary provider commands. Home **Next** asks you to relink first, then approve prepared work, then resume a checkpoint, before showing the existing execution next step. An imported checkpoint without a confirmed folder asks you to relink rather than Resume.
+
+Git evidence is unavailable for inherited parent repositories, external Git worktrees, shared object stores, or redirected/symlinked Git metadata. Linking a real project directory still permits worker launch; unavailable Git evidence is reported conservatively.
+
+Git status and diff inspection exclude submodules so their worktrees and redirected metadata cannot pull another project's state into this project's evidence.
+
 **Where projects dock, agents work, and progress stays anchored.**
 
 A local project notebook and coordinator for AI coding workers across models and providers. Keep decisions and revisions, clarify an idea with Grill, approve a plan, and monitor execution with the AI models you use.

@@ -4,6 +4,7 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { spawnSync } = require('node:child_process');
 const { readJSON, readValidatedResult, validateResult, reportExists } = require('./worker-result.cjs');
+const { linkedWorkspace, within, safeGitWorkspace, gitEnvironment } = require('./project-workspace.cjs');
 const { executionNext } = require('./execution-next.cjs');
 const { adapterFor } = require('./provider-adapters.cjs');
 const { checkpointDiff } = require('./project-history.cjs');
@@ -12,7 +13,11 @@ const fingerprint = job => crypto.createHash('sha256').update(JSON.stringify([jo
 
 function observedCommits(folder, before, after) {
   if (!folder || before === after || !/^[a-f0-9]{40,64}$/.test(before || '') || !/^[a-f0-9]{40,64}$/.test(after || '')) return [];
-  const result = spawnSync('git', ['--no-optional-locks', '-C', folder, 'rev-list', '--max-count=1000', `${before}..${after}`], { encoding: 'utf8', timeout: 4000, windowsHide: true, maxBuffer: 256 * 1024 });
+  folder = linkedWorkspace(folder);
+  if (!folder || !safeGitWorkspace(folder)) return [];
+  const root = spawnSync('git', ['--no-optional-locks', '-C', folder, 'rev-parse', '--show-toplevel'], { encoding: 'utf8', env: gitEnvironment(), timeout: 4000, windowsHide: true, maxBuffer: 65536 });
+  if (root.status !== 0 || linkedWorkspace(String(root.stdout || '').trim()) !== folder) return [];
+  const result = spawnSync('git', ['--no-optional-locks', '-C', folder, 'rev-list', '--max-count=1000', `${before}..${after}`], { encoding: 'utf8', env: gitEnvironment(), timeout: 4000, windowsHide: true, maxBuffer: 256 * 1024 });
   return result.status === 0 ? result.stdout.trim().split(/\r?\n/).filter(id => /^[a-f0-9]{40,64}$/.test(id)) : [after];
 }
 
@@ -26,6 +31,8 @@ function repoState(folder, facts = {}) {
     const file = path.resolve(folder || '.', name);
     if (!file.startsWith(path.resolve(folder || '.') + path.sep)) { comparable = false; continue; }
     try {
+      const root = linkedWorkspace(folder);
+      if (!root || !within(root, fs.realpathSync(path.dirname(file)))) { comparable = false; continue; }
       const stat = fs.lstatSync(file); bytes += stat.size;
       if (!stat.isFile() || stat.isSymbolicLink() || bytes > 8 * 1024 * 1024) { comparable = false; continue; }
       contents.push([name, crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')]);
@@ -43,7 +50,7 @@ function createExecutionBridge(options) {
   for (const key of ['megaTasks', 'subTasks', 'results', 'checkpoints', 'timeline']) if (!Array.isArray(data[key])) data[key] = [];
   data.observations ||= {};
   const subtasks = mega => data.subTasks.filter(sub => sub.megaTaskId === mega.id);
-  const inspectProject = item => item.project.folder ? inspect(item.project.folder) : { git: false, dirty: [], names: [], fileCount: 0 };
+  const inspectProject = item => { const folder = linkedWorkspace(item.project.folder); return folder ? inspect(folder) : { error: 'Relink a real local project folder before implementation.', git: false, dirty: [], names: [], fileCount: 0 }; };
   function event(projectId, type, summary, reference, key) {
     if (key && data.timeline.some(item => item.key === key)) return;
     data.timeline.push({ id: 'EV-' + crypto.randomUUID(), projectId, type, summary, reference, createdAt: now(), ...(key ? { key } : {}) });
@@ -69,7 +76,7 @@ function createExecutionBridge(options) {
     if (!parts.length) throw new Error(job.goldModel ? `Gold model ${job.goldModel.provider}/${job.goldModel.cli} (${job.goldModel.id}) is unavailable, disabled or blocked by quota. No substitute will be used.` : 'No eligible workers for the proposed MegaTask.');
     const id = 'MT-' + crypto.randomUUID(), facts = inspectProject(item);
     if (!item.project.folder && job.kind !== 'research' && !parts.every(part => part.type === 'RESEARCH')) throw new Error('Set a local source folder before proposing implementation work.');
-    if (facts?.error) throw new Error(facts.error);
+    if (facts?.error && job.kind !== 'research' && !parts.every(part => part.type === 'RESEARCH')) throw new Error(facts.error);
     mega = { id, projectId: item.project.id, taskId: job.id, planRevisionId: job.revision_id, title: job.title, goal: job.detail || item.revisions.at(-1).direction,
       createdAt: now(), approvedAt: null, status: 'READY_FOR_APPROVAL', orchestratorModelId: leadId(), currentCheckpointId: null, completedAt: null,
       jobFingerprint: fingerprint(job), detached: Boolean(job.detached), repoBefore: repoState(item.project.folder, facts), nextAction: 'Review the proposed slices and approve this MegaTask.', pauseRequested: false };
@@ -174,7 +181,7 @@ function createExecutionBridge(options) {
     persist();
     try {
       const handoff = { megaTask: mega, subTasks: subtasks(mega), results: data.results.filter(result => result.megaTaskId === mega.id), checkpoint: data.checkpoints.find(cp => cp.id === mega.currentCheckpointId), notes: (item.home?.notes || []).filter(note => note.aiRelevant === true) };
-      const launched = spawnWorker({ ...part, projectId: mega.projectId, worker, ...identity(mega, sub, attemptId), job: { title: sub.title, kind: sub.type === 'RESEARCH' ? 'research' : sub.type === 'AUDIT' ? 'audit' : job.kind,
+      const launched = spawnWorker({ ...part, linkedFolder: item.project.folder, projectId: mega.projectId, worker, ...identity(mega, sub, attemptId), job: { title: sub.title, kind: sub.type === 'RESEARCH' ? 'research' : sub.type === 'AUDIT' ? 'audit' : job.kind,
         detail: `${job.detail}\n\nSubTask: ${sub.detail}\n\nSource project (read only for research): ${item.project.folder}\n\nDurable handoff:\n${JSON.stringify(handoff)}` } });
       if (!Number.isInteger(launched?.pid) || launched.pid <= 0) throw new Error('Worker did not start.');
       Object.assign(part, { pid: launched.pid, alive: true, observedAlive: true, logPath: launched.logPath || part.logPath });

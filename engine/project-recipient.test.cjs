@@ -12,6 +12,7 @@ const plan = { schema: 2, projects: ['alpha', 'beta'].map(id => ({
   revisions: [{ id: 1, direction: 'Implement a parser', open: [] }],
   tasks: [{ id: `${id}-job`, projectId: id, revision_id: 1, title: 'Implement a parser', detail: 'Isolated slices', status: 'running' }]
 })) };
+for (const item of plan.projects) fs.mkdirSync(item.project.folder);
 const models = [1, 2, 3].map(n => ({ id: `fixture-${n}`, label: `Fixture model ${n}`, provider: 'codex', cli: 'gpt-6-luna', enabled: true, kind: n === 1 ? 'premium' : 'default', cost: 1, limit: 200 }));
 const alive = new Set(), killed = [], launches = [], calls = [];
 let failKill = false;
