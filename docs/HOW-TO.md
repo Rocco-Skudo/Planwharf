@@ -1,5 +1,7 @@
 # Planwharf: from installation to your first result
 
+Before approving implementation or audit work, link an existing project directory with **Set place**. Workers run in that linked folder; missing folders block launch. Home **Next** asks to relink first, then approve a prepared MegaTask, then Resume a checkpoint. Importing a checkpoint without a confirmed folder keeps that checkpoint but asks you to relink before Resume. These checks constrain launch and inspection paths; they are not an operating-system sandbox for provider commands.
+
 See also the [quick start](QUICKSTART.md) and [complete user guide](USER-GUIDE.md), including model role permissions.
 
 This guide describes the completed current product scope, including durable execution, checkpoint recovery, usage, project history, export and import. Start with the steps below; use the later sections when you need more detail.

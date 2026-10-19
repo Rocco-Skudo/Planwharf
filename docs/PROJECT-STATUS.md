@@ -9,6 +9,8 @@ browser-local storage with explicit consent. Playback never starts automatically
 on opening/reloading the app and adds no model calls or backend polling. See
 [Soundtrack](SOUNDTRACK.md) for controls and storage limits.
 
+Project containment: implementation and audit launches fail closed without a real linked directory. Launch working directories and local inspection paths are resolved against the selected project; inherited parent Git repositories are not used to inspect sibling projects. Home Next prioritizes relink, prepared MegaTask approval, and checkpoint Resume before the existing execution next step. Import without a confirmed folder displays relink first. This is path validation at launch and inspection, not an OS sandbox for arbitrary provider commands.
+
 Task: `PLANWHARF-FINAL`. The final-scope acceptance is retained. The owner subsequently requested model role permissions and English publication guides; these additions do not introduce a new development phase or roadmap.
 
 ## Purpose

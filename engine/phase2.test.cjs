@@ -71,7 +71,7 @@ function finish(info, status = 'COMPLETE') {
   assert.equal(race.subTasks[2].attemptIds.length, 0, 'Dependent task never ran');
   const home = await request('/api/project-home', { projectId: 'raceengineer', visit: true });
   assert.match(home.now, /Paused.*checkpoint saved/); assert.ok(home.progress.includes('Finished')); assert.ok(home.timeline.some(event => event.type === 'CHECKPOINT_SAVED'));
-  assert.equal(home.next, cp.nextAction); assert.equal(home.next, (await request('/api/orchestrator?readOnly=1')).projects[0].next);
+  assert.equal(home.next, 'Resume from checkpoint.'); assert.equal(home.next, (await request('/api/orchestrator?readOnly=1')).projects[0].next);
   await request('/api/focus', { projectId: 'ai-companion-desktop' });
   assert.equal((await request('/api/orchestrator?readOnly=1')).selectedProjectId, 'ai-companion-desktop');
   await request('/api/orchestrator/resume', { projectId: 'ai-companion-desktop', megaTaskId: mtRace, checkpointId: cp.id }, 400);

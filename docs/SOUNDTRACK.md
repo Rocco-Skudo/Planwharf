@@ -32,8 +32,22 @@ preference, not evidence of an operational failure; playback never changes work.
 
 **Continuous playlist** follows the selected playlist independently of execution.
 **Manual** lets you select and control individual tracks directly. Playback and
-volume are global to this browser window; it does not start one player per
-project. Separate application windows have independent browser players.
+volume are global to this application instance; it does not start one player per
+project. Three or more running projects still share the selected project's player.
+
+## Multiple tabs and windows
+
+The first active player holds an exclusive browser Web Lock. Another tab or
+window in the same browser profile and origin stays silent and displays a notice.
+Pause or Stop the active player, then explicitly press Play in the other tab to
+transfer playback. There is no queued automatic takeover. Disable, Silence,
+finished playback, errors, and page exit also release ownership. Reload never
+restores playback authorization. Web Locks are required; unsupported browsers
+leave audio silent with an actionable notice rather than risking overlap.
+
+This policy follows the [Web Locks API](https://www.w3.org/TR/web-locks/).
+Different browsers, profiles, hosts, or ports have separate lock scopes and can
+play independently. The application cannot coordinate audio across those scopes.
 
 Create a user playlist, select it in **Playlist to edit**, name it, and add the
 selected track. Use Remove beside an entry to remove it from that playlist.

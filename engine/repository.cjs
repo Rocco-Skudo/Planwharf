@@ -1,5 +1,6 @@
 'use strict';
 const fs = require('node:fs/promises');
+const { linkedWorkspace, safeGitWorkspace, gitEnvironment } = require('./project-workspace.cjs');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 
@@ -31,7 +32,7 @@ function cleanError(value) {
 }
 function run(command, args, options = {}) {
   return new Promise(resolve => execFile(command, args, { encoding: 'utf8', windowsHide: true, timeout: 25000,
-    maxBuffer: 1024 * 1024, env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GH_PROMPT_DISABLED: '1' }, ...options },
+    maxBuffer: 1024 * 1024, env: { ...gitEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never', GH_PROMPT_DISABLED: '1' }, ...options },
   (error, stdout, stderr) => resolve({ ok: !error, stdout: String(stdout || '').trim(), error: error ? cleanError(stderr || error.message) : null })));
 }
 function relation(ahead, behind) {
@@ -41,7 +42,7 @@ function createRepositoryInspector({ execute = run, ttlMs = 60000, fetchRemote =
   const cache = new Map();
   const pending = new Map();
   async function inspect(project) {
-    const folder = project.folder || null;
+    const folder = linkedWorkspace(project.folder);
     const result = { checkedAt: new Date().toISOString(), folder, github: project.github || null,
       local: { exists: false, readable: false, writable: false, git: false },
       remote: { accessible: false }, comparison: { status: 'unknown', ahead: null, behind: null } };
@@ -52,13 +53,13 @@ function createRepositoryInspector({ execute = run, ttlMs = 60000, fetchRemote =
         await fs.access(folder, fs.constants.R_OK); result.local.readable = true;
         try { await fs.access(folder, fs.constants.W_OK); result.local.writable = true; } catch {}
       } catch (error) { result.local.error = cleanError(error.message); }
-      if (result.local.readable) {
+      if (result.local.readable && safeGitWorkspace(folder)) {
         const root = await git(['rev-parse', '--show-toplevel']);
-        result.local.git = root.ok;
-        if (root.ok) {
+        result.local.git = root.ok && linkedWorkspace(root.stdout) === folder;
+        if (result.local.git) {
           const rows = await Promise.all([
             git(['symbolic-ref', '--quiet', '--short', 'HEAD']), git(['rev-parse', '--verify', 'HEAD']),
-            git(['status', '--porcelain']), git(['remote', 'get-url', 'origin']), git(['rev-parse', '--is-shallow-repository'])
+            git(['status', '--ignore-submodules=all', '--porcelain']), git(['remote', 'get-url', 'origin']), git(['rev-parse', '--is-shallow-repository'])
           ]);
           result.local.gitRoot = root.stdout;
           result.local.branch = rows[0].ok ? rows[0].stdout : null;
@@ -146,7 +147,7 @@ function createRepositoryInspector({ execute = run, ttlMs = 60000, fetchRemote =
       }
       if (!/^[a-f0-9]{40,64}$/i.test(remoteBranch.commit?.id || '')) throw new Error('Gitea returned unreadable branch metadata (commit.id missing).');
       const ref = 'refs/planwharf/inspection/' + crypto.createHash('sha256').update(address.url + '/' + branch).digest('hex').slice(0, 24);
-      const options = token ? { env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never',
+      const options = token ? { env: { ...gitEnvironment(), GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never',
         GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'http.' + address.baseUrl + '/.extraheader', GIT_CONFIG_VALUE_0: 'Authorization: token ' + token } } : {};
       const fetched = await execute('git', ['-C', result.folder, '-c', 'http.followRedirects=false', 'fetch', '--no-tags', '--no-write-fetch-head', '--no-recurse-submodules', address.url + '.git', '+refs/heads/' + branch + ':' + ref], options);
       if (!fetched.ok) throw new Error('Cannot fetch Gitea history: ' + fetched.error);

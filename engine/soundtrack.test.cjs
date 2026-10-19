@@ -1,7 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { createController, normalizeConfig } = require('../soundtrack.js');
+const { createController, createPlaybackOwnership, normalizeConfig } = require('../soundtrack.js');
 // Simulated media boundary: these tests do not establish audible playback.
 class AudioFixture extends EventTarget {
   constructor() { super(); this.paused = true; this.currentTime = 0; this.duration = 120; this.volume = 1; this.muted = false; this.starts = []; }
@@ -15,6 +15,64 @@ function fixture(options = {}) {
   const controller = createController({ audio, catalog: [{ id: 'calm', title: 'Calm' }, { id: 'ocean', title: 'Ocean' }], playlists: [{ id: 'bundled', name: 'Default', trackIds: ['calm', 'ocean'], protected: true }], library: { resolve: async id => `blob:fixture-${id}` }, save: value => saved.push(value), config: { mappings: { neutral: 'calm' } }, ...options });
   return { audio, saved, controller };
 }
+
+// Browser API boundary: ifAvailable cannot enqueue or preempt an existing owner.
+function lockFixture() {
+  let held = false;
+  return { request: async (_name, options, callback) => {
+    assert.equal(options.ifAvailable, true);
+    if (held) return callback(null);
+    held = true;
+    try { return await callback({ name: 'planwharf-soundtrack-player' }); } finally { held = false; }
+  } };
+}
+
+test('one owner across controllers; pause, disable, silence and disposal permit explicit transfer', async () => {
+  for (const action of ['pause', 'disable', 'silence', 'dispose']) {
+    const locks = lockFixture();
+    const one = fixture({ ownership: createPlaybackOwnership(locks) });
+    const two = fixture({ ownership: createPlaybackOwnership(locks) });
+    await one.controller.play(); await two.controller.play();
+    assert.equal(one.audio.paused, false); assert.equal(two.audio.paused, true);
+    if (action === 'disable') one.controller.configure({ enabled: false });
+    else if (action === 'silence') await one.controller.observe('failed', 'alpha');
+    else one.controller[action]();
+    await new Promise(setImmediate);
+    assert.equal(two.audio.paused, true, 'Release does not auto-start a waiting tab');
+    await two.controller.play(); assert.equal(two.audio.paused, false);
+    one.controller.dispose(); two.controller.dispose();
+  }
+});
+
+test('cancelling a pending ownership claim cannot resurrect playback or block another tab', async () => {
+  const callbacks = [];
+  const locks = { request: (_name, _options, callback) => new Promise(resolve => callbacks.push(() => resolve(callback({})))) };
+  const ownership = createPlaybackOwnership(locks);
+  const { controller: c, audio } = fixture({ ownership });
+  const pending = c.play(); c.pause(); callbacks.shift()(); await pending;
+  assert.equal(audio.paused, true); assert.deepEqual(audio.starts, []);
+  const retry = c.play(); callbacks.shift()(); await retry;
+  assert.equal(audio.paused, false); c.dispose();
+});
+
+test('unavailable or failing Web Locks prevents unsafe audio and gives actionable feedback', async () => {
+  for (const locks of [{}, { request() { throw Error('unavailable'); } }]) {
+    const { controller: c, audio } = fixture({ ownership: createPlaybackOwnership(locks) });
+    await c.play(); assert.equal(audio.paused, true); assert.deepEqual(audio.starts, []);
+    assert.match(c.snapshot().notice, /Web Locks|another.*tab/); c.dispose();
+  }
+});
+
+test('catalog refresh cancels an acquired pending load and frees the other player', async () => {
+  const locks = lockFixture(); let finish;
+  const one = fixture({ ownership: createPlaybackOwnership(locks), library: { resolve: () => new Promise(resolve => { finish = resolve; }) } });
+  const two = fixture({ ownership: createPlaybackOwnership(locks) });
+  const pending = one.controller.play();
+  await new Promise(setImmediate); one.controller.setCatalog(one.controller.snapshot().tracks);
+  await new Promise(setImmediate); await two.controller.play();
+  assert.equal(two.audio.paused, false); finish('blob:cancelled'); await pending;
+  assert.equal(one.audio.paused, true); one.controller.dispose(); two.controller.dispose();
+});
 test('fresh and restored installations never start audio without a Play gesture', async () => {
   assert.equal(normalizeConfig().enabled, false);
   const { controller, audio } = fixture({ config: { enabled: true, selectedTrackId: 'calm', mappings: { running: 'calm' } } });
@@ -23,6 +81,19 @@ test('fresh and restored installations never start audio without a Play gesture'
   await controller.play();
   assert.equal(audio.paused, false);
   controller.dispose();
+});
+
+test('another active tab denies Play without snapshot retries, and Pause releases ownership', async () => {
+  let available = false, claims = 0, releases = 0;
+  const ownership = { supported: true, acquire: async () => { claims++; return available; }, release: () => { releases++; } };
+  const { controller: c, audio } = fixture({ ownership, config: { mappings: { running: 'ocean' } } });
+  await c.observe('running', 'alpha'); await c.play();
+  assert.equal(audio.paused, true); assert.deepEqual(audio.starts, []);
+  assert.match(c.snapshot().notice, /another.*tab|another.*window/i);
+  for (const id of ['beta', 'gamma', 'alpha']) await c.observe('running', id);
+  assert.equal(claims, 1);
+  available = true; await c.play(); assert.equal(audio.paused, false);
+  c.pause(); assert.ok(releases > 0); assert.equal(audio.paused, true); c.dispose();
 });
 test('adaptive playback follows confirmed selected-project states, unchanged snapshots do not restart', async () => {
   const { controller: c, audio } = fixture({ config: { mappings: { idle: 'calm', preparing: 'calm', running: 'ocean', pausing: 'calm', checkpoint: 'calm', failed: '', completed: 'ocean' } } });

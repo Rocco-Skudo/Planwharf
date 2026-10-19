@@ -26,7 +26,8 @@
     try { config = JSON.parse(localStorage.getItem(KEY) || '{}'); if (!config || typeof config !== 'object' || Array.isArray(config)) config = {}; } catch { /* A corrupt preference cannot enable playback. */ }
     if (!config.mappings) config.mappings = manifest.defaults || {};
     const save = value => { try { localStorage.setItem(KEY,JSON.stringify(value)); } catch { feedback.textContent = 'Audio preferences could not be saved in this browser.'; } };
-    controller = window.PlanwharfSoundtrack.createController({audio,library,catalog:library.list(),playlists:library.playlists,config,save});
+    const ownership = window.PlanwharfSoundtrack.createPlaybackOwnership();
+    controller = window.PlanwharfSoundtrack.createController({audio,library,ownership,catalog:library.list(),playlists:library.playlists,config,save});
     const run = action => { try { Promise.resolve(action()).catch(error=>{ feedback.textContent = error.message || 'Audio is unavailable. Select a track again.'; }); } catch(error) { feedback.textContent = error.message; } };
     function label(text, parent = section) { return make('label',text,parent,{class:'soundtrack-field'}); }
     function checkbox(text,key) { const wrap=label(text), input=make('input','',wrap,{type:'checkbox',['data-soundtrack-'+key]:''}); input.addEventListener('change',()=>controller.configure({[key]:input.checked})); return input; }

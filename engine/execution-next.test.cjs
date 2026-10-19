@@ -1,6 +1,9 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { executionNext } = require('./execution-next.cjs');
 const { projectHome } = require('./project-home.cjs');
 
@@ -26,14 +29,16 @@ const cases = [
   ['J failed without structured recovery is neutral', graph('FAILED', 'FAILED'), /^Review Create module \(ST-first\) and resume from an explicit checkpoint\.$/],
   ['J blocked MegaTask uses durable blockers', { ...graph('BLOCKED', 'COMPLETE', 'BLOCKED'), megaTasks: [{ ...graph().megaTasks[0], status: 'BLOCKED', blockers: ['Resolve missing test dependency'] }] }, /^Resolve blockers: Resolve missing test dependency$/]
 ];
-for (const [name, durable, expected] of cases) test(name, async () => {
+for (const [name, durable, expected] of cases) test(name, async t => {
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-next-'));
+  t.after(() => fs.rmSync(folder, { recursive: true, force: true }));
   const before = JSON.stringify(durable);
   assert.match(next(durable), expected);
   if (durable.megaTasks[0].status !== 'READY_FOR_APPROVAL') assert.doesNotMatch(next(durable), /approv/i);
-  const project = { project: { id: 'isolated' }, revisions: [{ id: 1, title: '', direction: 'Isolated goal', state: '', open: [], closed: [] }] };
+  const project = { project: { id: 'isolated', folder }, revisions: [{ id: 1, title: '', direction: 'Isolated goal', state: '', open: [], closed: [] }] };
   const snapshot = { execution: durable, projects: [{ id: 'isolated', next: 'Approve the prepared job', status: 'watching', dispatch: [] }], researches: [] };
   const home = await projectHome(project, snapshot);
-  assert.equal(home.next, next(durable), 'Home uses the canonical projection even with stale row text');
+  assert.equal(home.next, durable.megaTasks[0].status === 'READY_FOR_APPROVAL' ? 'Approve the prepared MegaTask.' : next(durable), 'Home uses durable state even with stale row text');
   assert.equal(JSON.stringify(durable), before, 'Derivation does not mutate durable state');
 });
 test('G checkpoint action stays authoritative; absent/empty actions use remaining state', () => {
