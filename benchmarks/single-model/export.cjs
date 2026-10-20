@@ -11,7 +11,8 @@ function exportStudy(source,destination){
   fs.mkdirSync(destination,{recursive:true});
   const write=(name,value)=>{const file=path.join(destination,name);fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,typeof value==='string'?value:JSON.stringify(value,null,2)+'\n');};
   write('manifest.json',manifest);write('runs.json',runs);
-  const analysis=A.analyze(runs);write('analysis.json',analysis);write('REPORT.txt',A.renderReport(analysis,{environment:manifest.environment}));
+  let preflight;try{preflight=A.sanitizeEvidence(JSON.parse(fs.readFileSync(path.join(source,'preflight.json'),'utf8')));write('preflight.json',preflight);}catch(error){if(error.code!=='ENOENT')throw error;}
+  const analysis=A.analyze(runs);write('analysis.json',analysis);write('REPORT.txt',A.renderReport(analysis,{environment:manifest.environment,...(preflight?{preflight}:{})}));
   function walk(dir){for(const entry of fs.readdirSync(dir,{withFileTypes:true})){
     if(entry.isSymbolicLink()||['workspace','.git','node_modules'].includes(entry.name))continue;
     const file=path.join(dir,entry.name);if(entry.isDirectory()){walk(file);continue;}

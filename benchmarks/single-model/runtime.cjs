@@ -83,6 +83,7 @@ async function environment(model) {
   return {recordedAt:new Date().toISOString(),platform:process.platform,release:os.release(),arch:process.arch,cpu:os.cpus()[0]?.model||null,logicalCpus:os.cpus().length,memoryBytes:os.totalmem(),node:process.version,
     cli:{executable,version:runtime.cliVersion('codex'),authenticated:status.status===0&&/Logged in/.test(status.stderr+status.stdout),authStatus:status.stderr+status.stdout},
     requestedModel:model,modelInAuthenticatedCatalog:catalog.ok===true&&catalog.models.some(m=>m.cli===model),catalogVersion:catalog.cliVersion,providerReportedResolvedVersion:null,
+    cliProfile:{source:process.env.CODEX_HOME?'Explicit CODEX_HOME override':'Default existing profile',configurationHash:fs.existsSync(path.join(env.CODEX_HOME,'config.toml'))?sha(fs.readFileSync(path.join(env.CODEX_HOME,'config.toml'))):null,sqliteOverride:process.env.CODEX_SQLITE_HOME||null},
     sandbox:'workspace-write',approvalPolicy:'never',toolNetworkAccess:false,inferenceEffort:'shared CLI/profile default; no arm-specific override',
     configurationDifferences:['Planwharf disables native worker subagents and requests a structured final report; direct CLI retains its ordinary self-planning/test capabilities.','Planwharf uses native persistence/dispatch and one-model role roster; no hand-written decomposition is injected.'],
     quotaSnapshot:quota||null,quotaAttribution:'Shared account activity cannot be attributed per trial; per-trial quota decrement UNKNOWN',billedCost:null,

@@ -1,13 +1,13 @@
 # Controlled single-model benchmark
 
-Compare direct Codex CLI with the actual Planwharf project, approval, worker and persistence lifecycle. This is an experimental harness, not a performance optimization. The checked-in pilot is **inconclusive: all six launches were blocked by the installed CLI environment before implementation**. Read [the pilot report](PILOT.md) before interpreting any numbers.
+Compare direct Codex CLI with the actual Planwharf project, approval, worker and persistence lifecycle. This is an experimental harness, not a performance optimization. The original six-run pilot is inconclusive. The [subsequent repair and rerun](RERUN.md) fixed CLI initialization using a private runtime profile, but native Windows sandbox operations remain blocked. No performance advantage is established.
 
 ## Run without provider access
 
 Node 24 and Git are required; no npm dependencies. From the repository root:
 
 ```sh
-node --test benchmarks/single-model/tasks.test.cjs benchmarks/single-model/analysis.test.cjs benchmarks/single-model/run.test.cjs
+node --test benchmarks/single-model/*.test.cjs
 node benchmarks/single-model/run.cjs
 node benchmarks/single-model/run.cjs --offline-demo --output ../benchmark-offline-new
 ```
@@ -22,7 +22,9 @@ Use an existing authenticated Codex profile, an accessible native CLI and an exa
 node benchmarks/single-model/run.cjs --live --model gpt-5.6-luna --pairs 1 --timeout-ms 480000 --max-calls 6 --output ../benchmark-private-new
 ```
 
-This opts into sequential provider use: six runs, each with an eight-minute implementation budget and at most six agent CLI launches. Cleanup and independent acceptance add bounded time after implementation; acceptance is at most ten seconds per check. Maximum permitted configuration is five pairs per category, fifteen minutes per implementation and twelve launches per run. Do not expand until the pilot provides useful accepted pairs and a realistic usage estimate. No automatic retries outside the predeclared recovery are performed by the harness. Native internal agent turns are not separately counted as CLI launches.
+This first opts into one bounded capability call (at most 90 seconds), which must demonstrate native file editing, successful Node execution and an independently checked receipt. A successful model message alone does not pass. A blocked check saves its measured usage and diagnostic, submits zero task trials and stops the CLI with a nonzero status. Do not retry around an environment restriction. Calibration is separate from both arms and its consumption is retained in `preflight.json` and native receipts.
+
+After a passed check, this opts into sequential provider use: six runs, each with an eight-minute implementation budget and at most six agent CLI launches. Cleanup and independent acceptance add bounded time after implementation; acceptance is at most ten seconds per check. Maximum permitted configuration is five pairs per category, fifteen minutes per implementation and twelve launches per run. Do not expand until the pilot provides useful accepted pairs and a realistic usage estimate. No automatic retries outside the predeclared recovery are performed by the harness. Native internal agent turns are not separately counted as CLI launches.
 
 `--pairs 5` explicitly requests the target 30-run study; it is never the default or automatic. Output must be a new directory. Runs are sequential, use unique IDs and retain blocked, failed and timed-out outcomes. Keep the whole private directory outside the repository. Review sanitized output before publishing:
 

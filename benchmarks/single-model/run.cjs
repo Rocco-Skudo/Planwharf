@@ -93,6 +93,13 @@ async function execute(options){
     specificationHashes:tasks.listTasks(),sealedGraderHash:R.sha(fs.readFileSync(path.join(__dirname,'tasks.cjs'))),protocol:{acceptance:'All presealed deterministic checks pass AND transport completes successfully; incomplete outcomes retain resource use',timeBoundMs:options.timeoutMs,callBound:options.maxCalls,
       interventions:'One predeclared recovery on first source change for medium/complex, no ad hoc fixes or hidden grader feedback',windows:'No visible windows. Only server.cjs and noninteractive CLI are used.',humanEffort:'Scripted HTTP/CLI actions recorded; actual human-time savings UNKNOWN',fullStudy:'Target five pairs per task only after an accepted pilot and explicit --pairs 5 invocation; no automatic provider spending'}};
   save(path.join(output,'manifest-private.json'),manifest);save(path.join(output,'manifest.json'),A.sanitizeEvidence(manifest));
+  const preflight=await require('./preflight.cjs').checkCapabilities({model:options.model,directory:path.join(output,'private','preflight'),timeoutMs:Math.min(options.timeoutMs,90000)});
+  save(path.join(output,'preflight.json'),preflight);
+  if(preflight.status!=='passed'){
+    const analysis=A.analyze([]);save(path.join(output,'runs.json'),[]);save(path.join(output,'analysis.json'),analysis);
+    fs.writeFileSync(path.join(output,'REPORT.txt'),A.renderReport(analysis,{environment:A.sanitizeEvidence(environment),preflight}));
+    console.log(JSON.stringify({outcome:'PREFLIGHT_BLOCKED',reason:preflight.reason,taskTrialsSubmitted:0}));return{output,runs:[],analysis,preflight,blocked:true};
+  }
   const runs=[];
   for(const pair of list){let initialCommit=null;for(const arm of pair.arms){
     if(R.sha(fs.readFileSync(path.join(__dirname,'tasks.cjs')))!==manifest.sealedGraderHash)throw Error('Sealed acceptance changed during study');
@@ -119,5 +126,5 @@ module.exports={schedule,bounded,completion,execute,offlineDemo,receiptSession};
 if(require.main===module){const args=process.argv.slice(2);const value=(name,fallback)=>args.includes(name)?args[args.indexOf(name)+1]:fallback;
   (async()=>{if(args.includes('--offline-demo')){console.log(await offlineDemo(value('--output','benchmark-offline-'+Date.now())));return;}
     if(!args.includes('--live')){console.log('Offline: node benchmarks/single-model/run.cjs --offline-demo --output <new-dir>\nOpt-in live: --live --model <exact-id> --pairs 1 --timeout-ms 480000 --max-calls 6 --output <new-private-dir>');return;}
-    await execute({model:value('--model',''),pairs:Number(value('--pairs','1')),timeoutMs:Number(value('--timeout-ms','480000')),maxCalls:Number(value('--max-calls','6')),output:value('--output','')});
+    const result=await execute({model:value('--model',''),pairs:Number(value('--pairs','1')),timeoutMs:Number(value('--timeout-ms','480000')),maxCalls:Number(value('--max-calls','6')),output:value('--output','')});if(result.blocked)process.exitCode=2;
   })().catch(error=>{console.error(error.stack);process.exitCode=1;});}

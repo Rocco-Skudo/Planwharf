@@ -1,5 +1,7 @@
 # Pilot: execution blocked, comparison inconclusive
 
+Historical pilot retained unchanged below. See [the subsequent repair and rerun](RERUN.md) for the initialization fix and remaining Windows sandbox blocker.
+
 On 2026-10-20, one paired trial in each of three categories was attempted against upstream `d9b4c21b3c9045c6069d99b2f18686a6da53fe8d` (merged PR #21). All **six runs were blocked before implementation** by the installed native CLI. No full 30-run study was attempted because repeating the same environment failure would not estimate useful provider usage or accepted completion time.
 
 The account was authenticated with ChatGPT, and its authenticated catalog contained the explicitly requested `gpt-5.6-luna`. The CLI version was `0.163.0-alpha.10.2`. No model resolved-version receipt or completed inference usage receipt was returned. Authentication/catalog success did not establish working inference access.
