@@ -1,0 +1,924 @@
+{
+  "baseline": "1b895f38474793973de9f59d5ffc8865f1257e59",
+  "branch": "feat/smart-worker-routing",
+  "kind": "REAL_PROVIDER_EXECUTION_WITH_SEPARATE_DETERMINISTIC_POLICY_FIXTURES",
+  "settings": {
+    "mode": "smart",
+    "maxPremiumPerMegaTask": 2,
+    "maxPremiumConcurrent": 1,
+    "fallback": "block"
+  },
+  "measuredUsage": [
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "attemptId": "attempt-1",
+      "status": "COMPLETE",
+      "durationMs": 65436,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-2",
+      "status": "COMPLETE",
+      "durationMs": 521943,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-3",
+      "status": "FAILED",
+      "durationMs": 201370,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "orchestrator",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": null,
+      "status": "COMPLETE",
+      "durationMs": 63399,
+      "inputTokens": 330010,
+      "outputTokens": 2440,
+      "cachedInputTokens": 284800
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "attemptId": "attempt-4",
+      "status": "BLOCKED",
+      "durationMs": 110208,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-5",
+      "status": "COMPLETE",
+      "durationMs": 384979,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "attemptId": "attempt-6",
+      "status": "BLOCKED",
+      "durationMs": 80817,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "attemptId": "attempt-7",
+      "status": "BLOCKED",
+      "durationMs": 46240,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-8",
+      "status": "FAILED",
+      "durationMs": 147080,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "orchestrator",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": null,
+      "status": "COMPLETE",
+      "durationMs": 44326,
+      "inputTokens": 183132,
+      "outputTokens": 1426,
+      "cachedInputTokens": 140288
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-9",
+      "status": "COMPLETE",
+      "durationMs": 266151,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "attemptId": "attempt-10",
+      "status": "COMPLETE",
+      "durationMs": 85136,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    },
+    {
+      "role": "worker",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "attemptId": "attempt-11",
+      "status": "COMPLETE",
+      "durationMs": 24128,
+      "inputTokens": null,
+      "outputTokens": null,
+      "cachedInputTokens": null
+    }
+  ],
+  "milestones": [
+    {
+      "at": "2026-10-20T14:09:02.302Z",
+      "name": "three-real-projects",
+      "status": "PASS",
+      "models": [
+        "gpt-5.6-luna"
+      ],
+      "count": 3
+    },
+    {
+      "at": "2026-10-20T14:09:29.117Z",
+      "name": "concurrent-stopped",
+      "ownedPidsDead": true,
+      "count": 3
+    },
+    {
+      "at": "2026-10-20T14:17:17.369Z",
+      "name": "review-source-unchanged",
+      "sha256": "2b967aa41a9220739ec9c4745e33bab009be4546a4735d063639ca91370f33a6"
+    },
+    {
+      "at": "2026-10-20T14:25:02.217Z",
+      "name": "review-source-unchanged",
+      "sha256": "9811f9b1ce65ad2beb5f9824d705a5ecb0dd1faa51db0169627508de1cced992"
+    },
+    {
+      "at": "2026-10-20T14:26:22.267Z",
+      "name": "real-restart-resume",
+      "model": "gpt-5.6-luna",
+      "status": "PASS"
+    }
+  ],
+  "engineering": {
+    "command": "node scripts/engineering/ci.cjs",
+    "passed": 233,
+    "failed": 0
+  },
+  "harborQueueTests": {
+    "command": "node --test scheduler.test.cjs test/dashboard.test.cjs",
+    "passed": 23,
+    "failed": 0
+  },
+  "credentialsPublished": false,
+  "exactModelsExecuted": [
+    "gpt-5.6-luna",
+    "gpt-5.6-sol"
+  ],
+  "executions": [
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-1",
+      "megaTaskTitle": "Create basic dashboard markup and run instructions",
+      "title": "Create basic dashboard markup and run instructions",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "routing": {
+        "mode": "smart",
+        "modelId": "luna",
+        "provider": "codex",
+        "cli": "gpt-5.6-luna",
+        "tier": "standard",
+        "assessment": {
+          "level": "LOW",
+          "signals": [],
+          "reason": "Bounded work without observed coupled hazards",
+          "decomposition": "A bounded slice can be assigned independently."
+        },
+        "reason": "Routine work prefers Standard",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 92
+      },
+      "summary": "Implemented accessible HarborQueue dashboard markup with Refresh-driven GET /api/state loading, job/status/history rendering, and clear HTTP failure reporting. Added future server.cjs run instructions and Node-based artifact tests with browser JavaScript syntax validation.",
+      "tests": [
+        {
+          "command": "node --test test/dashboard.test.cjs",
+          "status": "PASSED",
+          "evidence": "1 test passed; dashboard markers, API behavior markers, README instructions, and embedded browser JavaScript syntax validated."
+        },
+        {
+          "command": "git diff --check",
+          "status": "PASSED",
+          "evidence": "No whitespace errors reported."
+        }
+      ],
+      "startedAt": "2026-10-20T13:51:44.256Z",
+      "endedAt": "2026-10-20T13:52:49.387Z",
+      "observedDurationMs": 65131,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-2",
+      "megaTaskTitle": "Implement concurrent scheduler with crash-consistent recovery invariants",
+      "title": "Implement concurrent scheduler with crash-consistent recovery invariants",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "CRITICAL",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            },
+            {
+              "dimension": "algorithm",
+              "score": 3,
+              "reason": "Algorithmic dependency correctness requires reasoning across states"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 92
+      },
+      "summary": "Implemented HarborQueue with DAG scheduling, a strict three-slot maximum, bounded retries, cancellation-safe slot accounting, attempt-specific history, atomic durable checkpoints, injected write faults, exclusive state ownership, at-least-once crash recovery, malformed-checkpoint validation, and fail-closed asynchronous persistence handling. Added the dependency-free dashboard server, retained the existing dashboard, and documented semantics and filesystem limits.",
+      "tests": [
+        {
+          "command": "node --test scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "Final run: 13 tests passed, 0 failed, covering concurrency, DAG dependencies, retries, cancellation, stale settlements, recovery, ownership, malformed state, fault injection, and HTTP serving."
+        },
+        {
+          "command": "node --test",
+          "status": "PASSED",
+          "evidence": "14 tests passed, 0 failed, including the existing dashboard artifact check."
+        },
+        {
+          "command": "node --check scheduler.cjs; node --check server.cjs; node --check scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "All implementation and test files parsed successfully."
+        }
+      ],
+      "startedAt": "2026-10-20T13:53:05.649Z",
+      "endedAt": "2026-10-20T14:01:47.260Z",
+      "observedDurationMs": 521611,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-3",
+      "megaTaskTitle": "Independently verify concurrent recovery and duplicate-execution invariants",
+      "title": "Independently verify concurrent recovery and duplicate-execution invariants",
+      "status": "FAILED",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "CRITICAL",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            },
+            {
+              "dimension": "algorithm",
+              "score": 3,
+              "reason": "Algorithmic dependency correctness requires reasoning across states"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Inspected README.md and all HarborQueue source/tests without modification. The mandated 13-test suite passed. Independent Node built-in probes confirmed dependency scheduling, the three-slot ceiling, no concurrent duplicate execution, bounded/blocked work behavior, cancellation and physical-slot retention, checkpoint rollback before rename, recovery as interrupted plus a unique retry, live-owner exclusion, graph-error rejection, and normal per-attempt result/error recording. Correctness is nevertheless not fully demonstrated: scheduler.cjs:11-13 and :143 silently discard nested non-JSON payload members (a function-valued property was accepted and vanished from memory and disk), contrary to README.md:48. Also, validateState at scheduler.cjs:73-83 accepts internally inconsistent per-attempt history: a completed job with currentAttemptId referencing a still-running attempt was accepted unchanged, and two attempts for one job with duplicate number 1 were accepted. These gaps can hide malformed recovery state and make attempt history unreliable.",
+      "tests": [
+        {
+          "command": "node --test scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "Exit 0; 13 tests passed, 0 failed, 0 skipped. Covered durable add, three-slot configuration, DAG scheduling/no duplicate running job, retry bounds, failed-prerequisite blocking, cancellation, graph/operation errors, before-rename rollback, ownership, recovery, stale settlement, asynchronous persistence failure, and dashboard access."
+        },
+        {
+          "command": "Check: inline Node built-in concurrency/cancellation/ownership/durability probe executed with node -",
+          "status": "PASSED",
+          "evidence": "Observed peak concurrency 3; a, b, and c initially occupied all slots; cancellation aborted a but retained its slot until settlement; d launched only after settlement; cancelled prerequisite left child queued; four history entries had four unique attempt IDs; a second live owner was rejected; disk jobs/history equaled snapshot."
+        },
+        {
+          "command": "Check: inline Node built-in recovery, atomic-checkpoint, and malformed-graph probe executed with node -",
+          "status": "PASSED",
+          "evidence": "A persisted running attempt became interrupted with an error, exactly one retry ran and completed with a new unique attempt ID and recorded result. Injected before-rename failure preserved the prior checkpoint and rolled back memory. Missing-dependency and cyclic checkpoints were both rejected without leaked locks."
+        },
+        {
+          "command": "Check: add payload { kept: 1, dropped() {} } and compare memory/disk",
+          "status": "FAILED",
+          "evidence": "The job was accepted; both memory and checkpoint contained only {\"kept\":1}. The non-JSON function member was silently discarded instead of rejecting the payload as required by README.md:48."
+        },
+        {
+          "command": "Check: open crafted completed job whose currentAttemptId references a running history entry",
+          "status": "FAILED",
+          "evidence": "HarborQueue accepted the checkpoint unchanged: job status remained completed while its referenced attempt remained running. validateState only verifies the forward running-job condition."
+        },
+        {
+          "command": "Check: open crafted two-attempt history with per-job attempt numbers [1,1]",
+          "status": "FAILED",
+          "evidence": "HarborQueue accepted both entries. It checks history length against attemptCount but does not enforce unique, sequential per-job attempt numbers."
+        },
+        {
+          "command": "git status --short",
+          "status": "PASSED",
+          "evidence": "Status remained identical to the supplied pre-audit state: modified README.md and untracked index.html, scheduler.cjs, scheduler.test.cjs, server.cjs, and test/. No audit edits were made."
+        }
+      ],
+      "startedAt": "2026-10-20T14:02:25.783Z",
+      "endedAt": "2026-10-20T14:05:46.813Z",
+      "observedDurationMs": 201030,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "audit-smart-1",
+      "attemptId": "attempt-4",
+      "megaTaskTitle": "Write isolated project receipt and wait",
+      "title": "Write isolated project receipt",
+      "status": "BLOCKED",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "routing": {
+        "mode": "smart",
+        "modelId": "luna",
+        "provider": "codex",
+        "cli": "gpt-5.6-luna",
+        "tier": "standard",
+        "assessment": {
+          "level": "LOW",
+          "signals": [],
+          "reason": "Bounded work without observed coupled hazards",
+          "decomposition": "A bounded slice can be assigned independently."
+        },
+        "reason": "Routine work prefers Standard",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Interrupted by Stop; partial evidence retained.",
+      "tests": [],
+      "startedAt": "2026-10-20T14:07:35.796Z",
+      "endedAt": "2026-10-20T14:09:25.886Z",
+      "observedDurationMs": 110090,
+      "evidenceKind": "TECHNICAL",
+      "resultTransportVerified": null
+    },
+    {
+      "projectId": "audit-smart-2",
+      "attemptId": "attempt-6",
+      "megaTaskTitle": "Write isolated project receipt and wait",
+      "title": "Write isolated project receipt",
+      "status": "BLOCKED",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "routing": {
+        "mode": "smart",
+        "modelId": "luna",
+        "provider": "codex",
+        "cli": "gpt-5.6-luna",
+        "tier": "standard",
+        "assessment": {
+          "level": "LOW",
+          "signals": [],
+          "reason": "Bounded work without observed coupled hazards",
+          "decomposition": "A bounded slice can be assigned independently."
+        },
+        "reason": "Routine work prefers Standard",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Interrupted by Stop; partial evidence retained.",
+      "tests": [],
+      "startedAt": "2026-10-20T14:08:06.724Z",
+      "endedAt": "2026-10-20T14:09:27.416Z",
+      "observedDurationMs": 80692,
+      "evidenceKind": "TECHNICAL",
+      "resultTransportVerified": null
+    },
+    {
+      "projectId": "audit-smart-3",
+      "attemptId": "attempt-7",
+      "megaTaskTitle": "Write isolated project receipt and wait",
+      "title": "Write isolated project receipt",
+      "status": "BLOCKED",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "routing": {
+        "mode": "smart",
+        "modelId": "luna",
+        "provider": "codex",
+        "cli": "gpt-5.6-luna",
+        "tier": "standard",
+        "assessment": {
+          "level": "LOW",
+          "signals": [],
+          "reason": "Bounded work without observed coupled hazards",
+          "decomposition": "A bounded slice can be assigned independently."
+        },
+        "reason": "Routine work prefers Standard",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Interrupted by Stop; partial evidence retained.",
+      "tests": [],
+      "startedAt": "2026-10-20T14:08:42.842Z",
+      "endedAt": "2026-10-20T14:09:28.965Z",
+      "observedDurationMs": 46123,
+      "evidenceKind": "TECHNICAL",
+      "resultTransportVerified": null
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-5",
+      "megaTaskTitle": "Fix HarborQueue scheduler correctness: reject lossy JSON payload members including nested functions, undefined, symbols,",
+      "title": "Whole job",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "HIGH",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Implemented lossless payload validation and strengthened checkpoint invariants. Unsupported nested JSON values, cycles, sparse arrays, and other lossy structures are rejected before mutation. Checkpoints now enforce sequential unique per-job attempt numbers, running-attempt ownership, current-attempt consistency, and terminal/latest-attempt agreement while preserving cancelled in-flight and honestly interrupted crash recovery semantics. Added adversarial regression coverage and updated documentation.",
+      "tests": [
+        {
+          "command": "node --test --test-name-pattern \"lossy JSON|attempt numbers|running attempts|terminal jobs\" scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "4 focused adversarial regression tests passed; 0 failed."
+        },
+        {
+          "command": "node --check scheduler.cjs; node --check scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "Both implementation and test files passed Node syntax validation."
+        },
+        {
+          "command": "node --test scheduler.test.cjs test/dashboard.test.cjs",
+          "status": "PASSED",
+          "evidence": "Final full run reported 21 tests passed, 0 failed, including concurrency, cancellation, persistence-fault, crash-recovery, checkpoint-corruption, server, and dashboard coverage."
+        },
+        {
+          "command": "rg \"\\[DEBUG-\" . -g \"!node_modules\"",
+          "status": "PASSED",
+          "evidence": "No temporary debug instrumentation was present."
+        }
+      ],
+      "startedAt": "2026-10-20T14:08:03.412Z",
+      "endedAt": "2026-10-20T14:14:28.003Z",
+      "observedDurationMs": 384591,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-8",
+      "megaTaskTitle": "Independently verify concurrent recovery and duplicate-execution invariants",
+      "title": "Independently verify concurrent recovery and duplicate-execution invariants",
+      "status": "FAILED",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "CRITICAL",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            },
+            {
+              "dimension": "algorithm",
+              "score": 3,
+              "reason": "Algorithmic dependency correctness requires reasoning across states"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants; Algorithmic dependency correctness requires reasoning across states",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "The documented invariants are not all correct. Inspection covered README.md, scheduler.cjs, scheduler.test.cjs, server.cjs, index.html, and test/dashboard.test.cjs. Existing tests demonstrate cancellation behavior, checkpoint rollback/fail-closed handling, ordinary recovery, three-slot enforcement, graph validation, and per-attempt history. However, scheduler.cjs lines 388-397 contain a stale-lock TOCTOU race: multiple processes can read the same dead-owner record, then one process can delete the replacement live lock created by another. Deterministic Node-only probes produced two simultaneous owners with different tokens and two concurrent executions of the same durable job with distinct attempt IDs. This violates exclusive ownership and permits duplicate execution beyond the documented intentional crash-recovery semantics. The existing ownership test checks only rejection of an already-live lock and does not exercise concurrent stale-lock reclamation.",
+      "tests": [
+        {
+          "command": "node --test scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "Observed 20 tests passed, 0 failed, in 267.0386 ms. Coverage included three-slot scheduling, cancellation, checkpoint fault rollback, recovery, ordinary exclusive ownership, graph errors, and attempt history."
+        },
+        {
+          "command": "node --test scheduler.test.cjs test/dashboard.test.cjs",
+          "status": "PASSED",
+          "evidence": "Observed 21 tests passed, 0 failed, including the dashboard artifact check."
+        },
+        {
+          "command": "Inline Node built-in two-process stale-lock ownership race probe",
+          "status": "FAILED",
+          "evidence": "Both processes first read the same stale lock and subsequently reported ownership with distinct tokens; observed simultaneousOwners=2."
+        },
+        {
+          "command": "Inline Node built-in two-process stale-lock duplicate-execution probe",
+          "status": "FAILED",
+          "evidence": "Both owners executed job cargo concurrently. Observed executionCount=2 and distinctAttempts=2, with attempt IDs d49bbc3a-8400-4c4a-baaf-9dcb6a7a72b7 and 0395c5c2-25b1-42de-a24f-8bf2d5e844a0."
+        },
+        {
+          "command": "Read-only source inspection and git status verification",
+          "status": "PASSED",
+          "evidence": "Inspected every project source/test file. No audit edits were made; git status remained the pre-existing README modification and untracked project files."
+        }
+      ],
+      "startedAt": "2026-10-20T14:14:50.164Z",
+      "endedAt": "2026-10-20T14:17:16.848Z",
+      "observedDurationMs": 146684,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-9",
+      "megaTaskTitle": "Fix HarborQueue exclusive ownership during crash recovery. Independent review reproduced a stale-lock reclamation race: ",
+      "title": "Whole job",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "HIGH",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Fixed crash-recovery ownership using an atomic acquisition guard around authoritative lock revalidation, stale-lock removal, and replacement creation. Added deterministic child-process race coverage and documented fail-closed manual intervention for an abandoned acquisition guard. Ordinary dead-owner recovery remains supported.",
+      "tests": [
+        {
+          "command": "node --test scheduler.test.cjs test/dashboard.test.cjs",
+          "status": "PASSED",
+          "evidence": "23 tests passed, 0 failed: all 21 existing tests plus two new ownership regressions. Duration: 395.7998 ms."
+        },
+        {
+          "command": "node --test --test-name-pattern=\"two stale-read\" scheduler.test.cjs (repeated 10 times)",
+          "status": "PASSED",
+          "evidence": "10 focused runs completed with 0 failures."
+        },
+        {
+          "command": "node --check scheduler.cjs; node --check scheduler.test.cjs; node --check test/ownership-contender.cjs",
+          "status": "PASSED",
+          "evidence": "Syntax checks passed for all three files."
+        }
+      ],
+      "startedAt": "2026-10-20T14:18:31.585Z",
+      "endedAt": "2026-10-20T14:22:57.315Z",
+      "observedDurationMs": 265730,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "planwharf-dummy-harborqueue",
+      "attemptId": "attempt-10",
+      "megaTaskTitle": "Verify stale-lock concurrency and crash recovery invariants",
+      "title": "Verify stale-lock concurrency and crash recovery invariants",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-sol",
+      "routing": {
+        "mode": "smart",
+        "modelId": "codex:gpt-5.6-sol",
+        "provider": "codex",
+        "cli": "gpt-5.6-sol",
+        "tier": "premium",
+        "assessment": {
+          "level": "HIGH",
+          "signals": [
+            {
+              "dimension": "coupled-state",
+              "score": 4,
+              "reason": "Concurrency interacts with durable state or execution invariants"
+            },
+            {
+              "dimension": "recovery",
+              "score": 3,
+              "reason": "Recovery must preserve durable correctness invariants"
+            }
+          ],
+          "reason": "Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+          "decomposition": "Keep shared invariants together; dependent slices retain parent risk."
+        },
+        "reason": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 90
+      },
+      "summary": "Verified the stale-lock correction and crash-recovery invariants. Acquisition serializes contenders with an exclusive guard and re-reads the lock under that guard before any removal. The deterministic child-process barrier showed one owner and one job execution while the replacement owner remained alive; the delayed contender rejected without removing its lock. Dead-owner recovery completed one retry, and an abandoned acquisition guard failed closed while preserving the ordinary lock. README.md documents the required manual guard-removal procedure. No source files were modified.",
+      "tests": [
+        {
+          "command": "node --test scheduler.test.cjs test/dashboard.test.cjs",
+          "status": "PASSED",
+          "evidence": "Exit code 0. All 23 tests passed in 394.8475 ms, including the deterministic stale-read contender regression, abandoned-guard fail-closed behavior, dead-owner recovery, ownership release, persistence, and dashboard tests."
+        },
+        {
+          "command": "node --test --test-name-pattern=\"(abandoned acquisition guard|two stale-read recovery contenders|restart marks old running attempt)\" scheduler.test.cjs",
+          "status": "PASSED",
+          "evidence": "Exit code 0. All 3 focused tests passed. The race test observed only contender A starting and ending, one durable history entry, and contender B rejecting because A was live. Recovery marked the crashed attempt interrupted and executed exactly one replacement attempt. The abandoned guard produced the documented manual-intervention error and left the dead-owner lock unchanged."
+        },
+        {
+          "command": "Static inspection of scheduler.cjs:375-488, scheduler.test.cjs:248-343, test/ownership-contender.cjs, and README.md ownership semantics",
+          "status": "PASSED",
+          "evidence": "The pre-guard stale read is used only for deterministic fault injection. After acquiring <file>.lock.acquire, the implementation authoritatively re-reads the current lock and removes it only when its current PID is dead. Guard cleanup verifies the token; cleanup failure fails acquisition and releases only a token-matching owned lock. README.md documents that interrupted guards are not automatically reclaimed and require operator verification before manual removal."
+        },
+        {
+          "command": "git status --short before and after audit",
+          "status": "PASSED",
+          "evidence": "Status remained identical to the supplied pre-audit state: README.md modified and index.html, scheduler.cjs, scheduler.test.cjs, server.cjs, and test/ untracked. The audit introduced no project changes."
+        }
+      ],
+      "startedAt": "2026-10-20T14:23:36.923Z",
+      "endedAt": "2026-10-20T14:25:01.614Z",
+      "observedDurationMs": 84691,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    },
+    {
+      "projectId": "audit-smart-1",
+      "attemptId": "attempt-11",
+      "megaTaskTitle": "Write isolated project receipt and wait",
+      "title": "Write isolated project receipt",
+      "status": "COMPLETE",
+      "provider": "codex",
+      "exactModel": "gpt-5.6-luna",
+      "routing": {
+        "mode": "smart",
+        "modelId": "luna",
+        "provider": "codex",
+        "cli": "gpt-5.6-luna",
+        "tier": "standard",
+        "assessment": {
+          "level": "LOW",
+          "signals": [],
+          "reason": "Bounded work without observed coupled hazards",
+          "decomposition": "A bounded slice can be assigned independently."
+        },
+        "reason": "Routine work prefers Standard",
+        "restriction": null,
+        "limits": {
+          "maxPremiumPerMegaTask": 2,
+          "maxPremiumConcurrent": 1
+        },
+        "remainingPercent": 91
+      },
+      "summary": "Verified the isolated receipt contains `audit-smart-1 gpt-5.6-luna`, ran the Node test suite successfully, polled for `release`, observed it already existed, and reread the unchanged receipt.",
+      "tests": [
+        {
+          "command": "node --test",
+          "status": "PASSED",
+          "evidence": "1 test passed; 0 failed."
+        },
+        {
+          "command": "node -e \"poll release every second for up to 240 seconds\"",
+          "status": "PASSED",
+          "evidence": "Observed `release exists` immediately and read `audit-smart-1 gpt-5.6-luna` from real-receipt.txt."
+        }
+      ],
+      "startedAt": "2026-10-20T14:25:57.954Z",
+      "endedAt": "2026-10-20T14:26:21.898Z",
+      "observedDurationMs": 23944,
+      "evidenceKind": "STRUCTURED_WORKER_RESULT",
+      "resultTransportVerified": true
+    }
+  ],
+  "browser": {
+    "checks": [
+      "Saved Smart Routing visible in actual UI",
+      "User saves routing with no extra consent prompt",
+      "Standing Premium authorization saves through actual controls",
+      "Browser reload retains routing settings",
+      "Routing rationale is inspectable alongside actual assignments",
+      "No unexpected Premium approval modal",
+      "No uncaught browser errors"
+    ],
+    "errors": []
+  },
+  "liveConcurrencyBrowser": {
+    "checks": [
+      "Actual running Ship state: audit-smart-1",
+      "Actual running Ship state: audit-smart-2",
+      "Actual running Ship state: audit-smart-3"
+    ],
+    "errors": []
+  },
+  "harborQueueBrowser": {
+    "checks": [
+      "Actual dependency-aware scheduler completed both jobs",
+      "Actual Refresh fetches real scheduler state",
+      "Dashboard displays completed job states and execution history",
+      "Failed state request is displayed as a failure",
+      "No uncaught dashboard browser errors"
+    ],
+    "errors": []
+  },
+  "regression": {
+    "command": "node --test --test-concurrency=1 engine/smart-routing.test.cjs engine/gold-model.test.cjs engine/provider-models.test.cjs engine/provider-audit.test.cjs engine/model-roles.test.cjs engine/model-policy.test.cjs engine/phase2.test.cjs engine/phase2-deadline.test.cjs engine/project-export.test.cjs engine/worker-containment.test.cjs engine/project-containment.test.cjs engine/home-containment.test.cjs engine/codex-result.test.cjs engine/soundtrack.test.cjs engine/soundtrack-http.test.cjs engine/soundtrack-assets.test.cjs engine/captain.test.cjs",
+    "passed": 96,
+    "failed": 0,
+    "skipped": 3
+  },
+  "knownBaselineFailure": "engine/orchestrator.test.cjs:201 assumes nonexistent D:\\demo. Reproduced on merged PR #20 e86da8a.",
+  "sourceHashes": {
+    "harborqueue/index.html": "f9e3da035b0dbefe8cc22100e5c1322f110ef6e8579e89667507808067bfc9a9",
+    "harborqueue/README.md": "b72a7ac2db19b51d66e57465c8428769367468c430e6ce996adc4ccf56b100c0",
+    "harborqueue/scheduler.cjs": "e0ca80a0bb90b2a37f9b9e00a55a0a04df6e0f0a2de75786fdbb029d0a23e36c",
+    "harborqueue/scheduler.test.cjs": "1a749e078173445dcd27f2f53bf44fd8261b9af9b60775b4b2864a7a33527f36",
+    "harborqueue/server.cjs": "d6dcbfbf5949a4116dcaef07b085bc4d41c761afedf2ad9be28221082b6d5952",
+    "harborqueue/test/dashboard.test.cjs": "9aa4ec335b0cdf71eb9cc727fa8fc373369c3b845f069b643401f90679c9617c",
+    "harborqueue/test/ownership-contender.cjs": "0b63be3c86a2155ea7a0d5d9d078e3680c7172694326ffc27bea346cce34a7db"
+  },
+  "changedFiles": [
+    "docs/audits/2026-10-20-smart-routing/README.md",
+    "docs/audits/2026-10-20-smart-routing/harborqueue-dashboard.png",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/README.md",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/index.html",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/scheduler.cjs",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/scheduler.test.cjs",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/server.cjs",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/test/dashboard.test.cjs",
+    "docs/audits/2026-10-20-smart-routing/harborqueue/test/ownership-contender.cjs",
+    "docs/audits/2026-10-20-smart-routing/policy-comparison.json",
+    "docs/audits/2026-10-20-smart-routing/routing-concurrency.png",
+    "docs/audits/2026-10-20-smart-routing/routing-settings.png",
+    "docs/audits/2026-10-20-smart-routing/routing-ui.png",
+    "docs/audits/2026-10-20-smart-routing/verification.json",
+    "engine/execution.cjs",
+    "engine/model-policy.test.cjs",
+    "engine/orchestrator.js",
+    "engine/project-export.cjs",
+    "engine/project-export.test.cjs",
+    "engine/smart-routing.cjs",
+    "engine/smart-routing.test.cjs",
+    "home-ui.js",
+    "model-policy-ui.js",
+    "orch.js",
+    "scripts/audit/harborqueue-browser.cjs",
+    "scripts/audit/smart-routing-browser.cjs",
+    "scripts/audit/smart-routing-evaluate.cjs",
+    "scripts/audit/smart-routing-real.cjs",
+    "scripts/audit/smart-routing-report.cjs",
+    "scripts/audit/start.cjs",
+    "scripts/engineering/ci.cjs",
+    "server.cjs",
+    "workspace-ui.js"
+  ],
+  "financialSavingsMeasured": false,
+  "catalogProviderBenchmarkExecuted": false
+}

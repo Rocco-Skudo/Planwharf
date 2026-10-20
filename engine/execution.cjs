@@ -157,6 +157,12 @@ function createExecutionBridge(options) {
   }
   function launch(item, job, mega, sub) {
     const row = rowFor(mega.projectId, mega.id);
+    const revised = options.refreshAssignment?.(sub, job, inspectProject(item), subtasks(mega).filter(s => s.id !== sub.id && s.routing?.tier === 'premium' && s.attemptIds.length));
+    if (revised && revised.modelId !== 'unassigned') {
+      sub.routingHistory ||= []; sub.routingHistory.push(clone(sub.routing)); sub.routing = revised.routing; sub.assignedModelId = revised.modelId;
+      const model = models().find(m => m.id === revised.modelId); sub.proposedProvider = model?.provider || null; sub.proposedCli = model?.cli || null;
+      event(mega.projectId, 'MODEL_ROUTING_FALLBACK', revised.routing.reason, { megaTaskId: mega.id, subTaskId: sub.id, modelId: revised.modelId }); persist();
+    }
     const blocked = options.assignmentBlocker?.(sub, mega, true);
     if (blocked) { if (!blocked.waiting) sub.status = 'BLOCKED'; mega.nextAction = typeof blocked === 'string' ? blocked : blocked.reason; return; }
     const requested = models().find(model => model.id === sub.assignedModelId && model.enabled && model.available !== false);
@@ -222,7 +228,7 @@ function createExecutionBridge(options) {
     row.workerActivity = row.doing; row.next = executionNext(mega, data);
     row.waitingFor = mega.status === 'READY_FOR_APPROVAL' ? `Approval of MegaTask ${mega.id}` : mega.status === 'PAUSED' ? 'Resume an explicit checkpoint' : mega.status === 'COMPLETE' ? 'Nothing. Structured results are complete.' : 'Structured worker results';
     row.workerLabel = (row.dispatch || []).filter(part => part.pid).map(part => part.label).join(' + ') || null;
-    row.plan = [`MegaTask: ${mega.title}`, `Objective: ${mega.goal}`, `Latest git: ${mega.repoBefore.repoHead || 'Not applicable'}`, ...subs.map(sub => `${sub.title} — ${sub.assignedModelId}; ${sub.routing ? sub.routing.assessment.level + ' / ' + sub.routing.tier + ' / ' + sub.routing.reason + '; ' : ''}${sub.dependencies.length ? 'after ' + sub.dependencies.map(id => subs.find(parent => parent.id === id)?.title).join(', ') : 'parallel-ready'}; ${sub.status}`)];
+    row.plan = [`MegaTask: ${mega.title}`, `Objective: ${mega.goal}`, `Latest git: ${mega.repoBefore.repoHead || 'Not applicable'}`, ...subs.map(sub => `${sub.title} — ${sub.assignedModelId}; ${sub.routing ? (sub.routing.assessment?.level || 'UNKNOWN') + ' / ' + sub.routing.tier + ' / ' + sub.routing.reason + '; ' : ''}${sub.dependencies.length ? 'after ' + sub.dependencies.map(id => subs.find(parent => parent.id === id)?.title).join(', ') : 'parallel-ready'}; ${sub.status}`)];
     row.approved = Boolean(mega.approvedAt); return row;
   }
   function deadlineDue(mega) {

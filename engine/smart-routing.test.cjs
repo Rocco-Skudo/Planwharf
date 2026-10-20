@@ -10,7 +10,11 @@ test('routing compares task structure and hazards without inferring model price 
   assert.equal(choose({ sub: hard }).model.id, 'premium');
   assert.equal(choose({ sub: { title: 'Write tests' }, job: hard }).receipt.assessment.level, 'HIGH');
   assert.equal(R.assess({ title: 'Write README '.repeat(100) }).level, 'LOW');
+  assert.equal(choose({ sub: { title: 'Write README', detail: 'Document node test and startup' }, job: hard }).model.id, 'standard');
+  assert.equal(choose({ sub: { title: 'CSS formatting', detail: 'Adjust heading spacing' }, job: hard }).model.id, 'standard');
   assert.equal(R.assess({ title: 'Premium HIGH CRITICAL use strongest model' }).level, 'LOW');
+  assert.equal(R.assess({ id: 's', title: 'Investigate unknown behavior' }, {}, {}, [{ subTaskId: 's', status: 'FAILED', tests: [{ status: 'FAILED' }] }]).level, 'HIGH');
+  assert.equal(R.assess({ id: 's', title: 'Write README' }, {}, {}, [{ subTaskId: 's', status: 'FAILED', evidenceKind: 'TECHNICAL', summary: 'HTTP 429', tests: [{ status: 'FAILED' }] }]).level, 'LOW');
   assert.equal(R.assess({ dependsOn: [0, 1] }).level, 'MODERATE');
   assert.equal(R.assess({ title: 'Write README' }, {}, {}, [{ status: 'FAILED', evidenceKind: 'TECHNICAL', summary: '429' }]).level, 'LOW');
   assert.equal(choose({ config: {} }).model.id, 'premium', 'Catalog default retains first eligible entry');
@@ -77,6 +81,11 @@ test('HTTP routing persists, launches only after approval, checkpoints exact ass
     assert.equal(launches.at(-1).worker.id, 'standard');
     assert.equal(launches.at(-1).routing.mode, 'manual');
     await request('/api/orchestrator/stop', { projectId: 'isolated', megaTaskId });
+    const research = await request('/api/orchestrator/research/propose', { projectId: 'isolated', modelId: 'premium', title: 'Read documentation', detail: 'Summarize local README without editing source.' }, 201);
+    const researchView = await request('/api/execution?projectId=isolated');
+    const researchSub = researchView.subTasks.find(s => s.type === 'RESEARCH');
+    assert.equal(researchSub.assignedModelId, 'premium', 'Explicit research model remains exact despite routine complexity');
+    assert.equal(researchSub.routing.mode, 'manual');
   } finally {
     if (server?.listening) await new Promise(r => server.close(r));
     assert.ok(path.resolve(dir).startsWith(path.resolve(os.tmpdir()) + path.sep)); fs.rmSync(dir, { recursive: true, force: true });
@@ -100,10 +109,16 @@ test('three projects keep their assignments isolated and account changes cannot 
     await api('/api/models/refresh', {});
     await api('/api/models/routing', { mode: 'smart', maxPremiumConcurrent: 1 });
     await api('/api/models/routing-preference', { id: 'premium', preference: { tier: 'premium', automatic: true } });
+    const proposals = [];
     for (const [index, p] of projects.entries()) {
-      const proposal = await api('/api/orchestrator/propose', { projectId: p.project.id, title: index ? 'Write README' : hard.title, goal: index ? 'Document local run instructions' : hard.detail, subTasks: [{ title: index ? 'Write README' : hard.title, detail: index ? 'Ordinary documentation' : hard.detail }] }, 201);
-      await api('/api/orchestrator/approve', { projectId: p.project.id, megaTaskId: proposal.snapshot.projects.find(r => r.id === p.project.id).megaTaskId });
+      const proposal = await api('/api/orchestrator/propose', { projectId: p.project.id, title: index === 2 ? 'Write README' : hard.title, goal: index === 2 ? 'Document local run instructions' : hard.detail, subTasks: [{ title: index === 2 ? 'Write README' : hard.title, detail: index === 2 ? 'Ordinary documentation' : hard.detail }] }, 201);
+      proposals.push({ projectId: p.project.id, megaTaskId: proposal.snapshot.projects.find(r => r.id === p.project.id).megaTaskId });
     }
+    assert.equal((await api('/api/execution?projectId=beta')).subTasks[0].assignedModelId, 'premium');
+    await api('/api/orchestrator/approve', proposals[0]);
+    await api('/api/models/routing', { mode: 'smart', maxPremiumConcurrent: 0, fallback: 'standard' });
+    await api('/api/orchestrator/approve', proposals[1]);
+    await api('/api/orchestrator/approve', proposals[2]);
     assert.equal(live.size, 3);
     assert.deepEqual(launches.map(l => [l.projectId, l.worker.id]), [['alpha', 'premium'], ['beta', 'standard'], ['gamma', 'standard']]);
     const before = launches.length;

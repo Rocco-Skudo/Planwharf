@@ -20,7 +20,9 @@ function preference(input) {
 // A coupled hazard, dependency graph and actual failed correctness evidence carry more weight
 // than request length. Parent scope is retained so decomposition cannot erase difficult reasoning.
 function assess(sub, job = {}, facts = {}, results = []) {
-  const text = [sub.title, sub.detail, job.title, job.detail].filter(Boolean).join(' ').toLowerCase();
+  const own = [sub.title, sub.detail].filter(Boolean).join(' ').toLowerCase();
+  const presentation = /\b(readme|documentation|css|formatting|markup|scaffolding)\b/.test(own) && !/\b(implement|debug|verify|audit|fix)\b/.test(own);
+  const text = [own, ...(presentation ? [] : [job.title, job.detail])].filter(Boolean).join(' ').toLowerCase();
   const signals = [];
   const add = (condition, dimension, score, reason) => { if (condition) signals.push({ dimension, score, reason }); };
   const concurrent = /\b(concurren\w*|race|synchroniz\w*|mutex|atomic|parallel)\b/.test(text);

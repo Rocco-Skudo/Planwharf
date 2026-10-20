@@ -1,0 +1,81 @@
+{
+  "kind": "DETERMINISTIC_POLICY_FIXTURE",
+  "rows": [
+    {
+      "task": "Create HTML markup",
+      "expectedPreference": "standard",
+      "complexity": "LOW",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-standard",
+      "rationale": "Routine work prefers Standard",
+      "evaluationMs": 0.9446999999999974
+    },
+    {
+      "task": "Write README",
+      "expectedPreference": "standard",
+      "complexity": "LOW",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-standard",
+      "rationale": "Routine work prefers Standard",
+      "evaluationMs": 0.05889999999999773
+    },
+    {
+      "task": "CSS formatting",
+      "expectedPreference": "standard",
+      "complexity": "LOW",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-standard",
+      "rationale": "Routine work prefers Standard",
+      "evaluationMs": 0.06489999999999796
+    },
+    {
+      "task": "Validate input",
+      "expectedPreference": "standard",
+      "complexity": "LOW",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-standard",
+      "rationale": "Routine work prefers Standard",
+      "evaluationMs": 0.033500000000000085
+    },
+    {
+      "task": "Implement crash recovery",
+      "expectedPreference": "premium",
+      "complexity": "HIGH",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-premium",
+      "rationale": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+      "evaluationMs": 0.07529999999999859
+    },
+    {
+      "task": "Verify scheduler invariants",
+      "expectedPreference": "premium",
+      "complexity": "HIGH",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-premium",
+      "rationale": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+      "evaluationMs": 0.0259999999999998
+    },
+    {
+      "task": "Enforce security boundary",
+      "expectedPreference": "premium",
+      "complexity": "HIGH",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-premium",
+      "rationale": "Automatic — authorized by saved settings; Security or permission isolation affects failure consequences",
+      "evaluationMs": 0.08000000000000185
+    },
+    {
+      "task": "Write tests",
+      "expectedPreference": "premium",
+      "complexity": "HIGH",
+      "catalogModel": "fixture-standard",
+      "smartModel": "fixture-premium",
+      "rationale": "Automatic — authorized by saved settings; Concurrency interacts with durable state or execution invariants; Recovery must preserve durable correctness invariants",
+      "evaluationMs": 0.01910000000000167
+    }
+  ],
+  "unnecessaryPremiumAssignments": 0,
+  "missedDifficultAssignments": 0,
+  "providerExecution": false,
+  "monetarySavingsMeasured": false
+}

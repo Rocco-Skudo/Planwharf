@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HarborQueue dashboard</title>
+  <style>
+    :root { color-scheme: light; font-family: system-ui, sans-serif; line-height: 1.5; }
+    body { margin: 0; background: #f4f7f8; color: #18323a; }
+    main { max-width: 64rem; margin: 0 auto; padding: 2rem 1rem 4rem; }
+    header { display: flex; align-items: start; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+    h1, h2 { margin-top: 0; }
+    section { background: #fff; border: 1px solid #d5e0e3; border-radius: .5rem; padding: 1rem; margin-top: 1.5rem; }
+    button { background: #126782; border: 0; border-radius: .35rem; color: white; cursor: pointer; font: inherit; padding: .6rem 1rem; }
+    button:focus-visible { outline: 3px solid #f2a900; outline-offset: 2px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #e1e9eb; padding: .65rem .5rem; text-align: left; vertical-align: top; }
+    th { color: #46616a; font-size: .9rem; }
+    .message { margin: .75rem 0 0; min-height: 1.5em; }
+    .error { color: #a32828; font-weight: 600; }
+    .muted { color: #61767d; }
+    code { background: #edf2f3; border-radius: .2rem; padding: .1rem .25rem; }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <div>
+        <h1>HarborQueue</h1>
+        <p class="muted">A lightweight view of queued jobs and their recent history.</p>
+      </div>
+      <button id="refresh" type="button">Refresh</button>
+    </header>
+
+    <p id="status" class="message" role="status" aria-live="polite">Not loaded yet.</p>
+
+    <section aria-labelledby="jobs-heading">
+      <h2 id="jobs-heading">Jobs</h2>
+      <div id="jobs" aria-live="polite"><p class="muted">Refresh to load jobs.</p></div>
+    </section>
+
+    <section aria-labelledby="history-heading">
+      <h2 id="history-heading">History</h2>
+      <div id="history" aria-live="polite"><p class="muted">Refresh to load history.</p></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const refreshButton = document.querySelector('#refresh');
+      const status = document.querySelector('#status');
+      const jobs = document.querySelector('#jobs');
+      const history = document.querySelector('#history');
+
+      const value = (item, keys, fallback = '—') => {
+        for (const key of keys) {
+          if (item && item[key] !== undefined && item[key] !== null) return String(item[key]);
+        }
+        return fallback;
+      };
+
+      const list = (container, items, columns, emptyText) => {
+        if (!Array.isArray(items) || items.length === 0) {
+          container.innerHTML = `<p class="muted">${emptyText}</p>`;
+          return;
+        }
+        const table = document.createElement('table');
+        const head = document.createElement('thead');
+        head.innerHTML = `<tr>${columns.map(column => `<th scope="col">${column.label}</th>`).join('')}</tr>`;
+        table.append(head);
+        const body = document.createElement('tbody');
+        for (const item of items) {
+          const row = document.createElement('tr');
+          for (const column of columns) {
+            const cell = document.createElement('td');
+            cell.textContent = column.get(item);
+            row.append(cell);
+          }
+          body.append(row);
+        }
+        table.append(body);
+        container.replaceChildren(table);
+      };
+
+      const render = (state) => {
+        const source = state && typeof state === 'object' ? state : {};
+        const jobItems = Array.isArray(source) ? source : (source.jobs || source.queue || []);
+        const historyItems = Array.isArray(source) ? [] : (source.history || source.events || []);
+        list(jobs, jobItems, [
+          { label: 'Job ID', get: item => value(item, ['id', 'jobId', 'job_id']) },
+          { label: 'Status', get: item => value(item, ['status', 'state']) }
+        ], 'No jobs found.');
+        list(history, historyItems, [
+          { label: 'Job ID', get: item => value(item, ['jobId', 'job_id', 'id']) },
+          { label: 'Status / event', get: item => value(item, ['status', 'event', 'type']) },
+          { label: 'Time', get: item => value(item, ['timestamp', 'time', 'createdAt']) }
+        ], 'No history found.');
+      };
+
+      const loadState = async () => {
+        refreshButton.disabled = true;
+        status.className = 'message';
+        status.textContent = 'Loading…';
+        try {
+          const response = await fetch('/api/state');
+          if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`.trim());
+          render(await response.json());
+          status.textContent = `Updated at ${new Date().toLocaleTimeString()}.`;
+        } catch (error) {
+          status.className = 'message error';
+          status.textContent = `Failed to load HarborQueue state: ${error.message}`;
+        } finally {
+          refreshButton.disabled = false;
+        }
+      };
+
+      refreshButton.addEventListener('click', loadState);
+    })();
+  </script>
+</body>
+</html>

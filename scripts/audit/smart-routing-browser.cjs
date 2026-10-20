@@ -10,10 +10,23 @@ const record = name => { checks.push(name); console.log('PASS ' + name); };
   const page = await browser.newPage({ viewport: { width: 1440, height: 1100 } });
   page.on('pageerror', e => errors.push(e.message));
   await page.goto(url); await page.waitForFunction(() => document.body.dataset.orchReady === '1');
+  if (process.argv[3] === '--concurrency') {
+    const projects = JSON.parse(fs.readFileSync(path.join(out, 'routing-concurrent-projects.json')));
+    const s = await (await page.request.get(url + '/api/orchestrator?readOnly=1')).json();
+    for (const p of projects) {
+      assert.ok(s.projects.find(r => r.id === p.id).dispatch.some(d => d.alive && d.cli === 'gpt-5.6-luna'));
+      await page.locator('#project-select').selectOption(p.id);
+      await page.waitForFunction(id => { const ship = document.querySelector('#harbor-background'); return ship.dataset.project === id && ship.dataset.state === 'running'; }, p.id);
+      record('Actual running Ship state: ' + p.id);
+    }
+    await page.locator('#ship-view-button').click();
+    await page.screenshot({ path: path.join(out, 'routing-concurrency.png') }); assert.deepEqual(errors, []);
+    fs.writeFileSync(path.join(out, 'routing-concurrency-browser.json'), JSON.stringify({ checks, errors }, null, 2)); return;
+  }
   await page.locator('#project-select').selectOption(project.id);
-  await page.getByRole('button', { name: 'Workspace', exact: true }).click();
+  await page.locator('#workspace-settings-button').click();
+  await page.getByRole('button', { name: 'Worker routing and model usage', exact: true }).click();
   await page.locator('#dashboard-orch-project').selectOption(project.id);
-  await page.getByRole('button', { name: 'Models & usage', exact: true }).click();
   const form = page.locator('form[data-worker-routing]'); await form.waitFor();
   assert.equal(await form.locator('[name=mode]').inputValue(), 'smart'); record('Saved Smart Routing visible in actual UI');
   await form.locator('[name=mode]').selectOption('smart');
@@ -30,6 +43,7 @@ const record = name => { checks.push(name); console.log('PASS ' + name); };
   await page.locator('#dashboard-orch-project').selectOption(project.id);
   await page.getByRole('button', { name: 'Models & usage', exact: true }).click();
   await page.waitForFunction(() => document.querySelector('form[data-worker-routing] [name=mode]')?.value === 'smart'); record('Browser reload retains routing settings');
+  await page.locator('form[data-worker-routing]').screenshot({ path: path.join(out, 'routing-settings.png') });
   await page.getByRole('button', { name: 'Workers', exact: true }).click();
   await page.locator('.workspace-worker-filters').evaluate(e => { e.open = true; });
   await page.locator('#dashboard-worker-session-filter').selectOption('all');

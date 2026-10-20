@@ -1158,6 +1158,7 @@ function createOrchestrator(options) {
     resolveWorker: (worker, sub) => sub?.routing || sub?.exactModel || sub?.type === 'RESEARCH' || sub?.goldModel && assignmentRole(sub) === 'worker' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
     workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !usagePolicy(worker, plansLive).blocked && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
     routePart, assignmentBlocker,
+    refreshAssignment: (sub, job, facts, previous) => sub.routing?.mode === 'smart' && sub.routing.tier === 'premium' && !sub.exactModel && !assignmentBlocker(sub, { id: sub.megaTaskId }) && store.workerRouting.fallback === 'standard' && store.workerRouting.maxPremiumConcurrent !== null && (store.execution?.subTasks || []).filter(s => s.status === 'RUNNING' && s.routing?.tier === 'premium').length >= store.workerRouting.maxPremiumConcurrent ? routePart({ ...sub, assignedModelId: undefined, modelId: null }, job, facts, previous) : null,
     rerouteFailure: (sub, job, facts, previous, result) => store.workerRouting.mode === 'smart' && sub.routing?.mode === 'smart' && !sub.exactModel && result?.status === 'FAILED' && result.evidenceKind !== 'TECHNICAL' && result.tests?.some(t => t.status === 'FAILED') ? routePart({ ...sub, modelId: null, assignedModelId: undefined }, job, facts, previous) : null,
     now, persist, sessionId, leadId: () => leadModel()?.id || null });
 
@@ -1166,7 +1167,7 @@ function createOrchestrator(options) {
     if (store.workerRouting.mode !== 'smart' && !explicit && part.modelId) return part;
     const exactId = job.goldModel && assignmentRole(part) === 'worker' ? job.goldModel.id : explicit ? part.modelId : null;
     const decision = Routing.choose({ models: roster(), sub: { ...part, title: part.title || part.slice, type: part.type || (job.kind === 'audit' ? 'AUDIT' : 'IMPLEMENTATION'), goldModel: job.goldModel }, job, facts,
-      config: store.workerRouting, plans: plansLive, results: store.execution?.results || [], exactId, premiumAssigned: previous.filter(p => p.routing?.tier === 'premium').length });
+      config: store.workerRouting, plans: plansLive, results: store.execution?.results || [], exactId, premiumRunning: (store.execution?.subTasks || []).filter(s => s.status === 'RUNNING' && s.routing?.tier === 'premium').length, premiumAssigned: previous.filter(p => p.routing?.tier === 'premium').length });
     return { ...part, modelId: decision.model?.id || exactId || 'unassigned', routing: decision.receipt, exactModel: explicit };
   }
   function assignmentBlocker(sub, mega, launching = false) {
@@ -1181,7 +1182,7 @@ function createOrchestrator(options) {
       const assigned = all.filter(s => s.megaTaskId === mega.id && s.id !== sub.id && s.routing?.tier === 'premium' && s.attemptIds?.length).length;
       if (store.workerRouting.maxPremiumPerMegaTask !== null && !sub.attemptIds.length && assigned >= store.workerRouting.maxPremiumPerMegaTask) return 'Maximum premium assignments per MegaTask reached.';
       const running = all.filter(s => s.status === 'RUNNING' && s.routing?.tier === 'premium').length;
-      if (store.workerRouting.maxPremiumConcurrent === 0) return 'Premium Worker concurrency is set to zero.';
+      if (launching && store.workerRouting.maxPremiumConcurrent === 0) return 'Premium Worker concurrency is set to zero.';
       if (launching && store.workerRouting.maxPremiumConcurrent !== null && running >= store.workerRouting.maxPremiumConcurrent) return { waiting: true, reason: 'Waiting for the configured simultaneous Premium Worker limit.' };
     }
     return null;
@@ -1728,7 +1729,7 @@ function createOrchestrator(options) {
       if (opts.phase2) {
         Object.assign(record, { executionVersion: 2, job: { id: record.id, title: record.title, detail: record.detail, revision_id: project.revisions.at(-1).id, kind: 'research', detached: true, ...(goldModel ? { goldModel } : {}) },
           status: 'needs_approval', workerLabel: researchModel(action.modelId).label, provider: researchModel(action.modelId).provider, cli: researchModel(action.modelId).cli, sessionId, startedAt: null });
-        const mega = bridge.propose(project, record.job, [{ modelId: action.modelId, slice: action.title, detail: action.detail, type: 'RESEARCH', dependsOn: [] }]);
+        const mega = bridge.propose(project, record.job, [{ modelId: action.modelId, exactModel: true, slice: action.title, detail: action.detail, type: 'RESEARCH', dependsOn: [] }]);
         record.megaTaskId = mega.id; bridge.paint(mega); persist();
         return { ok: true, proposal: true, research: clone(record), snapshot: snapshot(plan) };
       }
