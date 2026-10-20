@@ -465,7 +465,7 @@
       const plan = plans.find(row => row.id === item.plan);
       const exhausted = Boolean(plan && plan.exhausted);
       const role = isLead ? 'Lead' : (exhausted ? 'Exhausted' : (item.enabled && (item.kind === 'premium' || item.kind === 'default') ? 'Eligible' : 'Worker'));
-      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')} ${PlanwharfQuota.html(plan)}</td><td class="role">${escape(role)}</td><td>${escape(item.available === false ? 'Unavailable' : exhausted ? 'Exhausted' : item.enabled ? 'Available' : 'No roles assigned')}</td></tr>`;
+      return `<tr class="${item.enabled && !exhausted ? '' : 'off'}"><td><strong>${escape(item.label)}</strong></td><td>${escape(item.plan || '—')} ${PlanwharfQuota.html(plan)}</td><td class="role">${escape(role)}</td><td>${escape(item.available === false ? 'Unavailable' : exhausted ? 'Exhausted' : item.enabled ? item.inferenceStatus === 'verified' ? 'Inference verified' : 'Configured; inference unverified' : 'No roles assigned')}</td></tr>`;
     }).join('')}</tbody></table>` : '<p class="muted">No models match.</p>';
     const open = el.open;
     el.innerHTML = `<summary>Workers and plans <span class="badge">${onCount} on</span></summary>

@@ -66,12 +66,19 @@ test('unrecognized Antigravity model is classified precisely and never replaced 
   const models = [{ id: 'lead', provider: 'antigravity', cli: 'gemini-3.1-pro-high', enabled: true, available: true, kind: 'default' }, { id: 'other', provider: 'codex', cli: 'gpt-6-luna', enabled: true, available: true, kind: 'default' }];
   const diagnostic = diagnoseProvider(models[0], 'invalid model selection (--model "gemini-3.1-pro-high" --effort ""): model gemini-3.1-pro-high is not recognized as a known model or custom model in settings');
   assert.equal(diagnostic.code, 'PROVIDER_MODEL_UNAVAILABLE');
-  const f = await fixture({ models, askModel: () => ({ answer: diagnostic.message, failure: 'provider', diagnostic }) });
+  const f = await fixture({ models, discoverModels: async provider => ({ok:true,ids:models.filter(model=>model.provider===provider.id).map(model=>model.cli)}), askModel: () => ({ answer: diagnostic.message, failure: 'provider', diagnostic }) });
   try {
     await f.request('/api/orchestrator/lead', { id: 'lead' });
     const result = await f.request('/api/orchestrator/ask', { projectId: 'isolated', question: 'Grill me' });
     assert.equal(result.snapshot.models.find(model => model.id === 'lead').available, false); assert.equal(result.snapshot.orchestratorId, null); assert.equal(result.snapshot.selectedOrchestratorId, 'lead');
     assert.match(result.answer, /PROVIDER_MODEL_UNAVAILABLE/);
+    const refreshed = await f.request('/api/models/refresh', {});
+    assert.equal(refreshed.models.find(model=>model.id==='lead').available,false);
+    assert.equal(refreshed.models.find(model=>model.id==='lead').inferenceStatus,'rejected');
+    const retry = await f.request('/api/models/inference-retry',{id:'lead'});
+    assert.equal(retry.models.find(model=>model.id==='lead').available,true);
+    assert.equal(retry.models.find(model=>model.id==='lead').inferenceStatus,'unverified');
+    assert.equal(f.launches.length,0,'Allow retry never launches work or changes the exact model');
   } finally { await f.close(); }
 });
 test('Antigravity discovery only accepts exact listed IDs and keeps auth failures unread', async () => {

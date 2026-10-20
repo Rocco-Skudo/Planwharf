@@ -8,7 +8,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { launchSpec, providerEnvironment } = require('./providers.cjs');
 const { resolveCliModel } = require('./model-routing.cjs');
 const { diagnoseProvider } = require('./provider-diagnostics.cjs');
-const { readJSON, validateResult, resultContract, reportExists } = require('./worker-result.cjs');
+const { readJSON, validateResult, resultContract, resultSchema, reportExists } = require('./worker-result.cjs');
 
 function which(cmd) {
   const pathEnv = process.env.PATH || '';
@@ -80,8 +80,9 @@ function parseArgs(argv) {
 function basePromptFor(opts) {
   if (opts.kind === 'audit') return [
     'You are the Planwharf audit worker. Inspect only the requested project and assess the current request.',
-    'Do not implement or modify project source, user data, notebooks or branches. Do not push, merge or dispatch other workers. Save findings as an audit report beside the assigned result file.',
-    opts.result ? `Evidence directory: ${path.dirname(opts.result)}` : '',
+    'Do not implement or modify project source, user data, notebooks or branches. Do not push, merge or dispatch other workers.',
+    opts.resultTransport === 'codex-final-response' ? 'Record the audit findings, observed tests and blockers in your final structured result; the runner saves this report outside the project.' : 'Save findings as an audit report beside the assigned result file.',
+    opts.result && opts.resultTransport !== 'codex-final-response' ? `Evidence directory: ${path.dirname(opts.result)}` : '',
     opts.title ? `Audit: ${opts.title}` : '', opts.detail || ''
   ].filter(Boolean).join('\n\n');
   if (opts.kind === 'research') return [
@@ -448,7 +449,7 @@ function askOrchestrator(info) {
       if (errorOrCode || out.failure) out.failure ||= 'process';
       if (!out.answer && !out.failure) out.failure = 'PROVIDER_PROTOCOL_CHANGED';
       if (out.failure) {
-        out.diagnostic = diagnoseProvider(info.model, stderr || out.error || out.failure, out.processExit);
+        out.diagnostic = diagnoseProvider(info.model, { error: out.error, stderr: stderr || out.failure }, out.processExit);
         out.answer = out.diagnostic.message + (out.answer ? '\n\n' + out.answer : '');
       }
       resolve(out);
@@ -500,8 +501,17 @@ function run(argv = process.argv) {
   let receipt;
   try {
     Object.assign(opts, requireWorkerWorkspace(opts));
+    const nativeCodexResult = opts.structuredResultPath && (opts.model.adapter || opts.model.provider) === 'codex';
+    const resultTransport = {};
+    if (nativeCodexResult) {
+      opts.resultTransport = 'codex-final-response';
+      const prefix = opts.structuredResultPath + '.' + require('node:crypto').randomUUID();
+      resultTransport.codexResultOutputPath = prefix + '.codex-final.json';
+      resultTransport.codexResultSchemaPath = prefix + '.schema.json';
+      fs.writeFileSync(resultTransport.codexResultSchemaPath, JSON.stringify(resultSchema(opts)), { flag: 'wx', mode: 0o600 });
+    }
     const prompt = promptFor(opts);
-    spec = launchSpec({ ...opts.model, apiResultOutputPath: opts.structuredResultPath,
+    spec = launchSpec({ ...opts.model, ...resultTransport, apiResultOutputPath: opts.structuredResultPath,
       apiResultIdentity: { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId } }, opts.folder, prompt, false, opts.kind === 'research');
     const cwd = linkedWorkspace(spec.cwd);
     if (!cwd || cwd !== opts.folder) throw new Error('Provider launch cwd escapes the linked project folder.');
@@ -556,12 +566,13 @@ function run(argv = process.argv) {
     if (usage) fs.writeFileSync(opts.result + '.usage.json', JSON.stringify(usage) + '\n');
     const exitCode = code == null || (code === 0 && reportedFailure) ? 1 : code;
     if (opts.structuredResultPath) {
-      const result = readJSON(opts.structuredResultPath);
+      const result = readJSON(spec.resultOutputPath || opts.structuredResultPath);
       const identity = { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId };
       const valid = validateResult(result, identity) && (opts.kind !== 'research' || result.status !== 'COMPLETE' || reportExists(result, opts.folder));
-      fs.writeFileSync(opts.exitPath, JSON.stringify({ attemptId: opts.attempt, exitCode, signal, provider: spec.provider, model: spec.model, createdAt: new Date().toISOString() }) + '\n');
+      if (spec.resultOutputPath && valid) fs.writeFileSync(opts.structuredResultPath, JSON.stringify(result, null, 2) + '\n', { mode: 0o600 });
+      fs.writeFileSync(opts.exitPath, JSON.stringify({ attemptId: opts.attempt, exitCode, resultVerified: valid, signal, provider: spec.provider, model: spec.model, createdAt: new Date().toISOString() }) + '\n');
       const status = valid && (result.status !== 'COMPLETE' || exitCode === 0) ? result.status : 'FAILED';
-      patchStatus(opts.result, status, { worker: opts.worker, attempt: opts.attempt, exitCode, reason: status !== 'FAILED' ? 'Structured result and provider exit recorded.' : saveDiagnostic(providerStderr || (valid ? 'Provider execution failed.' : 'Missing or invalid structured worker result.'), exitCode) });
+      patchStatus(opts.result, status, { worker: opts.worker, attempt: opts.attempt, exitCode, reason: valid && exitCode === 0 ? 'Structured result and provider exit recorded.' : saveDiagnostic({ error: !valid && exitCode === 0 ? 'Missing or invalid structured worker result.' : null, stderr: providerStderr || 'Provider execution failed.' }, exitCode) });
       process.exitCode = status === 'COMPLETE' ? 0 : 1;
       return;
     }

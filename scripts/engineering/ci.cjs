@@ -28,6 +28,6 @@ try {
   const patchPaths = ['--', '.', ':(exclude).review/**'];
   run('working-patch', 'git', ['diff', '--check', ...patchPaths]);
   if (process.env.PLANWHARF_DIFF_BASE) run('pr-patch', 'git', ['diff', '--check', process.env.PLANWHARF_DIFF_BASE, 'HEAD', ...patchPaths]);
-  for (const file of ['engine/claim.test.cjs', 'engine/attempts.test.cjs', ...added.filter(x => x.endsWith('.test.cjs'))]) run(file, process.execPath, [file]);
+  for (const file of ['engine/claim.test.cjs', 'engine/attempts.test.cjs', 'engine/codex-result.test.cjs', ...added.filter(x => x.endsWith('.test.cjs'))]) run(file, process.execPath, [file]);
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 process.exitCode = failures ? 1 : 0;

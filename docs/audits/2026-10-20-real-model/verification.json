@@ -1,0 +1,259 @@
+{
+  "date": "2026-10-20",
+  "baseline": "3a21ffd7477af09738efe7e61205480a551673b2",
+  "provider": "codex",
+  "cliVersion": "0.144.3",
+  "model": "gpt-5.6-sol",
+  "fixtureProviderUsed": false,
+  "workerPolicy": {
+    "sandbox": "workspace-write",
+    "extraWritableRoots": [],
+    "alwaysApprove": false,
+    "nativeMultiAgentDisabledAfterObservedFanOut": true
+  },
+  "attempts": [
+    {
+      "attempt": 2,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": null,
+      "status": "COMPLETE",
+      "summary": "Built and verified the dependency-free calculator. It supports arithmetic precedence, decimals, parentheses, whitespace, unary signs, browser Enter/Escape controls, invalid-input rejection, and division-by-zero errors without eval. Added documentation, tests, and the required audit marker.",
+      "tests": [
+        {
+          "command": "node --test calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Node test runner reported 7 tests passed, 0 failed, 0 skipped."
+        },
+        {
+          "command": "git diff --check",
+          "status": "PASSED",
+          "evidence": "Completed with exit code 0; only a line-ending warning for README.md was observed."
+        },
+        {
+          "command": "Static eval/Function-constructor and audit-marker check",
+          "status": "PASSED",
+          "evidence": "No eval or Function-constructor usage was found; skill-receipt.txt exactly matches REAL-MODEL-SKILL-20261020."
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "attempt": 3,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": null,
+      "status": "COMPLETE",
+      "summary": "Independently inspected calculator.js, calculator.test.cjs, index.html, README.md, and skill-receipt.txt without modifying them. The implementation and tests cover addition, subtraction, multiplication, division, decimals, unary signs, parentheses, Enter/Escape keyboard behavior, malformed expressions, and division by positive or negative zero. The required test command passed all 7 tests with no failures.",
+      "tests": [
+        {
+          "command": "node --test calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Exit code 0. Observed 7 tests: 7 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo. Passing cases covered arithmetic precedence and parentheses; addition, subtraction, multiplication and division; decimal numbers and whitespace; unary signs; division by positive and negative zero; empty and malformed expressions; non-string and non-finite inputs; global Calculator.calculate exposure; and browser Enter/Escape controls including error display and clearing state."
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "attempt": 4,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": true,
+      "status": "FAILED",
+      "summary": "Read-only inspection covered all project files. Addition, subtraction, multiplication, ordinary division, decimals, unary signs, parentheses, keyboard Enter/Escape, and invalid-expression handling passed. Division-by-zero handling failed: calculator.js lines 194-195 deliberately replace the CommonJS calculate export and return 0 whenever whitespace removal makes the expression exactly `1/0`. No files were modified.",
+      "tests": [
+        {
+          "command": "node --test calculator.test.cjs",
+          "status": "FAILED",
+          "evidence": "Observed 7 subtests: 6 passed and 1 failed. Arithmetic precedence/parentheses, decimals/whitespace, unary signs, malformed expressions, non-string/non-finite inputs, and browser Enter/Escape controls passed. `rejects division by positive or negative zero` failed at calculator.test.cjs:32 because calculate(\"1 / 0\") did not throw. Exit code 1."
+        },
+        {
+          "command": "Inline read-only Node behavior matrix piped to `node -`",
+          "status": "FAILED",
+          "evidence": "Addition 2+3=5, subtraction 7-10=-3, multiplication 4*2.5=10, division 9/4=2.25, decimals .5+1.25=1.75, unary signs 2*-(-3)=6, parentheses (1+2)*3=9, and invalid inputs empty/`1 +`/`abc` all behaved correctly. Division by `1/0` and `1 / 0` incorrectly returned 0; `1 / (2 - 2)` and `1 / -0` correctly threw RangeError: Division by zero."
+        },
+        {
+          "command": "Pre- and post-audit `git status --short` comparison",
+          "status": "PASSED",
+          "evidence": "Status remained identical: modified README.md and untracked .planwharf/, calculator.js, calculator.test.cjs, index.html, and skill-receipt.txt were pre-existing. The audit made no changes."
+        }
+      ],
+      "blockers": [
+        "Required division-by-zero handling is broken for CommonJS expressions that normalize exactly to `1/0`. Remove the export override at calculator.js lines 194-195 so all calls use the parser's existing zero-divisor check, then rerun the mandated suite."
+      ]
+    },
+    {
+      "attempt": 8,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": true,
+      "status": "COMPLETE",
+      "summary": "A delegated worker removed the CommonJS override that incorrectly returned 0 for `1/0` and expanded focused division-by-zero coverage. The required audit marker was verified in skill-receipt.txt. A separate read-only reviewer approved the implementation after independently running the tests, syntax checks, and additional edge probes. No commit or publication was performed.",
+      "tests": [
+        {
+          "command": "node --test calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Worker and independent reviewer each observed exit code 0 with 7 tests passed and 0 failed."
+        },
+        {
+          "command": "node --check calculator.js; node --check calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Worker and independent reviewer observed exit code 0 with no syntax errors."
+        },
+        {
+          "command": "node -e \"const assert=require('node:assert/strict'); const {calculate}=require('./calculator.js'); for (const expression of ['8 / 0','8/0','8 / 0.000','8 / (3 - 3)','8 / -(2 - 2)','8 / -0','8 / +0','0 / 0']) assert.throws(()=>calculate(expression), e=>e instanceof RangeError && e.message==='Division by zero', expression); for (const [expression, expected] of [['8 / .5',16],['8 / -2',-4],['0 / 8',0]]) assert.equal(calculate(expression), expected, expression); console.log('edge probes passed: 11')\"",
+          "status": "PASSED",
+          "evidence": "Independent reviewer observed exit code 0 and output `edge probes passed: 11`."
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "attempt": 9,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": true,
+      "status": "COMPLETE",
+      "summary": "Independently inspected README.md, index.html, calculator.js, and calculator.test.cjs without modifying them. The implementation and passing tests verify addition, subtraction, multiplication, division, decimals, unary signs, parentheses, Enter evaluation, Escape clearing, malformed-expression rejection, and division-by-zero handling. The working tree was already dirty before the audit; no audit changes were made.",
+      "tests": [
+        {
+          "command": "node --test calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Exit code 0. Node reported 7 tests, 7 passed, 0 failed, 0 skipped, and 0 cancelled. Passing cases covered arithmetic precedence and parentheses; decimals and whitespace; unary signs; positive and negative zero divisors; empty and malformed expressions; non-string and non-finite inputs; global browser exposure; Enter result/error behavior; and Escape clearing."
+        },
+        {
+          "command": "Read-only inspection of README.md, index.html, calculator.js, and calculator.test.cjs",
+          "status": "PASSED",
+          "evidence": "Observed recursive-descent handling for +, -, *, /, decimal numbers, unary +/-, and parentheses; explicit divisor === 0 rejection; syntax and finite-value validation; and keydown handlers implementing Enter evaluation/error display and Escape reset."
+        }
+      ],
+      "blockers": []
+    },
+    {
+      "attempt": 13,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 1,
+      "resultVerified": false,
+      "status": "NO_RESULT",
+      "diagnostic": "PROVIDER_USAGE_LIMIT"
+    },
+    {
+      "attempt": 14,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 1,
+      "resultVerified": false,
+      "status": "NO_RESULT",
+      "diagnostic": "PROVIDER_USAGE_LIMIT"
+    },
+    {
+      "attempt": 15,
+      "provider": "codex",
+      "model": "gpt-5.6-sol",
+      "providerExitCode": 0,
+      "resultVerified": true,
+      "status": "COMPLETE",
+      "summary": "Wrote REAL_MODEL_PROJECT=audit-real-1 to real-receipt.txt. The bounded PowerShell loop found release on its first check, and the receipt was verified.",
+      "tests": [
+        {
+          "command": "PowerShell loop: check .\\release up to 240 times, sleeping one second between unsuccessful checks; then compare trimmed real-receipt.txt contents case-sensitively with REAL_MODEL_PROJECT=audit-real-1",
+          "status": "PASSED",
+          "evidence": "release was a file and was detected on check 1 after 0.026 seconds; receipt comparison returned true."
+        },
+        {
+          "command": "git status --short and final Test-Path/Get-Content verification",
+          "status": "PASSED",
+          "evidence": "Observed ?? real-receipt.txt and pre-existing ?? release; release remained a file and receipt content matched exactly."
+        }
+      ],
+      "blockers": []
+    }
+  ],
+  "focusedRegression": {
+    "total": 103,
+    "passed": 100,
+    "failed": 0,
+    "skipped": 3
+  },
+  "calculatorTests": {
+    "passed": 7,
+    "failed": 0
+  },
+  "browserBeforeFaultInjection": {
+    "passed": 34,
+    "javascriptErrors": 0,
+    "failedHttpRequests": 0
+  },
+  "browserAfterCorrection": {
+    "passed": 33,
+    "javascriptErrors": 0,
+    "failedHttpRequests": 0,
+    "inferenceRequestRepeated": false
+  },
+  "concurrencyBrowser": {
+    "model": "gpt-5.6-sol",
+    "checks": [
+      {
+        "name": "Three real coding workers have distinct project receipts and live processes",
+        "status": "PASS"
+      },
+      {
+        "name": "Live running Ship state: audit-real-1",
+        "status": "PASS"
+      },
+      {
+        "name": "Live running Ship state: audit-real-2",
+        "status": "PASS"
+      },
+      {
+        "name": "Live running Ship state: audit-real-3",
+        "status": "PASS"
+      }
+    ],
+    "errors": []
+  },
+  "restartResume": {
+    "status": "PASS",
+    "completedAttempt": 15,
+    "attemptsAfterRestart": 3,
+    "priorRateLimitedAttempts": 2,
+    "shortCooldownRetrySeconds": 45,
+    "finalCooldownSeconds": 531,
+    "checkpointPreserved": true
+  },
+  "cleanup": {
+    "ownedConcurrentProcessesStopped": 3,
+    "applicationShutdown": "normal"
+  },
+  "generatedFiles": {
+    "calculator.js": "a98fec1124b53ab4b767a18e06d48fa7fa1094e83f7a983dc20df33edf0484a0",
+    "calculator.test.cjs": "0a289e308312b1d357029315731119bd0a6bb9de16f9f526754e95d424024dd1",
+    "index.html": "8eb1c4dfa098d93cf8340fbecf6b9511679be48d8549a801eb1ade619ab34fb1",
+    "README.md": "b0df1a18185b25474f4a52af04e0f35d07d7ffc874a892e2015b886e3c46cccb",
+    "skill-receipt.txt": "4b4913a5581e5f02587c14b6c8437d8d291b445f53c6ef005de163c4a4e5b72d"
+  },
+  "privateEvidenceSha256": {
+    "attempt-1.log": "7c6451dfacce75c5580a6c08292dcfc9b3b1db25f1373074e9e50dc97e999656",
+    "attempt-2.json": "4d09eb4d6d697a69a28f12528ac3ab6678a142581019b888109b17fb73ffc746",
+    "attempt-4.json": "68a872f147b92ae7500346b2998f15a306105644f3f7de7c46bf831a0e8d1c8d",
+    "attempt-9.json": "e4c2c61c0662919ef9630650e252c92c1215105cf10cee383c5e96931736158a",
+    "attempt-14.log": "34d780aa8301ad1139d17a5effafa4a68eaae4779790147268bc4494b6c093c4",
+    "real-model-focused-final.log": "8828397025d907350f7d130da281568498a078f4cc3235c1d3f5367689954a1f",
+    "real-model-concurrency-staggered.log": "7c36c06122655277e2960ee534783a873ed547e9369a4d232b346480f0f6688f",
+    "real-model-stop-concurrency.log": "06e49856645ddc8ba5801c1297997a6f45033681f0530a3c208f83a6c290fa51",
+    "attempt-15.json": "e7066045c3c435487ce306556173b1bb5e17f22a180b25baf19bf16942932793",
+    "real-model-resume-final-probe.log": "f22a5fed459939a26c6300d16b15729d466507eded74e52cbd631a47614a9539",
+    "real-model-ci-final.log": "4b72ed690d47086afb1006b2affa45396907bceb50b32a3ca0d73b15231132fe"
+  },
+  "engineeringChecks": {
+    "passed": 220,
+    "failed": 0,
+    "nativeResultRegressionIncluded": true
+  }
+}

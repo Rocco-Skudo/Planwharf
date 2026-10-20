@@ -111,15 +111,31 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
     stdin = JSON.stringify({ event: 'user', message: { content: prompt } }) + '\n';
   } else {
     args = ['exec', '--skip-git-repo-check', '-C', folder, '-m', cli];
+    // Planwharf owns dispatch, approvals and PID tracking for each worker.
+    if (!lead) args.push('-c', 'features.multi_agent=false');
     if (research) args.push('--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=true', '-c', 'sandbox_workspace_write.writable_roots=[]');
     else if (alwaysApprove) args.push('--dangerously-bypass-approvals-and-sandbox');
     else args.push('--sandbox', 'workspace-write', '-c', 'approval_policy="never"', '-c', 'sandbox_workspace_write.network_access=false', '-c', 'sandbox_workspace_write.writable_roots=[]');
     if (lead) args.push('--json');
+    if (!lead && model.codexResultOutputPath && model.codexResultSchemaPath) args.push('--output-schema', model.codexResultSchemaPath, '--output-last-message', model.codexResultOutputPath);
     // Keep conversation text off the OS command line (Windows has a 32K limit).
     args.push('-');
     stdin = prompt;
   }
-  return { command, args, cwd: folder, provider, adapter, model: cli, ...(stdin !== undefined ? { stdin } : {}), ...(promptFile ? { promptFile } : {}) };
+  return { command, args, cwd: folder, provider, adapter, model: cli, ...(stdin !== undefined ? { stdin } : {}), ...(promptFile ? { promptFile } : {}), ...(adapter === 'codex' && !lead && model.codexResultOutputPath ? { resultOutputPath: model.codexResultOutputPath } : {}) };
 }
 
-module.exports = { executable, launchSpec, providerEnvironment };
+const versions = new Map();
+function cliVersion(provider) {
+  const command = executable(provider);
+  if (!command) return null;
+  try {
+    const key = command + ':' + fs.statSync(command).mtimeMs;
+    if (!versions.has(key)) {
+      const output = require('node:child_process').execFileSync(command, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
+      versions.set(key, output.trim().match(/^(?:codex-cli\s+)?(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/)?.[1] || null);
+    }
+    return versions.get(key);
+  } catch { return null; }
+}
+module.exports = { executable, launchSpec, providerEnvironment, cliVersion };

@@ -43,7 +43,10 @@ async function writePlan(file, plan) {
     await handle.sync();
     await handle.close();
     handle = null;
-    await fs.rename(temporary, file);
+    await require('./engine/atomic-replace.cjs').atomicReplace(temporary, file);
+  } catch (error) {
+    if (process.platform === 'win32' && ['EPERM', 'EACCES', 'EBUSY'].includes(error.code)) throw new RequestError(503, 'The notebook is locked or not writable. Close the program holding it or check folder permissions, then retry. No revision was added.');
+    throw error;
   } finally {
     if (handle) await handle.close();
     await fs.rm(temporary, { force: true });
@@ -287,6 +290,8 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
     models,
     providers,
     enforceSessionBoundary: true,
+    recordInference: providerModels.recordInference,
+    inferenceScope: providerModels.inferenceScope,
     mattSkillsEnabled: projectId => catalogEnabled(projectId) || skillsEnabled,
     projectSkillState: projectId => {
       if (!projectSkills) return { available: false, error: 'Project Skills registry unavailable.' };
@@ -730,6 +735,11 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         return json(200, { ...snapshot, skills: skillsSnapshot(), providerModels: providerModels.snapshot() });
       }
       if (request.method === 'GET' && pathname === '/api/models/status') return json(200, providerModels.snapshot());
+      if (request.method === 'POST' && pathname === '/api/models/inference-retry') {
+        const input = await body(request);
+        if (!input || typeof input.id !== 'string' || Object.keys(input).some(key => key !== 'id') || !await providerModels.allowInferenceRetry(input.id)) throw new RequestError(400, 'Choose a rejected exact model in the current account catalog.');
+        return json(200, await orchestra.snapshot());
+      }
       if (request.method === 'POST' && pathname === '/api/catalog/settings') {
         const input = await body(request);
         if (!input || typeof input.providerId !== 'string' || Object.keys(input).some(key => !['providerId', 'enabled', 'showAll', 'allModelsEnabled'].includes(key)) || ['enabled', 'showAll', 'allModelsEnabled'].some(key => input[key] !== undefined && typeof input[key] !== 'boolean')) throw new RequestError(400, 'Invalid provider catalog settings.');

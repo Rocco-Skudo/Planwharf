@@ -17,3 +17,17 @@
 .soundtrack-player :focus-visible, .soundtrack-settings :focus-visible { outline: 2px solid var(--accent, #3b82f6); outline-offset: 3px; }
 body.ship-view .soundtrack-player { left: .6rem; top: 4.5rem; bottom: auto; transform: none; max-width: min(720px, calc(100vw - 1.2rem)); background: var(--dialog-bg, #15212f); }
 @media (max-width: 650px) { .soundtrack-player { width: calc(100vw - 1.2rem); font-size: .7rem; padding: .35rem; } .soundtrack-player .soundtrack-current { flex-basis: 100%; max-width: 100%; } .soundtrack-player button { padding: .3rem; } .soundtrack-player .soundtrack-field { font-size: .7rem; } }
+
+/* The fixed player owns this space in every workspace, even when audio is off. */
+body:not(.ship-view) .frame { padding-bottom: var(--soundtrack-space, 100px); }
+@media (max-width: 900px) {
+  /* A scrolling single-column workspace keeps the player in document flow. */
+  body:not(.ship-view) .soundtrack-player { position: relative; left: auto; bottom: auto; transform: none; align-self: center; flex-shrink: 0; margin: .6rem; }
+  body:not(.ship-view) .frame { padding-bottom: 0; }
+}
+@media (min-width: 901px) {
+  body:not(.ship-view) #orchestrator-view .orch-chat,
+  body:not(.ship-view) #orchestrator-view .orch-board {
+    max-height: calc(100dvh - var(--app-header-height, 100px) - var(--soundtrack-space, 100px));
+  }
+}

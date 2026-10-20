@@ -11,11 +11,13 @@ const adapters = {
       let auth; try { auth = JSON.parse(fs.readFileSync(path.join(home, 'auth.json'), 'utf8')); } catch { return { ok: false, reason: 'Codex authentication unavailable.' }; }
       const token = auth.tokens?.access_token;
       if (!token) return { ok: false, reason: 'Codex authentication unavailable.' };
-      const response = await fetch('https://chatgpt.com/backend-api/codex/models?client_version=0.162.1', { headers: { Authorization: 'Bearer ' + token, 'ChatGPT-Account-Id': auth.tokens.account_id || '' }, signal: AbortSignal.timeout(10000) });
+      const cliVersion = require('./provider-runtime.cjs').cliVersion('codex');
+      if (!cliVersion) return { ok: false, reason: 'Installed Codex CLI version could not be verified. Check the executable before refreshing models.' };
+      const response = await fetch('https://chatgpt.com/backend-api/codex/models?client_version=' + encodeURIComponent(cliVersion), { headers: { Authorization: 'Bearer ' + token, 'ChatGPT-Account-Id': auth.tokens.account_id || '' }, signal: AbortSignal.timeout(10000) });
       if (!response.ok) return { ok: false, reason: 'Codex model catalog HTTP ' + response.status };
       const body = await response.json();
       if (!Array.isArray(body.models)) return { ok: false, reason: 'Codex returned an invalid model catalog.' };
-      return { ok: true, models: body.models.map(model => ({ cli: model.slug || model.id, label: model.display_name || model.slug || model.id, capabilities: { canUseTools: true, canCode: true, canOrchestrate: true, canResearch: true } })) };
+      return { ok: true, cliVersion, models: body.models.map(model => ({ cli: model.slug || model.id, label: model.display_name || model.slug || model.id, capabilities: { canUseTools: true, canCode: true, canOrchestrate: true, canResearch: true } })) };
     } },
   grok: { nativeModel: /^grok-/, sourceProtectedResearch: false,
     account: provider => require('./provider-accounts.cjs').grokAccount(provider),

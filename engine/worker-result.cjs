@@ -18,7 +18,7 @@ function validateResult(result, identity) {
 }
 function readValidatedResult(file, identity, exitFile) {
   const result = readJSON(file), exit = readJSON(exitFile);
-  if (!validateResult(result, identity) || !exit || exit.attemptId !== identity.attemptId || !Number.isInteger(exit.exitCode)) return null;
+  if (!validateResult(result, identity) || !exit || exit.resultVerified === false || exit.attemptId !== identity.attemptId || !Number.isInteger(exit.exitCode)) return null;
   if (identity.provider && exit.provider !== identity.provider || identity.cli && exit.model !== identity.cli) return null;
   if (result.status === 'COMPLETE' && exit.exitCode !== 0) return null;
   return { ...result, exitCode: exit.exitCode, evidencePath: file };
@@ -27,10 +27,25 @@ function resultContract(opts) {
   if (!opts.structuredResultPath) return '';
   const template = { resultId: opts.resultId, attemptId: opts.attempt, subTaskId: opts.subTaskId, megaTaskId: opts.megaTaskId,
     status: 'COMPLETE | FAILED | BLOCKED', summary: 'What actually happened', filesChanged: [], tests: [{ command: 'Exact command or check', status: 'PASSED | FAILED | NOT_RUN', evidence: 'Observed outcome; do not invent execution' }], blockers: [], nextAction: 'Remaining work or recommended next step', createdAt: 'ISO timestamp' };
-  return `Planwharf structured result contract:\nWrite one UTF-8 JSON object to ${opts.structuredResultPath}. If a write_result tool is provided, submit the JSON through that tool instead of writing the result with write_file. Use these exact identity fields:\n${JSON.stringify(template, null, 2)}\nUse one status from the listed choices. Record only observed work and tests. No tests means an empty array. Exit 0 alone is not completion. For research, include reportPath (the absolute report.md path), sources (URLs), and recommendedNextAction. Keep the text execution evidence separate.`;
+  const transport = opts.resultTransport === 'codex-final-response'
+    ? 'Return exactly one JSON object as your final response. Do not write the result file: the trusted CLI and Planwharf runner save your final response outside the project sandbox.'
+    : `Write one UTF-8 JSON object to ${opts.structuredResultPath}. If a write_result tool is provided, submit the JSON through that tool instead of writing the result with write_file.`;
+  return `Planwharf structured result contract:\n${transport} Use these exact identity fields:\n${JSON.stringify(template, null, 2)}\nUse one status from the listed choices. Record only observed work and tests. No tests means an empty array. Exit 0 alone is not completion. For research, include reportPath (the absolute report.md path), sources (URLs), and recommendedNextAction. Keep the text execution evidence separate.`;
+}
+function resultSchema(opts) {
+  const string = { type: 'string' }, strings = { type: 'array', items: string };
+  const properties = {
+    resultId: { ...string, const: opts.resultId }, attemptId: { ...string, const: opts.attempt },
+    subTaskId: { ...string, const: opts.subTaskId }, megaTaskId: { ...string, const: opts.megaTaskId },
+    status: { ...string, enum: statuses }, summary: string, filesChanged: strings,
+    tests: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['command', 'status', 'evidence'], properties: { command: string, status: { ...string, enum: ['PASSED', 'FAILED', 'NOT_RUN'] }, evidence: string } } },
+    blockers: strings, nextAction: string, createdAt: string
+  };
+  if (opts.kind === 'research') Object.assign(properties, { reportPath: string, sources: strings, recommendedNextAction: string });
+  return { type: 'object', additionalProperties: false, required: Object.keys(properties), properties };
 }
 function reportExists(result, folder) {
   if (!result.reportPath || path.resolve(result.reportPath) !== path.join(path.resolve(folder), 'report.md')) return false;
   try { const stat = fs.lstatSync(result.reportPath); return stat.isFile() && !stat.isSymbolicLink() && stat.size > 0; } catch { return false; }
 }
-module.exports = { readJSON, validateResult, readValidatedResult, resultContract, reportExists };
+module.exports = { readJSON, validateResult, readValidatedResult, resultContract, resultSchema, reportExists };

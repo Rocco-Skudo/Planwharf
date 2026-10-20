@@ -1,0 +1,122 @@
+{
+  "date": "2026-10-20",
+  "baseline": "d6c49d0952ded776a45b444e81788ce0ae435fbe",
+  "browser": "155.0.8059.80",
+  "browserChecks": [
+    {
+      "name": "three actual backend projects are running",
+      "status": "PASS"
+    },
+    {
+      "name": "audio disabled and silent on first load",
+      "status": "PASS"
+    },
+    {
+      "name": "disabled player leaves Send pointer reachable at desktop, 200 percent reflow and mobile",
+      "status": "PASS"
+    },
+    {
+      "name": "actual selected project drives Ship running pose",
+      "status": "PASS"
+    },
+    {
+      "name": "explicit enable does not autoplay; Play advances real media",
+      "status": "PASS"
+    },
+    {
+      "name": "enabled player leaves Send pointer reachable at desktop, 200 percent reflow and mobile",
+      "status": "PASS"
+    },
+    {
+      "name": "rapid switching among three actual projects preserves one player",
+      "status": "PASS"
+    },
+    {
+      "name": "second tab cannot start simultaneous playback",
+      "status": "PASS"
+    },
+    {
+      "name": "workspace navigation and Ship View retain actual playback",
+      "status": "PASS"
+    },
+    {
+      "name": "pause remains sticky; Stop resets playback",
+      "status": "PASS"
+    },
+    {
+      "name": "personal missing or corrupt media gives feedback",
+      "status": "PASS"
+    },
+    {
+      "name": "keyboard settings close and mobile reflow",
+      "status": "PASS"
+    },
+    {
+      "name": "all eight dialogs have computed accessible names and Escape restores focus",
+      "status": "PASS"
+    },
+    {
+      "name": "calculator graphical keyboard operations and errors",
+      "status": "PASS"
+    }
+  ],
+  "browserErrors": [],
+  "failedBrowserRequests": [],
+  "stateChecks": [
+    {
+      "name": "Actual idle",
+      "status": "PASS"
+    },
+    {
+      "name": "Actual completed",
+      "status": "PASS"
+    },
+    {
+      "name": "Actual checkpoint",
+      "status": "PASS"
+    },
+    {
+      "name": "Actual running",
+      "status": "PASS"
+    },
+    {
+      "name": "Running helm visibly animates in calm and storm",
+      "status": "PASS"
+    },
+    {
+      "name": "OS reduced motion honored",
+      "status": "PASS"
+    },
+    {
+      "name": "Animations can be disabled",
+      "status": "PASS"
+    },
+    {
+      "name": "Browser reload leaves backend worker running",
+      "status": "PASS"
+    }
+  ],
+  "provider": {
+    "cliVersion": "0.144.3",
+    "model": "gpt-6.1-sol",
+    "catalogListed": false,
+    "inferenceBefore": "unverified"
+  },
+  "focusedTests": {
+    "total": 102,
+    "passed": 99,
+    "failed": 0,
+    "skipped": 3
+  },
+  "workerMode": "Explicit deterministic CLI fixture; real production HTTP, browser and child processes, not commercial AI inference.",
+  "privateEvidenceHashes": {
+    "browser-audit.json": "8becdc0ab941d764d32bc2410b43b42c14e02c951a5cba13bd354e6ab270906c",
+    "state-audit.json": "df17f9268ef6de8af18689e7a3c09f3ce210ec08473c797fb3ae8c701a6dbc4d",
+    "fix-targeted-final.log": "cdcd710067e5afb3db86cd8a27380c63de324f57b3a42c41554243664991c4cd",
+    "fix-final-resume.log": "48afdc132201c91ad7cea2eecd4e7af7df5da42bba9a75215cc781e1138faeb4"
+  },
+  "engineeringChecks": {
+    "passed": 216,
+    "failed": 0
+  }
+}
