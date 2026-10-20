@@ -632,7 +632,7 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
           const roster = (await orchestra.snapshot()).models;
           for (const [index, sub] of input.subTasks.entries()) {
             if (!sub || Object.keys(sub).some(key => !['title', 'detail', 'assignedModelId', 'dependsOn', 'type'].includes(key)) || typeof sub.title !== 'string' || !sub.title.trim()
-              || typeof sub.detail !== 'string' || !roster.some(model => model.id === sub.assignedModelId && model.enabled && model.available !== false)
+              || typeof sub.detail !== 'string' || sub.assignedModelId !== undefined && !roster.some(model => model.id === sub.assignedModelId && model.enabled && model.available !== false)
               || sub.dependsOn !== undefined && (!Array.isArray(sub.dependsOn) || !sub.dependsOn.every(parent => Number.isInteger(parent) && parent >= 0 && parent < index))
               || sub.type !== undefined && !['IMPLEMENTATION', 'RESEARCH', 'AUDIT'].includes(sub.type)) throw new RequestError(400, 'Invalid SubTask or dependency.');
           }
@@ -841,6 +841,16 @@ function createServer({ phase2 = true, planFile = path.join(__dirname, 'plan.jso
         const result = await enqueue(() => orchestra.setProviderPolicy(input.id, input.policy));
         if (!result.ok) throw new RequestError(400, result.reason);
         return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/models/routing') {
+        const input = await body(request); const result = await enqueueCatalog(() => orchestra.setWorkerRouting(input));
+        if (!result.ok) throw new RequestError(400, result.reason); return json(200, result.snapshot);
+      }
+      if (request.method === 'POST' && pathname === '/api/models/routing-preference') {
+        const input = await body(request);
+        if (!input || typeof input.id !== 'string' || Object.keys(input).some(k => !['id', 'preference'].includes(k))) throw new RequestError(400, 'Invalid routing preference.');
+        const result = await enqueueCatalog(() => orchestra.setRoutingPreference(input.id, input.preference));
+        if (!result.ok) throw new RequestError(400, result.reason); return json(200, result.snapshot);
       }
       if (request.method === 'POST' && pathname === '/api/models/policy') {
         const input = await body(request);

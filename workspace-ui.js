@@ -61,6 +61,9 @@
       runtime.querySelector('small')?.remove();
       body.append(runtime);
     }
+    const routingLink = button('Worker routing and model usage');
+    routingLink.addEventListener('click', () => { dialog.close(); window.PlanwharfShowView?.('orchestrator'); window.PlanwharfSelectWorkspacePanel?.('overview'); document.querySelector('[data-panel="models"]')?.click(); document.querySelector('form[data-worker-routing]')?.scrollIntoView({ block: 'start' }); });
+    body.append(routingLink);
     const settingsButton = button('Settings'); settingsButton.id = 'workspace-settings-button';
     settingsButton.setAttribute('aria-haspopup', 'dialog'); settingsButton.setAttribute('aria-controls', dialog.id);
     settingsButton.addEventListener('click', () => dialog.showModal());

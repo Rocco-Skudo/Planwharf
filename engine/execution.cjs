@@ -74,6 +74,9 @@ function createExecutionBridge(options) {
       return mega;
     }
     if (!parts.length) throw new Error(job.goldModel ? `Gold model ${job.goldModel.provider}/${job.goldModel.cli} (${job.goldModel.id}) is unavailable, disabled or blocked by quota. No substitute will be used.` : 'No eligible workers for the proposed MegaTask.');
+    if (options.routePart) {
+      const routed = []; for (const part of parts) routed.push(options.routePart(part, job, inspectProject(item), routed)); parts = routed;
+    }
     const id = 'MT-' + crypto.randomUUID(), facts = inspectProject(item);
     if (!item.project.folder && job.kind !== 'research' && !parts.every(part => part.type === 'RESEARCH')) throw new Error('Set a local source folder before proposing implementation work.');
     if (facts?.error && job.kind !== 'research' && !parts.every(part => part.type === 'RESEARCH')) throw new Error(facts.error);
@@ -84,6 +87,7 @@ function createExecutionBridge(options) {
     const ids = parts.map((_, index) => `${id}-ST-${String(index + 1).padStart(2, '0')}`);
     const subs = parts.map((part, index) => ({ id: ids[index], megaTaskId: id, title: part.slice || part.title, detail: part.detail || part.slice || job.detail, status: 'PENDING', assignedModelId: part.modelId,
       ...(job.goldModel ? { goldModel: { ...job.goldModel } } : {}),
+      ...(part.routing ? { routing: part.routing, exactModel: part.exactModel } : {}),
       attemptIds: [], resultId: null, createdAt: now(), completedAt: null, type: part.type || (job.kind === 'research' ? 'RESEARCH' : job.kind === 'audit' ? 'AUDIT' : 'IMPLEMENTATION'),
       dependencies: part.dependsOn ? part.dependsOn.map(index => ids[index]) : part.dependencies || (index ? [ids[index - 1]] : []),
       proposedProvider: models().find(model => model.id === part.modelId)?.provider || null, proposedCli: models().find(model => model.id === part.modelId)?.cli || null, provider: null, cli: null }));
@@ -109,6 +113,8 @@ function createExecutionBridge(options) {
   function proposalBlockers(mega) {
     if (typeof spawnWorker !== 'function') return ['The worker launcher is unavailable. Start Planwharf through its desktop launcher.'];
     return subtasks(mega).flatMap(sub => {
+      const blocked = options.assignmentBlocker?.(sub, mega);
+      if (blocked) return [typeof blocked === 'string' ? blocked : blocked.reason];
       const worker = models().find(model => model.id === sub.assignedModelId);
       const candidate = options.resolveWorker ? options.resolveWorker(worker, sub) : worker;
       if (!candidate?.enabled || candidate.available === false || options.workerEligible && !options.workerEligible(candidate, sub)) return [`Worker ${sub.assignedModelId} is unavailable or has insufficient remaining quota.`];
@@ -125,7 +131,7 @@ function createExecutionBridge(options) {
   }
   function collect(mega, sub, part, result) {
     if (data.results.some(item => item.resultId === result.resultId)) return;
-    result = { ...result, assignedModelId: sub.assignedModelId, provider: sub.provider, cli: sub.cli, pid: part.pid, startedAt: part.startedAt };
+    result = { ...result, ...(sub.routing ? { routing: clone(sub.routing) } : {}), assignedModelId: sub.assignedModelId, provider: sub.provider, cli: sub.cli, pid: part.pid, startedAt: part.startedAt };
     data.results.push(result); sub.resultId = result.resultId; sub.status = result.status;
     part.validatedResultStatus = result.status; part.recordedSubTaskStatus = sub.status;
     sub.completedAt = result.status === 'COMPLETE' ? now() : null;
@@ -151,6 +157,8 @@ function createExecutionBridge(options) {
   }
   function launch(item, job, mega, sub) {
     const row = rowFor(mega.projectId, mega.id);
+    const blocked = options.assignmentBlocker?.(sub, mega, true);
+    if (blocked) { if (!blocked.waiting) sub.status = 'BLOCKED'; mega.nextAction = typeof blocked === 'string' ? blocked : blocked.reason; return; }
     const requested = models().find(model => model.id === sub.assignedModelId && model.enabled && model.available !== false);
     if (requested && (requested.provider !== sub.proposedProvider || requested.cli !== sub.proposedCli)) { sub.status = 'BLOCKED'; mega.nextAction = 'Review changed provider/model configuration before continuing.'; return; }
     const worker = options.resolveWorker ? options.resolveWorker(requested, sub) : requested;
@@ -168,7 +176,7 @@ function createExecutionBridge(options) {
     const attemptId = claim.attempt.id;
     const folder = sub.type === 'RESEARCH' ? path.join(dir, 'research', mega.id, attemptId) : item.project.folder;
     if (sub.type === 'RESEARCH') fs.mkdirSync(folder, { recursive: true });
-    const part = { modelId: worker.id, label: worker.label, provider: worker.provider, cli: worker.cli, subTaskId: sub.id, megaTaskId: mega.id, attemptId, slice: sub.title,
+    const part = { ...(sub.routing ? { routing: clone(sub.routing) } : {}), modelId: worker.id, label: worker.label, provider: worker.provider, cli: worker.cli, subTaskId: sub.id, megaTaskId: mega.id, attemptId, slice: sub.title,
       resultPath: path.join(dir, 'results', attemptId + '.txt'), structuredResultPath: path.join(dir, 'results', attemptId + '.json'), exitPath: path.join(dir, 'results', attemptId + '.exit.json'),
       logPath: path.join(dir, 'logs', attemptId + '.log'), folder, pid: null, alive: false, startedAt: now(), sessionId: options.sessionId };
     if (sub.type === 'RESEARCH') Object.assign(part, { resultPath: path.join(folder, 'result.txt'), structuredResultPath: path.join(folder, 'result.json'), exitPath: path.join(folder, 'exit.json') });
@@ -214,7 +222,7 @@ function createExecutionBridge(options) {
     row.workerActivity = row.doing; row.next = executionNext(mega, data);
     row.waitingFor = mega.status === 'READY_FOR_APPROVAL' ? `Approval of MegaTask ${mega.id}` : mega.status === 'PAUSED' ? 'Resume an explicit checkpoint' : mega.status === 'COMPLETE' ? 'Nothing. Structured results are complete.' : 'Structured worker results';
     row.workerLabel = (row.dispatch || []).filter(part => part.pid).map(part => part.label).join(' + ') || null;
-    row.plan = [`MegaTask: ${mega.title}`, `Objective: ${mega.goal}`, `Latest git: ${mega.repoBefore.repoHead || 'Not applicable'}`, ...subs.map(sub => `${sub.title} — ${sub.assignedModelId}; ${sub.dependencies.length ? 'after ' + sub.dependencies.map(id => subs.find(parent => parent.id === id)?.title).join(', ') : 'parallel-ready'}; ${sub.status}`)];
+    row.plan = [`MegaTask: ${mega.title}`, `Objective: ${mega.goal}`, `Latest git: ${mega.repoBefore.repoHead || 'Not applicable'}`, ...subs.map(sub => `${sub.title} — ${sub.assignedModelId}; ${sub.routing ? sub.routing.assessment.level + ' / ' + sub.routing.tier + ' / ' + sub.routing.reason + '; ' : ''}${sub.dependencies.length ? 'after ' + sub.dependencies.map(id => subs.find(parent => parent.id === id)?.title).join(', ') : 'parallel-ready'}; ${sub.status}`)];
     row.approved = Boolean(mega.approvedAt); return row;
   }
   function deadlineDue(mega) {
@@ -338,8 +346,12 @@ function createExecutionBridge(options) {
       }
     }
     for (const sub of subtasks(mega)) if (sub.status !== 'COMPLETE') {
+      if (!request.assignments?.[sub.id]) {
+        const revised = options.rerouteFailure?.(sub, job, inspectProject(item), subtasks(mega).filter(s => s.id !== sub.id && s.routing?.tier === 'premium' && s.attemptIds.length), data.results.find(r => r.resultId === sub.resultId));
+        if (revised) { sub.routingHistory ||= []; sub.routingHistory.push(clone(sub.routing)); sub.routing = revised.routing; sub.assignedModelId = revised.modelId; const model = models().find(m => m.id === revised.modelId); sub.proposedProvider = model?.provider || null; sub.proposedCli = model?.cli || null; event(mega.projectId, 'MODEL_ROUTING_REASSESSED', revised.routing.reason, { megaTaskId: mega.id, subTaskId: sub.id, modelId: revised.modelId }); }
+      }
       sub.status = 'PENDING'; sub.resultId = null;
-      if (request.assignments?.[sub.id]) { sub.assignedModelId = request.assignments[sub.id]; const worker = models().find(model => model.id === sub.assignedModelId); sub.proposedProvider = worker.provider; sub.proposedCli = worker.cli; }
+      if (request.assignments?.[sub.id]) { sub.assignedModelId = request.assignments[sub.id]; const worker = models().find(model => model.id === sub.assignedModelId); sub.proposedProvider = worker.provider; sub.proposedCli = worker.cli; if (options.routePart) { const part = options.routePart({ ...sub, modelId: worker.id, assignedModelId: worker.id, exactModel: true }, job, inspectProject(item), []); sub.routing = part.routing; sub.exactModel = true; delete sub.routingImported; } }
     }
     mega.status = 'RUNNING'; mega.pauseRequested = false; mega.interruptedAttemptIds = []; mega.orchestratorModelId = leadId(); mega.currentCheckpointId = cp.id; mega.authorizedSessionId = options.sessionId;
     mega.deadlineError = null;

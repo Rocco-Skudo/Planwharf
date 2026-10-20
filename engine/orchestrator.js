@@ -19,6 +19,7 @@ const Quota = require('../quota.js');
 const { validatePolicy, migratePolicy, usagePolicy, resolveUsageFallback } = require('./model-policy.cjs');
 const { validateProviderPolicy, providerPolicyFor } = require('./provider-policy.cjs');
 const { ROLE_IDS, withModelRoles, roleEligibility, permitsAssignment, assignmentRole } = require('./model-roles.cjs');
+const Routing = require('./smart-routing.cjs');
 const { assignmentSession, projectActivitySessions, pagedProjectActivitySessions, readRecordedTail, SESSION_LIMIT } = require('./activity-sessions.cjs');
 
 const LABELS = {
@@ -1094,6 +1095,8 @@ function createOrchestrator(options) {
           providerEnabled: parsed.providerEnabled || {},
           catalogVisibility: parsed.catalogVisibility || {},
           modelPolicies: parsed.modelPolicies || {},
+          workerRouting: parsed.workerRouting || {},
+          routingPreferences: parsed.routingPreferences || {},
           providerPolicies: parsed.providerPolicies || {},
           modelRoles: parsed.modelRoles || {},
           accountModelRoles: parsed.accountModelRoles || {},
@@ -1120,6 +1123,8 @@ function createOrchestrator(options) {
     } catch (_) {}
   }
   store.providerPolicies ||= {};
+  store.workerRouting = Routing.settings(store.workerRouting || {});
+  store.routingPreferences ||= {};
   store.modelPolicies ||= {};
   store.modelRoles ||= {};
   store.accountModelRoles ||= {};
@@ -1150,9 +1155,37 @@ function createOrchestrator(options) {
 
   const bridge = createExecutionBridge({ store, attempts, dir, rowFor: (id, megaTaskId) => store.researches.find(record => record.megaTaskId === megaTaskId) || entry(id), inspect, spawnWorker: opts.spawnWorker,
     isProcessAlive: opts.isProcessAlive, killWorker: opts.killWorker, models: roster,
-    resolveWorker: (worker, sub) => sub?.type === 'RESEARCH' || sub?.goldModel && assignmentRole(sub) === 'worker' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
+    resolveWorker: (worker, sub) => sub?.routing || sub?.exactModel || sub?.type === 'RESEARCH' || sub?.goldModel && assignmentRole(sub) === 'worker' ? worker : resolveUsageFallback(worker, roster(), plansLive, candidate => permitsAssignment(candidate, sub) && candidate.providerEnabled !== false && (sub?.type === 'AUDIT' || candidate.capabilities?.canCode !== false) && (candidate.providerCatalog || candidate.remaining >= candidate.cost)),
     workerEligible: (worker, sub) => permitsAssignment(worker, sub) && (assignmentRole(sub) === 'reviewer' ? true : sub?.type === 'RESEARCH' ? worker.capabilities?.canResearch !== false : worker.capabilities?.canCode !== false) && worker.providerEnabled !== false && !usagePolicy(worker, plansLive).blocked && !planExhausted(plansLive, worker.quotaPoolId || worker.plan) && (worker.providerCatalog || worker.remaining >= worker.cost),
+    routePart, assignmentBlocker,
+    rerouteFailure: (sub, job, facts, previous, result) => store.workerRouting.mode === 'smart' && sub.routing?.mode === 'smart' && !sub.exactModel && result?.status === 'FAILED' && result.evidenceKind !== 'TECHNICAL' && result.tests?.some(t => t.status === 'FAILED') ? routePart({ ...sub, modelId: null, assignedModelId: undefined }, job, facts, previous) : null,
     now, persist, sessionId, leadId: () => leadModel()?.id || null });
+
+  function routePart(part, job, facts, previous) {
+    const explicit = part.exactModel || Boolean(part.assignedModelId) || Boolean(job.goldModel && assignmentRole(part) === 'worker');
+    if (store.workerRouting.mode !== 'smart' && !explicit && part.modelId) return part;
+    const exactId = job.goldModel && assignmentRole(part) === 'worker' ? job.goldModel.id : explicit ? part.modelId : null;
+    const decision = Routing.choose({ models: roster(), sub: { ...part, title: part.title || part.slice, type: part.type || (job.kind === 'audit' ? 'AUDIT' : 'IMPLEMENTATION'), goldModel: job.goldModel }, job, facts,
+      config: store.workerRouting, plans: plansLive, results: store.execution?.results || [], exactId, premiumAssigned: previous.filter(p => p.routing?.tier === 'premium').length });
+    return { ...part, modelId: decision.model?.id || exactId || 'unassigned', routing: decision.receipt, exactModel: explicit };
+  }
+  function assignmentBlocker(sub, mega, launching = false) {
+    if (!sub.routing) return null;
+    const model = roster().find(m => m.id === sub.assignedModelId);
+    if (sub.routingImported || !model || model.accountScope !== sub.routing.accountScope || model.cli !== sub.routing.cli || (model.providerId || model.provider) !== sub.routing.provider) return 'Routing account or exact model changed. Explicitly reassign this slice on Resume.';
+    if (sub.routing.mode === 'smart' && store.workerRouting.mode !== 'smart') return 'Smart Routing is disabled. Explicitly reassign this automatic slice on Resume.';
+    if (sub.routing.mode === 'smart' && model.routingPreference.tier !== sub.routing.tier) return 'Model usage preference changed. Explicitly reassign this slice on Resume.';
+    if (sub.routing.tier === 'premium') {
+      if (sub.routing.mode === 'smart' && (model.routingPreference.tier !== 'premium' || !model.routingPreference.automatic)) return 'Automatic Premium eligibility was revoked. Explicitly reassign this slice on Resume.';
+      const all = store.execution?.subTasks || [];
+      const assigned = all.filter(s => s.megaTaskId === mega.id && s.id !== sub.id && s.routing?.tier === 'premium' && s.attemptIds?.length).length;
+      if (store.workerRouting.maxPremiumPerMegaTask !== null && !sub.attemptIds.length && assigned >= store.workerRouting.maxPremiumPerMegaTask) return 'Maximum premium assignments per MegaTask reached.';
+      const running = all.filter(s => s.status === 'RUNNING' && s.routing?.tier === 'premium').length;
+      if (store.workerRouting.maxPremiumConcurrent === 0) return 'Premium Worker concurrency is set to zero.';
+      if (launching && store.workerRouting.maxPremiumConcurrent !== null && running >= store.workerRouting.maxPremiumConcurrent) return { waiting: true, reason: 'Waiting for the configured simultaneous Premium Worker limit.' };
+    }
+    return null;
+  }
 
   function entry(id) {
     if (!store.projects[id]) store.projects[id] = emptyEntry();
@@ -1567,6 +1600,7 @@ function createOrchestrator(options) {
       item.accountKey = account?.key || null;
       item.accountType = account?.type || 'unread';
       item.accountScope = scope;
+      item.routingPreference = store.routingPreferences[scope || '@configured']?.[item.id] || { tier: 'standard', automatic: false };
       item.label = require('./provider-accounts.cjs').accountLabel(item.label, account);
       item.providerEnabled = provider ? (store.providerEnabled[provider.id] ?? provider.enabled) : true;
       item.policy = validatePolicy({ alwaysApprove: item.alwaysApprove ?? true, ...migratePolicy(item.policy || {}), ...migratePolicy(store.modelPolicies[item.id] || {}) });
@@ -1815,6 +1849,7 @@ function createOrchestrator(options) {
       orchestratorId: lead ? lead.id : null,
       selectedOrchestratorId: store.orchestratorId || null,
       goldModelId: store.goldModelId || null,
+      workerRouting: { ...store.workerRouting },
       orchestratorUnavailableReason: store.orchestratorId && !lead ? 'Selected orchestrator is unavailable or blocked by its usage policy. Choose an eligible model or configure an explicit fallback.' : null,
       orchestratorLabel: lead ? lead.label : ORCH_NAME,
       orchestrators: roster().filter(canOrchestrate).map(item => ({ id: item.id, label: item.label, providerId: item.providerId || item.provider, plan: item.plan })),
@@ -2024,7 +2059,7 @@ function createOrchestrator(options) {
         // Unapproved or paused work has no reason to inspect its source on every poll.
         const facts = existing && existing.status !== 'RUNNING' && row.facts?.folder === linkedWorkspace(item.project.folder) ? row.facts : inspect(item.project.folder); row.facts = facts;
         const parts = job.proposedSubTasks?.length ? job.proposedSubTasks.map(sub => ({ ...sub, modelId: job.goldModel && assignmentRole(sub) === 'worker' ? job.goldModel.id : sub.assignedModelId, slice: sub.title }))
-          : dispatchPlan(pickWorkers(roster(), { job, usage: store.usage, facts, plans: plansLive }), job, facts);
+          : dispatchPlan(pickWorkers(roster(), { job, usage: store.usage, facts, plans: plansLive, ...(store.workerRouting.mode === 'smart' ? { count: 1 } : {}) }), job, facts);
         return bridge.advance(item, job, parts);
       } catch (error) { row.status = 'blocked_no_worker'; row.doing = error.message; row.next = error.message; return row; }
     }
@@ -2791,6 +2826,20 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     } catch (error) { return { ok: false, reason: error.message }; }
   }
 
+  async function setWorkerRouting(input) {
+    try { store.workerRouting = Routing.settings(input); persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) }; }
+    catch (error) { return { ok: false, reason: error.message }; }
+  }
+  async function setRoutingPreference(id, input) {
+    try {
+      const model = roster().find(m => m.id === id);
+      if (!model) throw Error('Model not present.');
+      const value = Routing.preference(input), scope = model.accountScope || '@configured';
+      store.routingPreferences[scope] ||= {}; store.routingPreferences[scope][id] = value;
+      persist(); return { ok: true, snapshot: snapshot(await opts.readPlan()) };
+    } catch (error) { return { ok: false, reason: error.message }; }
+  }
+
   async function setModelPolicy(id, input) {
     const model = roster().find(model => model.id === id);
     if (!model) return { ok: false, reason: 'Model not present.' };
@@ -3225,7 +3274,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
     bridge.restore(projectId, execution);
     return { ok: true, execution: bridge.view(projectId) };
   }
-  return { tick, activitySessionPage, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, restoreImported, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
+  return { tick, activitySessionPage, supervisorRequest, checkpointForUpdate, refreshRepositories: async () => refreshRepositoryMetadata(await opts.readPlan()), shutdown, bindAccount, invalidateAccountCache, approve, startAutoTask, resume, stop, stopWorker, pauseAfterCurrent, setFocus, executionView: bridge.view, restoreImported, prepareForNewTask, setMode, setGrillPropose, skipGrill, docsFor, inspectRepository, setModelEnabled, setModelRoles, setRoleForAll, setGoldModel, setWorkerRouting, setRoutingPreference, setModelPolicy, setProviderPolicy, setCatalogSettings, setOrchestrator, ask, abortAsk, dispatchResearch, approveResearch, stopResearch, resumeResearch, researchReport, pidFor, snapshot: async projectId => { refreshResearch(); return snapshot(await opts.readPlan(), projectId); } };
 }
 
 module.exports = { jobFingerprint, createOrchestrator, pickWorker, pickWorkers, normalizeModels, jobKind, defaultInspect, jobFromFacts, planLines, dispatchPlan, listDocs, collectDocs, grillDone, tailLog, lastActivity, interpretActivity, progressKey, sliceCount, answerQuestion, parseOrder, looksLikeWork, looksLikeQuestion, packState, canOrchestrate, usageOf, planExhausted, ORCH_NAME, LABELS, stepOf, pipelineOf, crewOf, PIPELINE_STEPS, parseGrillQuestions, grillPrompt };

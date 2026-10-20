@@ -60,6 +60,7 @@ function remapExecution(execution, projectId) {
       ...item,
       id,
       megaTaskId: megaMap.get(item.megaTaskId),
+      ...(item.routing ? { routingImported: true } : {}),
       assignedModelId: item.assignedModelId || 'unassigned'
     };
   });
