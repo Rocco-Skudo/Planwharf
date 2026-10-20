@@ -134,5 +134,6 @@
     "run": "https://github.com/benitz94/Planwharf/actions/runs/39444632761",
     "result": "Process-tree portability fix passed. A separate existing Skill execution fixture raced the runner shutdown after the exit receipt was written.",
     "fix": "Poll backend reconciliation until both result and matching SubTask are COMPLETE with exit code zero before requesting procedure review. Approval/evidence guards remain unchanged."
-  }
+  },
+  "windowsCleanupFollowUp": "A final full rerun exposed transient EPERM removing an owned test root after runner exit. The fixture now checks its temporary-root boundary and retries removal with a bounded delay; assertions remain required."
 }
