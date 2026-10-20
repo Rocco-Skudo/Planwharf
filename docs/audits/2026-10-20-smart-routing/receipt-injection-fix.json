@@ -124,5 +124,10 @@
     "exitCode": 0,
     "logSha256": "bb685cb9edd93af2105d93c270909099f35229664c0115702f058153d8eff9d9"
   },
-  "limits": "Offline regression and full suite. Previous real-model/browser acceptance evidence was not rerun for this rendering-only fix."
+  "limits": "Offline regression and full suite. Previous real-model/browser acceptance evidence was not rerun for this rendering-only fix.",
+  "linuxFollowUp": {
+    "initialRun": "https://github.com/benitz94/Planwharf/actions/runs/39446996534",
+    "result": "New receipt regression passed; Skill execution fixture could propose a new task after result collection but before MegaTask/notebook completion.",
+    "fix": "Wait for matching result and SubTask, MegaTask COMPLETE and persisted notebook task complete before continuing. Production lifecycle guards are unchanged."
+  }
 }
