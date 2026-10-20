@@ -54,8 +54,12 @@ async function until(check) { for (let n = 0; n < 200; n++) { if (check()) retur
     console.log('SKIP ENVIRONMENT: Windows denies taskkill /T. Actual process-tree termination requires verification in the owner desktop session.');
     for (const processId of [childPid, parent.pid]) { try { process.kill(processId); } catch {} }
   } else {
-    assert.equal(terminated, true);
+    // POSIX SIGTERM delivery is asynchronous; the immediate return can still
+    // report a live process. Require observed death of both real processes.
+    if (process.platform === 'win32') assert.equal(terminated, true);
     await until(() => !isProcessAlive(parent.pid) && !isProcessAlive(childPid));
+    assert.equal(isProcessAlive(parent.pid), false);
+    assert.equal(isProcessAlive(childPid), false);
     console.log('PASS: actual parent and descendant processes terminated.');
   }
   console.log('PASS Phase 2 worker: large UTF-8 stdin prompt intact, exact Codex/model argv, structured status/identity validation, exit 0 insufficient.');

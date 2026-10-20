@@ -124,5 +124,10 @@
     "failedChecks": 0,
     "exitCode": 0,
     "logSha256": "a154dbfcae90ee9157487faddd073d2caf4cb0d7d522d311ff58364dedc2be8f"
+  },
+  "linuxFollowUp": {
+    "initialRun": "https://github.com/benitz94/Planwharf/actions/runs/39444238202",
+    "initialResult": "Only phase2-worker failed: expected synchronous termination immediately after POSIX SIGTERM. All other active files, including real symlink cases, passed.",
+    "fix": "Wait for observed death of both owned parent and descendant. Windows still asserts the synchronous return; POSIX must pass the same real liveness checks without relying on immediate signal delivery."
   }
 }
