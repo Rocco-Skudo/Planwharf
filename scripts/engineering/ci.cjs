@@ -28,6 +28,8 @@ try {
   const patchPaths = ['--', '.', ':(exclude).review/**'];
   run('working-patch', 'git', ['diff', '--check', ...patchPaths]);
   if (process.env.PLANWHARF_DIFF_BASE) run('pr-patch', 'git', ['diff', '--check', process.env.PLANWHARF_DIFF_BASE, 'HEAD', ...patchPaths]);
-  for (const file of ['engine/claim.test.cjs', 'engine/attempts.test.cjs', 'engine/codex-result.test.cjs', ...added.filter(x => x.endsWith('.test.cjs'))]) run(file, process.execPath, [file]);
+  const tests = tracked.stdout.split('\0').filter(file => /\.test\.(cjs|js|mjs)$/.test(file) && !file.startsWith('.review/'));
+  for (const file of tests) run(file, process.execPath, [file]);
+  run('embedded-worker-ui', process.execPath, ['-e', "process.env.PLANWHARF_TEST_EMBEDDED='1';require('./engine/worker-ui.test.cjs')"]);
 } finally { fs.rmSync(temporary, { recursive: true, force: true }); }
 process.exitCode = failures ? 1 : 0;

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { metadataLink } = require('./test-links.cjs');
 const { spawnWorker, isProcessAlive, killWorker } = require('./runner.cjs');
 
 test('implementation launch rejects missing real linked folder before creating launch artifacts', () => {
@@ -115,7 +116,10 @@ test('canonical linked directory survives the runner job file and research keeps
       for (let i = 0; i < 100 && isProcessAlive(pid); i++) await new Promise(resolve => setTimeout(resolve, 20));
       if (isProcessAlive(pid)) killWorker(pid);
     }
-    fs.rmSync(root, { recursive: true, force: true });
+    const resolved = path.resolve(root);
+    assert.ok(resolved.startsWith(path.resolve(os.tmpdir()) + path.sep) && path.basename(resolved).startsWith('pw-containment-'));
+    // Windows can briefly retain filesystem handles after process exit.
+    fs.rmSync(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   }
 });
 for (const redirected of ['gitdir', 'HEAD']) test(`repository inspection rejects redirected ${redirected} metadata before commands`, async t => {
@@ -128,13 +132,7 @@ for (const redirected of ['gitdir', 'HEAD']) test(`repository inspection rejects
     } else {
       require('node:child_process').execFileSync('git', ['init', '--quiet', alpha]);
       fs.unlinkSync(path.join(alpha, '.git', 'HEAD'));
-      try {
-        fs.symlinkSync(path.join(beta, '.git', 'HEAD'), path.join(alpha, '.git', 'HEAD'));
-      } catch (error) {
-        if (error.code !== 'EPERM') throw error;
-        t.skip('File symlinks unavailable');
-        return;
-      }
+      metadataLink(path.join(beta, '.git', 'HEAD'), path.join(alpha, '.git', 'HEAD'), t);
     }
     const commands = [];
     const inspect = createRepositoryInspector({ execute: async (...args) => { commands.push(args); return { ok: true, stdout: alpha }; } });

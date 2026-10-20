@@ -48,13 +48,13 @@ async function main() {
   assert.ok(receivedLead.args.every(arg => arg.length < 32767));
   assert.equal(receivedLead.args[receivedLead.args.indexOf('-m') + 1], 'gpt-6-astra');
 
-  const opts = { folder: dir, result: path.join(dir, 'worker-result.txt'), title: 'Isolated worker', detail: historyText, worker: 'Fixture', attempt: 'isolated', model };
+  const opts = { linkedFolder: dir, folder: dir, result: path.join(dir, 'worker-result.txt'), title: 'Isolated worker', detail: historyText, worker: 'Fixture', attempt: 'isolated', model };
   const optsFile = path.join(dir, 'worker-input.json');
   fs.writeFileSync(optsFile, JSON.stringify(opts));
   const bootstrap = path.join(dir, 'worker-bootstrap.cjs');
   fs.writeFileSync(bootstrap, `
 const opts = require('./worker-input.json');
-const args = ['node', 'runner'];
+const args = ['node', 'runner', '--linked-folder', opts.linkedFolder];
 for (const key of ['folder', 'result', 'title', 'detail', 'worker', 'attempt']) args.push('--' + key, opts[key]);
 args.push('--model-json', JSON.stringify(opts.model));
 require(${JSON.stringify(path.join(__dirname, 'runner.cjs'))}).run(args);

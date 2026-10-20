@@ -110,6 +110,7 @@ test('HTTP import restores one project without touching the other or launching w
   try {
     const version = (await (await fetch(base + '/api/plan')).json()).version;
     const bundle = exportProject(sampleProject(), sampleExecution());
+    bundle.execution.subTasks[0].routing = {}; // Malformed imported history must not crash restoration.
     const response = await fetch(base + '/api/project-import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version, bundle }) });
     const body = await response.json();
     assert.equal(response.status, 201, JSON.stringify(body));
@@ -123,6 +124,7 @@ test('HTTP import restores one project without touching the other or launching w
     assert.equal(exported.execution.megaTasks.length, 0);
     const restored = await (await fetch(base + '/api/project-export?projectId=harbor-library')).json();
     assert.equal(restored.execution.megaTasks[0].status, 'PAUSED');
+    assert.equal(restored.execution.subTasks[0].routingImported, true);
     assert.equal((await fetch(base + '/api/project-import', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ version: 'stale', bundle }) })).status, 409);
   } finally {
     await new Promise(resolve => server.close(resolve));

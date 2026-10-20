@@ -49,6 +49,23 @@ function safeGitWorkspace(folder) {
     }
     const config = fs.readFileSync(path.join(metadata, 'config'), 'utf8');
     if (/^\s*\[\s*include(?:if)?(?:\s|\])/im.test(config) || /^\s*(?:worktree|fsmonitor)\s*=/im.test(config)) return null;
+    // Git for Windows can treat junctions as ordinary directories and read
+    // tracked content through them during status/diff. Inspect directory entries
+    // without following redirects before allowing any Git process to start.
+    const worktree = [root];
+    let sourceEntries = 0;
+    while (worktree.length) {
+      const current = worktree.pop();
+      if (!within(root, fs.realpathSync(current))) return null;
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        if (current === root && entry.name === '.git') continue;
+        if (++sourceEntries > 100000) return null;
+        const file = path.join(current, entry.name);
+        if (entry.isSymbolicLink()) {
+          if (!within(root, fs.realpathSync(file))) return null;
+        } else if (entry.isDirectory()) worktree.push(file);
+      }
+    }
     return root;
   } catch { return null; }
 }

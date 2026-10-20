@@ -28,6 +28,23 @@
       <button type="button" class="secondary compact" data-add-provider>Add API / CLI connection</button>
       ${selected ? fields(selected, providers, draft) : '<p class="muted">Configure a provider to set usage limits and permissions.</p>'}</section>`;
   }
+  function routingReceipt(r) {
+    if (!r?.assessment || !r?.limits) return '';
+    return `<details class="routing-receipt"><summary>Routing: ${escape(r.mode)} · ${escape(r.tier)} · ${escape(r.assessment.level)}</summary><p>${escape(r.provider)}/${escape(r.cli)} (${escape(r.modelId)})</p><p>${escape(r.assessment.reason)}</p><p>${escape(r.reason)}</p>${r.restriction ? `<p>${escape(r.restriction)}</p>` : ''}<p class="muted">${escape(r.assessment.decomposition)} Quota remaining: ${r.remainingPercent === null ? 'unread' : escape(r.remainingPercent) + '% at assignment'}. Limits: ${escape(r.limits.maxPremiumPerMegaTask ?? 'no extra')} per MegaTask; ${escape(r.limits.maxPremiumConcurrent ?? 'existing')} simultaneous.</p></details>`;
+  }
+  function routingSection(config, models) {
+    const c = config || { mode: 'catalog', fallback: 'standard' };
+    return `<section class="dash-section" aria-label="Worker routing"><h3>Worker routing</h3><form data-worker-routing class="model-policy-form">
+      <label>Automatic routing<select name="mode"><option value="catalog" ${c.mode === 'catalog' ? 'selected' : ''}>Catalog Order</option><option value="smart" ${c.mode === 'smart' ? 'selected' : ''}>Smart Routing</option></select></label>
+      <p class="muted">Manual / Gold keeps the exact selected model. Smart Routing uses saved model preferences automatically under the ordinary MegaTask approval. No extra Premium approval is required. Standard and Premium are your preferences, not verified pricing or quality rankings.</p>
+      <label>Maximum premium assignments per MegaTask<input name="maxPremiumPerMegaTask" type="number" min="0" max="1000" value="${escape(c.maxPremiumPerMegaTask)}" placeholder="No additional limit"></label>
+      <label>Maximum simultaneous premium Workers<input name="maxPremiumConcurrent" type="number" min="0" max="1000" value="${escape(c.maxPremiumConcurrent)}" placeholder="Existing Worker limits"></label>
+      <label>When Premium is unavailable or limited<select name="fallback"><option value="standard" ${c.fallback === 'standard' ? 'selected' : ''}>Use eligible Standard</option><option value="block" ${c.fallback === 'block' ? 'selected' : ''}>Block difficult work</option></select></label>
+      <button type="submit" class="secondary compact">Save Worker routing</button><p data-routing-status role="status"></p></form>
+      ${models.filter(m => !m.catalogExcluded).map(m => `<form data-routing-preference="${escape(m.id)}" class="model-policy-form"><fieldset><legend>${escape(m.label)} (${escape(m.providerId || m.provider)}/${escape(m.cli)})</legend>
+      <label>Model usage preference<select name="tier"><option value="standard" ${m.routingPreference?.tier !== 'premium' ? 'selected' : ''}>Standard</option><option value="premium" ${m.routingPreference?.tier === 'premium' ? 'selected' : ''}>Premium</option></select></label>
+      <label><input type="checkbox" name="automatic" ${m.routingPreference?.automatic ? 'checked' : ''}> Eligible for automatic Premium assignment</label><p class="muted">Saved for the current account. Changes affect future launches; running processes retain their assignment. Roles and quota restrictions still apply.</p><button type="submit" class="secondary compact">Save model usage</button><p data-routing-status role="status"></p></fieldset></form>`).join('')}</section>`;
+  }
   function openConnection(save) {
     const dialog = document.createElement('dialog'); dialog.className = 'provider-connection-dialog';
     dialog.innerHTML = `<form class="model-policy-form"><h2>Add provider connection</h2>
@@ -109,5 +126,5 @@
       if (!dialog.open) dialog.showModal?.();
     };
   }
-  root.PlanwharfModelPolicyUI = { fields, section, read, createAlerts, openConnection };
+  root.PlanwharfModelPolicyUI = { fields, section, routingSection, routingReceipt, read, createAlerts, openConnection };
 })(globalThis);

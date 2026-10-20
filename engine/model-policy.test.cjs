@@ -172,7 +172,7 @@ test('policy API persists, lead and approved workers use automatic fallback with
     assert.deepEqual(view.models.find(m => m.id === 'lead').policy, { ...policy, fallbackModelId: null });
     assert.equal(view.providers.find(p => p.id === 'codex').policy.fallbackProviderId, '@automatic');
     assert.equal(view.orchestratorId, 'fallback'); assert.equal(view.selectedOrchestratorId, 'lead'); assert.equal(view.orchestratorFallbackFrom, 'lead');
-    const proposal = await request('/api/orchestrator/propose', { projectId: 'isolated', title: 'Policy probe', goal: 'No inference', subTasks: [{ title: 'Harmless mock', detail: 'Fixture only', assignedModelId: 'lead', type: 'IMPLEMENTATION', dependsOn: [] }] }, 201);
+    const proposal = await request('/api/orchestrator/propose', { projectId: 'isolated', title: 'Policy probe', goal: 'No inference', subTasks: [{ title: 'Harmless mock', detail: 'Fixture only', type: 'IMPLEMENTATION', dependsOn: [] }] }, 201);
     await request('/api/orchestrator/approve', { projectId: 'isolated', megaTaskId: proposal.snapshot.projects[0].megaTaskId });
     assert.equal(launches.length, 1); assert.equal(launches[0].worker.id, 'fallback');
     const exported = await request('/api/project-export?projectId=isolated'); assert.deepEqual(exported.settings.modelPolicies.lead, { ...policy, fallbackModelId: null });

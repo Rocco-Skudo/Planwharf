@@ -44,7 +44,25 @@ test('approved project Skill travels from HTTP approval through real runner to i
     const exitFile = path.join(dir, 'attempts', 'results', attemptId + '.exit.json');
     const deadline = Date.now() + 10000; while (!fs.existsSync(exitFile) && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 30));
     assert.ok(fs.existsSync(exitFile));
-    await request('/api/orchestrator');
+    // The exit receipt is written just before runner shutdown. Reconciliation
+    // requires the process to have exited and the backend to validate its result.
+    let complete = false;
+    const reconcileDeadline = Date.now() + 10000;
+    while (!complete && Date.now() < reconcileDeadline) {
+      await request('/api/orchestrator');
+      const execution = await request('/api/execution?projectId=alpha');
+      const result = execution.results.find(row => row.attemptId === attemptId);
+      const sub = execution.subTasks.find(row => row.id === result?.subTaskId);
+      const mega = execution.megaTasks.find(row => row.id === result?.megaTaskId);
+      const notebook = (await request('/api/plan')).plan;
+      const task = notebook.projects.find(row => row.project.id === 'alpha').tasks.find(row => row.id === mega?.taskId);
+      // Result collection can occur after a tick's completion pass. Wait for the
+      // MegaTask and persisted notebook task before proposing the next job.
+      complete = result?.status === 'COMPLETE' && result.exitCode === 0 && sub?.status === 'COMPLETE' && sub.resultId === result.resultId
+        && mega?.status === 'COMPLETE' && task?.status === 'complete';
+      if (!complete) await new Promise(resolve => setTimeout(resolve, 30));
+    }
+    assert.equal(complete, true, 'Backend must validate the assignment and finish its persisted task before continuing');
     const candidate = await request('/api/project-skills/procedures/prepare', { projectId: 'alpha', attemptId, skillId: skill.id, referencePaths: ['README.md'] });
     assert.equal(candidate.testExecutionVerified, false);
     await request('/api/project-skills/procedures/accept', { projectId: 'alpha', candidateId: candidate.candidateId, expectedHash: candidate.reviewHash, approved: true, reviewNote: 'Fixture simulates a human inspecting exact local input and source evidence; no automated procedure proof is claimed.' });

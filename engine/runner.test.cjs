@@ -61,7 +61,10 @@ assert.match(spoken, /full local tool access, network access/);
 assert.match(spoken, /private GitHub repositories/);
 assert.doesNotMatch(spoken, /Stay inside it\. Read only/);
 assert.doesNotMatch(spoken, /unless they explicitly order a change/);
+const previousGrok = process.env.PLANWHARF_GROK;
+process.env.PLANWHARF_GROK = process.execPath; // Inspect argv only; never launch an installed provider.
 const cliArgs = askCliArgs({ question: 'How far?', folder: 'D:\\x', model: { id: 'grok', provider: 'grok', cli: 'grok-4.6' } }).args;
+if (previousGrok === undefined) delete process.env.PLANWHARF_GROK; else process.env.PLANWHARF_GROK = previousGrok;
 assert.equal(cliArgs.includes('--always-approve'), true);
 assert.ok(cliArgs.includes('auto'));
 assert.ok(cliArgs.includes('--no-subagents'));
