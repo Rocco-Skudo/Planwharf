@@ -1,0 +1,43 @@
+{
+  "date": "2026-10-20",
+  "before": {
+    "baseline": "92c00d521b9144961f46ffca89df7742855a1822",
+    "command": "node engine/orchestrator.test.cjs",
+    "result": "FAIL",
+    "assertion": "null !== 'D:\\\\demo'",
+    "location": "engine/orchestrator.test.cjs:201"
+  },
+  "cause": "The legacy test used a nonexistent developer-specific workspace, while current containment checks require a real linked folder. Once reached, two presentation assertions also expected superseded Home action wording.",
+  "changes": [
+    "Use a real temporary workspace containing README.md, including a path with spaces.",
+    "Keep every attempt store and HTTP/Git fixture under one owned temporary root and clean it up after success or failure.",
+    "Retain lifecycle assertions and use current exact idle/approval Home action text.",
+    "Run the full legacy suite in required offline engineering CI."
+  ],
+  "after": {
+    "legacyWorkflow": {
+      "command": "node engine/orchestrator.test.cjs",
+      "result": "PASS"
+    },
+    "regression": {
+      "command": "node --test --test-concurrency=1 engine/orchestrator.test.cjs engine/smart-routing.test.cjs engine/gold-model.test.cjs engine/provider-models.test.cjs engine/provider-audit.test.cjs engine/model-roles.test.cjs engine/model-policy.test.cjs engine/phase2.test.cjs engine/phase2-deadline.test.cjs engine/project-export.test.cjs engine/worker-containment.test.cjs engine/project-containment.test.cjs engine/home-containment.test.cjs engine/codex-result.test.cjs engine/soundtrack.test.cjs engine/soundtrack-http.test.cjs engine/soundtrack-assets.test.cjs engine/captain.test.cjs",
+      "tests": 100,
+      "passed": 97,
+      "failed": 0,
+      "skipped": 3,
+      "skipReason": "Windows file symlinks unavailable"
+    },
+    "harborQueue": {
+      "command": "node --test docs/audits/2026-10-20-smart-routing/harborqueue/scheduler.test.cjs docs/audits/2026-10-20-smart-routing/harborqueue/test/dashboard.test.cjs",
+      "passed": 23,
+      "failed": 0
+    },
+    "engineering": {
+      "command": "node scripts/engineering/ci.cjs",
+      "passed": 234,
+      "failed": 0
+    }
+  },
+  "productionCodeChanged": false,
+  "historicalEvidencePreserved": true
+}

@@ -10,6 +10,14 @@ const { spawnSync } = require('node:child_process');
 const { createOrchestrator, pickWorker, pickWorkers, jobKind, jobFromFacts, lastActivity, interpretActivity, sliceCount, answerQuestion, parseOrder, canOrchestrate, usageOf, planExhausted, ORCH_NAME, parseGrillQuestions } = require('./orchestrator.js');
 const { parseGrokCredits, parseChatGptUsage } = require('./planUsage.js');
 
+// Every fixture lives under one owned temporary root, including linked source
+// folders. Containment checks must exercise real paths on every platform.
+const testRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-fixtures-'));
+function temporaryDir(prefix) { return fs.mkdtempSync(path.join(testRoot, prefix)); }
+const demoFolder = path.join(testRoot, 'Demo workspace');
+fs.mkdirSync(demoFolder);
+fs.writeFileSync(path.join(demoFolder, 'README.md'), '# Disposable demo workspace\n');
+
 const models = [
   { id: 'gemini', label: 'Gemini', enabled: true },
   { id: 'grok', label: 'Grok', enabled: true },
@@ -37,7 +45,7 @@ function notebook(overrides) {
 }
 
 function make(plan, inspectFolder, extra) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-'));
+  const dir = temporaryDir('pw-orch-');
   const attempts = createAttemptEngine({ dir });
   const sentinel = createSentinel(attempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') });
   const orchestra = createOrchestrator({
@@ -130,7 +138,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).plan, 'Gemini');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' }, plans: [{ id: 'ChatGPT', readable: true, exhausted: true }] }).id, 'gemini-flash');
   assert.equal(pickWorker(full, { job: { title: 'Check the repo' } }).id, 'luna');
-  const planLive = make(notebook({ folder: 'D:\\demo' }), null, {
+  const planLive = make(notebook({ folder: demoFolder }), null, {
     models: full,
     fetchPlans: async () => [
       { id: 'ChatGPT', label: 'ChatGPT', readable: true, exhausted: true, pct: 100, leftPct: 0, windows: [{ name: 'weekly', pct: 100, leftPct: 0 }] },
@@ -155,7 +163,7 @@ function make(plan, inspectFolder, extra) {
   assert.ok(full.filter(item => item.plan === 'Grok').length > 1);
   assert.ok(full.filter(item => item.plan === 'Gemini').every(item => item.enabled === true));
 
-  const questions = make(notebook({ folder: 'D:\\demo', open: ['What is in scope?'] }));
+  const questions = make(notebook({ folder: demoFolder, open: ['What is in scope?'] }));
   let snap = await questions.orchestra.tick();
   assert.equal(snap.projects[0].status, 'waiting_on_you');
   assert.equal(questions.attempts.getAttempts().length, 0);
@@ -172,9 +180,9 @@ function make(plan, inspectFolder, extra) {
   const leadSnap = await questions.orchestra.tick();
   assert.equal(leadSnap.orchestratorId, 'grok');
   assert.ok(leadSnap.projects[0].crew.some(person => person.role === 'Orchestrator' && person.name === 'Grok'));
-  const talkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-ask-'));
+  const talkDir = temporaryDir('pw-orch-ask-');
   const talkAttempts = createAttemptEngine({ dir: talkDir });
-  const talkPlan = notebook({ folder: 'D:\\demo', open: ['What is in scope?'] });
+  const talkPlan = notebook({ folder: demoFolder, open: ['What is in scope?'] });
   let lastAskState = null;
   let lastAskInfo = null;
   const talkOrch = createOrchestrator({
@@ -183,7 +191,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(talkAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: talkDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     askModel: async (info) => {
       lastAskInfo = info;
       lastAskState = info.state;
@@ -198,19 +206,19 @@ function make(plan, inspectFolder, extra) {
   assert.notEqual(spokenA.answer, spokenB.answer);
   assert.ok(Array.isArray(lastAskState.history));
   assert.equal(lastAskState.history[0].user, 'What is Luna doing?');
-  assert.equal(lastAskInfo.folder, 'D:\\demo');
-  assert.equal(lastAskState.focus.folder, 'D:\\demo');
+  assert.equal(lastAskInfo.folder, demoFolder);
+  assert.equal(lastAskState.focus.folder, demoFolder);
 
-  const muteDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-mute-'));
+  const muteDir = temporaryDir('pw-orch-mute-');
   const muteAttempts = createAttemptEngine({ dir: muteDir });
-  const mutePlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
+  const mutePlan = notebook({ folder: demoFolder, open: [], tasks: [] });
   const muteOrch = createOrchestrator({
     readPlan: async () => mutePlan,
     attempts: muteAttempts,
     sentinel: createSentinel(muteAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: muteDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     askModel: async () => 'SHOULD-NOT-RUN'
   });
   const noLeadAsk = await muteOrch.ask('How far did we go with Demo?');
@@ -223,7 +231,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(muteAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: muteDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 21, names: ['README.md'], git: true, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 21, names: ['README.md'], git: true, head: '' }),
     askModel: async () => ''
   });
   await silentOrch.setOrchestrator('gemini');
@@ -231,9 +239,9 @@ function make(plan, inspectFolder, extra) {
   assert.match(silentAsk.answer, /no answer|CLI/i);
   assert.doesNotMatch(silentAsk.answer, /Evidence complete|Speaking as/i);
 
-  const thinkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-think-'));
+  const thinkDir = temporaryDir('pw-orch-think-');
   const thinkAttempts = createAttemptEngine({ dir: thinkDir });
-  const thinkPlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
+  const thinkPlan = notebook({ folder: demoFolder, open: [], tasks: [] });
   let sawProgress = false;
   const thinkOrch = createOrchestrator({
     readPlan: async () => thinkPlan,
@@ -241,7 +249,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(thinkAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: thinkDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: true, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: true, head: '' }),
     askModel: async ({ onProgress }) => {
       if (typeof onProgress === 'function') {
         onProgress({ thinking: 'I will inspect git.', answer: '', ms: 20 });
@@ -266,16 +274,16 @@ function make(plan, inspectFolder, extra) {
 
   let abortHits = 0;
   let resolveHang;
-  const hangDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-abort-'));
+  const hangDir = temporaryDir('pw-orch-abort-');
   const hangAttempts = createAttemptEngine({ dir: hangDir });
-  const hangPlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
+  const hangPlan = notebook({ folder: demoFolder, open: [], tasks: [] });
   const hangOrch = createOrchestrator({
     readPlan: async () => hangPlan,
     attempts: hangAttempts,
     sentinel: createSentinel(hangAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: hangDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: true, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: true, head: '' }),
     askModel: () => new Promise(resolve => { resolveHang = resolve; }),
     abortAsk: () => {
       abortHits += 1;
@@ -304,16 +312,16 @@ function make(plan, inspectFolder, extra) {
   assert.equal(afterStop.cancelled, undefined);
 
   let dispatchedModel = false;
-  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-dispatch-'));
+  const workDir = temporaryDir('pw-orch-dispatch-');
   const workAttempts = createAttemptEngine({ dir: workDir });
-  const workPlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
+  const workPlan = notebook({ folder: demoFolder, open: [], tasks: [] });
   const workOrch = createOrchestrator({
     readPlan: async () => workPlan,
     attempts: workAttempts,
     sentinel: createSentinel(workAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: workDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: true, head: '', lastSubject: 'Add README' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: true, head: '', lastSubject: 'Add README' }),
     askModel: async () => {
       dispatchedModel = true;
       return 'SHOULD-NOT-IMPLEMENT';
@@ -327,7 +335,7 @@ function make(plan, inspectFolder, extra) {
   assert.match(dispatched.answer, /dispatch|assign workers/i);
   assert.doesNotMatch(dispatched.answer, /SHOULD-NOT-IMPLEMENT/);
 
-  const idle = make(notebook({ folder: 'D:\\demo', open: [], tasks: [] }));
+  const idle = make(notebook({ folder: demoFolder, open: [], tasks: [] }));
   snap = await idle.orchestra.tick();
   assert.ok(Array.isArray(snap.fleet));
   assert.ok(Array.isArray(snap.plans));
@@ -353,10 +361,10 @@ function make(plan, inspectFolder, extra) {
   assert.equal(switched.snapshot.models.find(item => item.id === 'gemini').enabled, false);
   assert.equal(snap.projects[0].status, 'idle');
   assert.equal(snap.projects[0].waitingFor, 'Auto start');
-  assert.match(snap.projects[0].next, /Auto start/);
+  assert.equal(snap.projects[0].next, 'Review the Living Plan.');
   assert.equal(snap.projects[0].canStart, true);
 
-  const fresh = make(notebook({ folder: 'D:\\demo', open: [], tasks: [], fresh: true }));
+  const fresh = make(notebook({ folder: demoFolder, open: [], tasks: [], fresh: true }));
   snap = await fresh.orchestra.tick();
   assert.equal(snap.grillPropose, true);
   assert.equal(snap.grillKind, 'me');
@@ -378,7 +386,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(snap.projects[0].pipeline.find(item => item.id === 'check').state, 'done');
   assert.ok(snap.projects[0].crew.some(person => person.role === 'Orchestrator' && person.name === 'Orchestrator'));
   assert.ok(snap.projects[0].crew.some(person => person.role === 'Worker' && person.name === 'None yet'));
-  const forcedMe = make(notebook({ folder: 'D:\\demo', open: [], tasks: [], fresh: true }));
+  const forcedMe = make(notebook({ folder: demoFolder, open: [], tasks: [], fresh: true }));
   await forcedMe.orchestra.setGrillPropose(true, 'me');
   const meStart = await forcedMe.orchestra.startAutoTask('demo');
   assert.equal(meStart.ok, true);
@@ -389,7 +397,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(skipped.snapshot.projects[0].status, 'idle');
   assert.equal(skipped.snapshot.projects[0].grillSkipped, true);
 
-  const flagged = make(notebook({ folder: 'D:\\demo', open: [], tasks: [], fresh: true }));
+  const flagged = make(notebook({ folder: demoFolder, open: [], tasks: [], fresh: true }));
   snap = await flagged.orchestra.setGrillPropose(false);
   assert.equal(snap.grillPropose, false);
   assert.equal(snap.projects[0].status, 'idle');
@@ -402,13 +410,13 @@ function make(plan, inspectFolder, extra) {
   snap = await noFolder.orchestra.tick();
   assert.equal(snap.projects[0].status, 'blocked_no_folder');
 
-  const ready = make(notebook({ folder: 'D:\\demo', open: [] }));
+  const ready = make(notebook({ folder: demoFolder, open: [] }));
   snap = await ready.orchestra.tick();
   assert.equal(snap.projects[0].status, 'needs_approval');
   assert.equal(snap.projects[0].canStart, true);
   assert.match(snap.projects[0].doing, /Approve/);
   assert.equal(snap.projects[0].waitingFor, 'Your Approve run');
-  assert.match(snap.projects[0].next, /Approve to assign/);
+  assert.equal(snap.projects[0].next, 'Approve the prepared job.');
   assert.equal(snap.projects[0].step, 'approve');
   assert.ok(snap.projects[0].crew.some(person => person.role === 'Worker' && person.name !== 'None yet'));
   assert.equal(ready.attempts.getAttempts().length, 0);
@@ -427,27 +435,27 @@ function make(plan, inspectFolder, extra) {
   assert.equal(again.projects[0].status, 'watching');
   assert.equal(ready.attempts.getAttempts().length, 1);
 
-  const grokOnly = make(notebook({ folder: 'D:\\demo', open: [] }));
+  const grokOnly = make(notebook({ folder: demoFolder, open: [] }));
   const grokOrchestra = createOrchestrator({
-    readPlan: async () => notebook({ folder: 'D:\\demo', open: [] }),
+    readPlan: async () => notebook({ folder: demoFolder, open: [] }),
     attempts: grokOnly.attempts,
     sentinel: createSentinel(grokOnly.attempts, { isAlive: () => true }),
     models: [{ id: 'grok', label: 'Grok', enabled: true }],
     dir: grokOnly.dir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['a'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['a'], git: false, head: '' })
   });
   snap = await grokOrchestra.tick();
   assert.equal(snap.projects[0].status, 'needs_approval');
   assert.equal(snap.projects[0].doing.includes('Grok') || snap.mode === 'manual', true);
 
-  const autoRun = make(notebook({ folder: 'D:\\demo', open: [] }));
+  const autoRun = make(notebook({ folder: demoFolder, open: [] }));
   snap = await autoRun.orchestra.setMode('auto');
   assert.equal(snap.mode, 'auto');
   assert.equal(snap.projects[0].status, 'watching');
   assert.equal(autoRun.attempts.getAttempts().length, 1);
   assert.ok(snap.models.some(item => item.id === 'gemini' && item.used > 0));
 
-  const startPlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
+  const startPlan = notebook({ folder: demoFolder, open: [], tasks: [] });
   const startBox = make(startPlan);
   await startBox.orchestra.setMode('auto');
   await startBox.orchestra.setGrillPropose(false);
@@ -455,7 +463,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(questionsStart.ok, true);
   assert.equal(questionsStart.phase, 'grill');
   assert.equal(questionsStart.clearJob, true);
-  const openIdle = make(notebook({ folder: 'D:\\demo', open: ['What is in scope?'], tasks: [] }));
+  const openIdle = make(notebook({ folder: demoFolder, open: ['What is in scope?'], tasks: [] }));
   const grilledOpen = await openIdle.orchestra.startAutoTask('demo');
   assert.equal(grilledOpen.ok, true);
   assert.equal(grilledOpen.phase, 'grill');
@@ -492,17 +500,17 @@ function make(plan, inspectFolder, extra) {
   assert.equal(startedRun.snapshot.projects[0].modelId, 'gemini');
   assert.equal(startBox.attempts.getAttempts().length, 1);
 
-  const spawnDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-spawn-'));
+  const spawnDir = temporaryDir('pw-orch-spawn-');
   const spawnAttempts = createAttemptEngine({ dir: spawnDir });
   const spawned = [];
-  const spawnPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const spawnPlan = notebook({ folder: demoFolder, open: [] });
   const spawnOrch = createOrchestrator({
     readPlan: async () => spawnPlan,
     attempts: spawnAttempts,
     sentinel: createSentinel(spawnAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: spawnDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: info => {
       spawned.push(info);
       return { pid: 4242, logPath: path.join(spawnDir, 'logs', 'attempt.log') };
@@ -515,12 +523,12 @@ function make(plan, inspectFolder, extra) {
   assert.equal(spawnApproved.snapshot.projects[0].workerPid, 4242);
   assert.equal(spawnApproved.snapshot.projects[0].workerAlive, true);
   assert.equal(spawned.length, 1);
-  assert.equal(spawned[0].folder, 'D:\\demo');
+  assert.equal(spawned[0].folder, demoFolder);
   assert.equal(spawnOrch.pidFor(spawnAttempts.getAttempts()[0]), 4242);
 
-  const splitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-split-'));
+  const splitDir = temporaryDir('pw-orch-split-');
   const splitAttempts = createAttemptEngine({ dir: splitDir });
-  const splitPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const splitPlan = notebook({ folder: demoFolder, open: [] });
   splitPlan.projects[0].tasks[0].title = 'Implement the parser';
   splitPlan.projects[0].tasks[0].detail = 'Write code.';
   const splitCalls = [];
@@ -531,7 +539,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(splitAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: splitDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: info => {
       splitCalls.push(info);
       return { pid: splitPid++, logPath: path.join(splitDir, 'logs', `${info.attemptId}.log`) };
@@ -547,10 +555,10 @@ function make(plan, inspectFolder, extra) {
   assert.ok(splitApproved.snapshot.projects[0].crew.every(person => person.name !== 'Planwharf'));
 
   let failClock = '2026-10-09T17:00:00.000Z';
-  const failDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-fail-'));
+  const failDir = temporaryDir('pw-orch-fail-');
   fs.mkdirSync(path.join(failDir, 'logs'), { recursive: true });
   const failAttempts = createAttemptEngine({ dir: failDir });
-  const failPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const failPlan = notebook({ folder: demoFolder, open: [] });
   const killed = [];
   let nextPid = 500;
   const failOrch = createOrchestrator({
@@ -561,7 +569,7 @@ function make(plan, inspectFolder, extra) {
     dir: failDir,
     now: () => failClock,
     stallMs: 1000,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: info => {
       const logPath = path.join(failDir, 'logs', `${info.attemptId}.log`);
       fs.writeFileSync(logPath, 'started\n');
@@ -583,9 +591,9 @@ function make(plan, inspectFolder, extra) {
   assert.equal(killed[0], 500);
   assert.ok(snap.projects[0].log.some(line => /Switched from Gemini to Grok/.test(line.text)));
 
-  const deadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-dead-'));
+  const deadDir = temporaryDir('pw-orch-dead-');
   const deadAttempts = createAttemptEngine({ dir: deadDir });
-  const deadPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const deadPlan = notebook({ folder: demoFolder, open: [] });
   let deadPid = 700;
   const deadOrch = createOrchestrator({
     readPlan: async () => deadPlan,
@@ -593,7 +601,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(deadAttempts, { isAlive: () => false }),
     models,
     dir: deadDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: deadPid++, logPath: path.join(deadDir, 'logs', 'w.log') }),
     isProcessAlive: () => false,
     killWorker: () => {}
@@ -603,16 +611,16 @@ function make(plan, inspectFolder, extra) {
   assert.equal(deadApproved.snapshot.projects[0].modelId, 'grok');
   assert.deepEqual(deadApproved.snapshot.projects[0].tried, ['gemini']);
 
-  const noneDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-none-'));
+  const noneDir = temporaryDir('pw-orch-none-');
   const noneAttempts = createAttemptEngine({ dir: noneDir });
-  const nonePlan = notebook({ folder: 'D:\\demo', open: [] });
+  const nonePlan = notebook({ folder: demoFolder, open: [] });
   const noneOrch = createOrchestrator({
     readPlan: async () => nonePlan,
     attempts: noneAttempts,
     sentinel: createSentinel(noneAttempts, { isAlive: () => false }),
     models: [{ id: 'gemini', label: 'Gemini', enabled: true }],
     dir: noneDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: 900, logPath: path.join(noneDir, 'logs', 'w.log') }),
     isProcessAlive: () => false,
     killWorker: () => {}
@@ -626,16 +634,16 @@ function make(plan, inspectFolder, extra) {
   assert.match(noneApproved.snapshot.projects[0].doing, /Checkpoint saved/);
   assert.match(noneApproved.snapshot.projects[0].waitingFor, /Resume from checkpoint/);
 
-  const badDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-bad-'));
+  const badDir = temporaryDir('pw-orch-bad-');
   const badAttempts = createAttemptEngine({ dir: badDir });
-  const badPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const badPlan = notebook({ folder: demoFolder, open: [] });
   const badOrch = createOrchestrator({
     readPlan: async () => badPlan,
     attempts: badAttempts,
     sentinel: createSentinel(badAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models: [{ id: 'gemini', label: 'Gemini', enabled: true }],
     dir: badDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: 1100, logPath: path.join(badDir, 'logs', 'w.log') }),
     isProcessAlive: () => true,
     killWorker: () => {}
@@ -652,8 +660,8 @@ function make(plan, inspectFolder, extra) {
   assert.equal(fs.existsSync(snap.projects[0].checkpoint.path), true);
   assert.match(snap.projects[0].doing, /Checkpoint saved/);
 
-  const stalePlan = notebook({ folder: 'D:\\demo', open: [], tasks: [] });
-  const staleDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-stale-'));
+  const stalePlan = notebook({ folder: demoFolder, open: [], tasks: [] });
+  const staleDir = temporaryDir('pw-orch-stale-');
   const staleAttempts = createAttemptEngine({ dir: staleDir });
   staleAttempts.claim({ taskId: 'task-1', projectId: 'demo', modelId: 'gemini', candidates: models });
   const staleOrch = createOrchestrator({
@@ -662,23 +670,23 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(staleAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: staleDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' })
   });
   snap = await staleOrch.tick();
   assert.equal(snap.projects[0].status, 'idle');
   assert.equal(staleAttempts.getAttempts().every(item => item.status !== 'active'), true);
 
-  const completeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-'));
+  const completeDir = temporaryDir('pw-orch-');
   const completeAttempts = createAttemptEngine({ dir: completeDir });
   const completeSentinel = createSentinel(completeAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') });
-  const completePlan = notebook({ folder: 'D:\\demo', open: [] });
+  const completePlan = notebook({ folder: demoFolder, open: [] });
   const completeOrch = createOrchestrator({
     readPlan: async () => completePlan,
     attempts: completeAttempts,
     sentinel: completeSentinel,
     models,
     dir: completeDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' })
   });
   await completeOrch.approve('demo');
   const attempt = completeAttempts.getAttempts()[0];
@@ -689,7 +697,7 @@ function make(plan, inspectFolder, extra) {
   const { createServer: realCreateServer } = require('../server.cjs');
   // HTTP lifecycle scenarios use one stable worker; production roster is tested above.
   const createServer = options => realCreateServer({ models: full.map(item => ({ ...item, enabled: item.id === 'grok-4-6' })), fetchPlans: async () => [], ...options });
-  const httpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-http-'));
+  const httpDir = temporaryDir('pw-orch-http-');
   const httpPlan = path.join(httpDir, 'plan.json');
   const httpFolder = path.join(httpDir, 'repo');
   fs.mkdirSync(httpFolder);
@@ -737,7 +745,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => httpServer.close(resolve));
   }
 
-  const gitHttpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-start-'));
+  const gitHttpDir = temporaryDir('pw-orch-start-');
   const gitRepo = path.join(gitHttpDir, 'repo');
   fs.mkdirSync(gitRepo);
   fs.writeFileSync(path.join(gitRepo, 'README.md'), 'demo\n');
@@ -791,7 +799,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => startServer.close(resolve));
   }
 
-  const chatDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-chat-'));
+  const chatDir = temporaryDir('pw-orch-chat-');
   const chatRepo = path.join(chatDir, 'repo');
   fs.mkdirSync(chatRepo);
   fs.writeFileSync(path.join(chatRepo, 'README.md'), 'demo\n');
@@ -821,7 +829,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => chatServer.close(resolve));
   }
 
-  const abortDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-askcancel-'));
+  const abortDir = temporaryDir('pw-orch-askcancel-');
   const abortRepo = path.join(abortDir, 'repo');
   fs.mkdirSync(abortRepo);
   fs.writeFileSync(path.join(abortRepo, 'README.md'), 'demo\n');
@@ -865,7 +873,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => abortServer.close(resolve));
   }
 
-  const grillDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-grill-'));
+  const grillDir = temporaryDir('pw-orch-grill-');
   const grillRepo = path.join(grillDir, 'repo');
   fs.mkdirSync(grillRepo);
   fs.writeFileSync(path.join(grillRepo, 'README.md'), '# Demo\n');
@@ -898,7 +906,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => grillServer.close(resolve));
   }
 
-  const skipDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-skip-'));
+  const skipDir = temporaryDir('pw-orch-skip-');
   const skipRepo = path.join(skipDir, 'repo');
   fs.mkdirSync(skipRepo);
   const skipPlanFile = path.join(skipDir, 'plan.json');
@@ -925,7 +933,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => skipServer.close(resolve));
   }
 
-  const openSkipDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-openskip-'));
+  const openSkipDir = temporaryDir('pw-orch-openskip-');
   const openSkipRepo = path.join(openSkipDir, 'repo');
   fs.mkdirSync(openSkipRepo);
   const openSkipPlanFile = path.join(openSkipDir, 'plan.json');
@@ -945,7 +953,7 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => openSkipServer.close(resolve));
   }
 
-  const pipelineDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-pipe-'));
+  const pipelineDir = temporaryDir('pw-orch-pipe-');
   const pipelineRepo = path.join(pipelineDir, 'repo');
   fs.mkdirSync(pipelineRepo);
   fs.writeFileSync(path.join(pipelineRepo, 'README.md'), '# Demo\n');
@@ -974,10 +982,10 @@ function make(plan, inspectFolder, extra) {
   }
 
   let clock = '2026-10-09T16:00:00.000Z';
-  const duePlan = notebook({ folder: 'D:\\demo', open: [] });
+  const duePlan = notebook({ folder: demoFolder, open: [] });
   duePlan.projects[0].tasks[0].timing = 'deadline';
   duePlan.projects[0].tasks[0].deadlineAt = '2026-10-09T17:00:00.000Z';
-  const dueDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-due-'));
+  const dueDir = temporaryDir('pw-orch-due-');
   const dueAttempts = createAttemptEngine({ dir: dueDir });
   const dueOrch = createOrchestrator({
     readPlan: async () => duePlan,
@@ -986,7 +994,7 @@ function make(plan, inspectFolder, extra) {
     models,
     dir: dueDir,
     now: () => clock,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' })
   });
   const dueApproved = await dueOrch.approve('demo');
   assert.equal(dueApproved.ok, true);
@@ -1004,9 +1012,9 @@ function make(plan, inspectFolder, extra) {
   assert.equal(resumed.snapshot.projects[0].status, 'watching');
   assert.equal(dueAttempts.getAttempts().filter(item => item.status === 'active').length, 1);
 
-  const stopDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-stop-'));
+  const stopDir = temporaryDir('pw-orch-stop-');
   const stopAttempts = createAttemptEngine({ dir: stopDir });
-  const stopPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const stopPlan = notebook({ folder: demoFolder, open: [] });
   const stopKilled = [];
   let stopPid = 777;
   const stopOrch = createOrchestrator({
@@ -1015,7 +1023,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(stopAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: stopDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: stopPid++, logPath: path.join(stopDir, 'logs', 'attempt.log') }),
     isProcessAlive: pid => !stopKilled.includes(pid),
     killWorker: pid => { stopKilled.push(pid); }
@@ -1036,12 +1044,12 @@ function make(plan, inspectFolder, extra) {
   assert.equal(stopAttempts.getAttempts().every(item => item.status !== 'active'), true);
   const stopAgain = await stopOrch.stop('demo');
   assert.equal(stopAgain.ok, false);
-  const waitPlan = notebook({ folder: 'D:\\demo', open: ['What is the smallest slice?'] });
+  const waitPlan = notebook({ folder: demoFolder, open: ['What is the smallest slice?'] });
   const waitOrch = createOrchestrator({
     readPlan: async () => waitPlan,
-    attempts: createAttemptEngine({ dir: fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-wait-')) }),
+    attempts: createAttemptEngine({ dir: temporaryDir('pw-orch-wait-') }),
     models,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' })
   });
   const waitSnap = await waitOrch.tick();
   assert.equal(waitSnap.projects[0].status, 'waiting_on_you');
@@ -1053,7 +1061,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(resumedStop.snapshot.projects[0].status, 'watching');
   assert.equal(resumedStop.snapshot.projects[0].canStop, true);
 
-  const stopHttpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-stop-http-'));
+  const stopHttpDir = temporaryDir('pw-orch-stop-http-');
   const stopHttpRepo = path.join(stopHttpDir, 'repo');
   fs.mkdirSync(stopHttpRepo);
   fs.writeFileSync(path.join(stopHttpRepo, 'README.md'), '# Demo\n');
@@ -1095,9 +1103,9 @@ function make(plan, inspectFolder, extra) {
     await new Promise(resolve => stopHttpServer.close(resolve));
   }
 
-  const keepDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-keep-'));
+  const keepDir = temporaryDir('pw-orch-keep-');
   const keepAttempts = createAttemptEngine({ dir: keepDir });
-  const keepPlan = notebook({ folder: 'D:\\demo', open: [] });
+  const keepPlan = notebook({ folder: demoFolder, open: [] });
   let keepPid = 4400;
   const keepOrch = createOrchestrator({
     readPlan: async () => keepPlan,
@@ -1105,7 +1113,7 @@ function make(plan, inspectFolder, extra) {
     sentinel: createSentinel(keepAttempts, { isAlive: attempt => Boolean(attempt && attempt.status === 'active') }),
     models,
     dir: keepDir,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: keepPid++, logPath: path.join(keepDir, 'logs', 'attempt.log') }),
     isProcessAlive: () => false,
     killWorker: () => {}
@@ -1123,7 +1131,7 @@ function make(plan, inspectFolder, extra) {
     models,
     dir: keepDir,
     now: () => keepClock,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' }),
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' }),
     spawnWorker: () => ({ pid: keepPid++, logPath: path.join(keepDir, 'logs', 'attempt.log') }),
     isProcessAlive: () => true,
     killWorker: () => {}
@@ -1145,7 +1153,7 @@ function make(plan, inspectFolder, extra) {
     models: [{ id: 'gemini', label: 'Gemini', enabled: false }, { id: 'grok', label: 'Grok', enabled: false }],
     dir: keepDir,
     now: () => keepClock,
-    inspectFolder: () => ({ folder: 'D:\\demo', fileCount: 1, names: ['README.md'], git: false, head: '' })
+    inspectFolder: () => ({ folder: demoFolder, fileCount: 1, names: ['README.md'], git: false, head: '' })
   });
   const keepFileSnap = await keepFromFile.tick();
   assert.equal(keepFileSnap.projects[0].status, 'checkpointed');
@@ -1155,7 +1163,7 @@ function make(plan, inspectFolder, extra) {
   assert.equal(keepResumed.ok, true);
   assert.equal(keepResumed.snapshot.projects[0].status, 'watching');
 
-  const keepHttpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-orch-keep-http-'));
+  const keepHttpDir = temporaryDir('pw-orch-keep-http-');
   const keepHttpRepo = path.join(keepHttpDir, 'repo');
   fs.mkdirSync(keepHttpRepo);
   fs.writeFileSync(path.join(keepHttpRepo, 'README.md'), '# Demo\n');
@@ -1207,4 +1215,8 @@ function make(plan, inspectFolder, extra) {
 })().catch(error => {
   console.error(error);
   process.exitCode = 1;
+}).finally(() => {
+  const target = path.resolve(testRoot);
+  assert.ok(target.startsWith(path.resolve(os.tmpdir()) + path.sep));
+  fs.rmSync(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
 });
