@@ -74,6 +74,10 @@
     button('Add selected track',actions,()=>controller.addToPlaylist(editorSelect.value,trackSelect.value));
     const playlistTracks=make('ul','',editor,{'data-soundtrack-playlist-tracks':''});
     const player=make('aside','',document.body,{class:'soundtrack-player','aria-label':'Soundtrack player','data-soundtrack-player':''});
+    // Reserve the measured bar height, including wrapped controls and browser zoom.
+    const reservePlayerSpace=()=>document.documentElement.style.setProperty('--soundtrack-space',Math.ceil(player.getBoundingClientRect().height+20)+'px');
+    new ResizeObserver(reservePlayerSpace).observe(player);
+    reservePlayerSpace();
     const title=make('span','No track selected',player,{class:'soundtrack-current','data-soundtrack-title':''});
     button('Previous',player,()=>controller.previous(),{'data-soundtrack-previous':''});
     const play=button('Play',player,()=>controller.snapshot().playing?controller.pause():controller.play(),{'data-soundtrack-play':''});

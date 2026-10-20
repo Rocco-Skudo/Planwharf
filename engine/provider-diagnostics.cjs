@@ -2,7 +2,8 @@
 
 // Reports contain only route identity and a bounded category, never raw prompts or credentials.
 function diagnoseProvider(model, value, exitCode = null) {
-  const text = String(value || '');
+  // A structured fatal response is stronger evidence than incidental stderr.
+  const text = typeof value === 'object' && value !== null ? String(value.error || value.stderr || '') : String(value || '');
   const provider = model.providerId || model.provider || 'unknown';
   const adapter = model.adapter || model.provider || 'unknown';
   const id = model.cli || model.id || 'unknown';
@@ -14,8 +15,8 @@ function diagnoseProvider(model, value, exitCode = null) {
   else if (/unexpected argument|unknown (?:option|flag)|unrecognized (?:argument|option)|flag provided but not defined|unsupported.*format|incompatible.*protocol/i.test(text)) { code = 'PROVIDER_CLI_INCOMPATIBLE'; suggestion = 'The CLI interface may have changed. Check its version and update the Planwharf adapter.'; }
   else if (/PROVIDER_PROTOCOL_CHANGED|missing or invalid structured|unreadable.*(?:metadata|response)|no recognized response/i.test(text)) { code = 'PROVIDER_PROTOCOL_CHANGED'; suggestion = 'The response contract could not be verified. Review CLI versions and the adapter parser.'; }
   else if (/401|unauthorized|authentication|not logged in|invalid.*(?:key|token)/i.test(text)) { code = 'PROVIDER_AUTHENTICATION_FAILED'; suggestion = 'Sign in to this provider again, then refresh models.'; }
-  else if (/429|quota|credit|spending.limit|rate.limit/i.test(text)) { code = 'PROVIDER_USAGE_LIMIT'; suggestion = 'Check provider quota and your configured usage policy.'; }
-  else if (/invalid model selection|model.*(?:not found|unsupported|unavailable|does not exist|not recognized|unknown)|access.*model|model.*access/i.test(text)) { code = 'PROVIDER_MODEL_UNAVAILABLE'; suggestion = 'Refresh models and verify access to this exact provider/model ID.'; }
+  else if (/invalid model selection|model.*(?:not found|unsupported|not supported|unavailable|does not exist|not recognized|unknown)|access.*model|model.*access/i.test(text)) { code = 'PROVIDER_MODEL_UNAVAILABLE'; suggestion = 'This exact model was rejected. Check CLI version and account access; refresh cannot verify inference or select a substitute.'; }
+  else if (/\b429\b|quota|credit|spending.limit|rate.limit/i.test(text)) { code = 'PROVIDER_USAGE_LIMIT'; suggestion = 'Check provider quota and your configured usage policy.'; }
   else if (/executable not found|ENOENT/i.test(text)) { code = 'PROVIDER_CLI_MISSING'; suggestion = 'Install or configure this adapter executable.'; }
   else if (/timeout|ETIMEDOUT|ENOTFOUND|ECONN|certificate|network/i.test(text)) { code = 'PROVIDER_CONNECTION_FAILED'; suggestion = 'Check connectivity and certificates before retrying.'; }
   const message = `${code}: ${provider} / ${id}. ${suggestion}`;

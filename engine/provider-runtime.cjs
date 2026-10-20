@@ -122,4 +122,17 @@ function launchSpec(model, folder, prompt, lead = false, research = false) {
   return { command, args, cwd: folder, provider, adapter, model: cli, ...(stdin !== undefined ? { stdin } : {}), ...(promptFile ? { promptFile } : {}) };
 }
 
-module.exports = { executable, launchSpec, providerEnvironment };
+const versions = new Map();
+function cliVersion(provider) {
+  const command = executable(provider);
+  if (!command) return null;
+  try {
+    const key = command + ':' + fs.statSync(command).mtimeMs;
+    if (!versions.has(key)) {
+      const output = require('node:child_process').execFileSync(command, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] });
+      versions.set(key, output.trim().match(/^(?:codex-cli\s+)?(\d+\.\d+\.\d+(?:[-+][\w.-]+)?)$/)?.[1] || null);
+    }
+    return versions.get(key);
+  } catch { return null; }
+}
+module.exports = { executable, launchSpec, providerEnvironment, cliVersion };

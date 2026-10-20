@@ -448,7 +448,7 @@ function askOrchestrator(info) {
       if (errorOrCode || out.failure) out.failure ||= 'process';
       if (!out.answer && !out.failure) out.failure = 'PROVIDER_PROTOCOL_CHANGED';
       if (out.failure) {
-        out.diagnostic = diagnoseProvider(info.model, stderr || out.error || out.failure, out.processExit);
+        out.diagnostic = diagnoseProvider(info.model, { error: out.error, stderr: stderr || out.failure }, out.processExit);
         out.answer = out.diagnostic.message + (out.answer ? '\n\n' + out.answer : '');
       }
       resolve(out);

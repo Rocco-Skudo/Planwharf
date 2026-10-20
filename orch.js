@@ -543,9 +543,10 @@
     const models = `<section class="dash-section dash-zone-models"><h3>Models</h3>${roleSupportNotice}${rolesSupported ? `<div class="model-role-bulk" aria-label="Select models by role">${PlanwharfWorkspaceUI.roles.map(role => `<fieldset><legend>${role[0].toUpperCase() + role.slice(1)}</legend><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="true">Select all</button><button type="button" class="secondary compact" data-role-bulk="${role}" ${role === 'supervisor' && !fleet.some(model => model.roleEligibility?.supervisor === true) ? 'disabled' : ''} data-role-enabled="false">Deselect all</button></fieldset>`).join('')}</div><p class="muted">Role buttons apply to all compatible models, including models hidden by filters.</p>` : ''}<div class="dash-models">${providerControls}</div><p class="muted">Showing ${visibleFleet.length} of ${fleet.length} models. Search includes current models. ${excludedFleet.length} models no longer listed by their provider are hidden; saved roles and execution history are retained.</p><div class="dash-models">${visibleFleet.map(item => {
       const jobs = item.assignments || [];
       const doing = jobs.map(job => `${job.project}${job.taskTitle ? ' / ' + job.taskTitle : ''}${job.attemptId ? ' / attempt ' + job.attemptId : ''}: ${job.activity || job.slice || item.state}`).join(' · ') || (item.available === false ? 'Unavailable' : item.exhausted ? 'Exhausted' : item.providerEnabled === false ? 'Provider disabled' : item.enabled ? 'Idle' : 'No roles assigned');
-      const availabilityText = item.availabilityWarning
-        ? `Availability unread: ${item.availabilityWarning} Last known status: ${item.available === false ? 'unavailable' : 'available'}.`
-        : item.available === false ? item.unavailableReason : doing;
+      const availabilityText = item.available === false ? item.unavailableReason
+        : item.inferenceStatus === 'verified' ? 'Inference verified for this account and CLI.'
+        : item.availabilityVerified ? 'Catalog listed. Inference has not been verified for this account and CLI.'
+        : item.availabilityWarning || 'Configured route. Inference has not been verified.';
       const pids = jobs.map(job => `pid ${job.pid || '—'} ${job.alive ? 'alive' : 'stopped'}`).join(' · ');
       const roleFlags = rolesSupported ? PlanwharfWorkspaceUI.roles.map(role => {
         const compatible = role === 'supervisor' ? item.roleEligibility?.supervisor === true && typeof item.roles?.supervisor === 'boolean' : item.roleEligibility?.[role] !== false;
@@ -553,8 +554,8 @@
         const title = compatible ? 'Permit this model to perform this role' : 'This model is not compatible with this role';
         return `<label title="${escape(title)}"><input type="checkbox" data-model-role="${escape(item.id)}" data-role="${role}" ${selected ? 'checked' : ''} ${compatible ? '' : 'disabled'}>${role[0].toUpperCase() + role.slice(1)}${compatible ? '' : ' (not supported)'}</label>`;
       }).join('') : '';
-      const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.availabilityWarning ? 'Availability unread' : item.state || 'idle')}</span>`);
-      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planById(item.plan))}<p>${escape(availabilityText)}</p>${item.availabilityCheckedAt ? `<p class="muted">Availability checked: ${escape(new Date(item.availabilityCheckedAt).toLocaleString('en-GB'))}</p>` : ''}${pids ? `<p class="muted">${escape(pids)}</p>` : ''}${rolesSupported ? `<fieldset class="model-role-flags"><legend>Allowed roles</legend>${roleFlags}</fieldset>` : ''}</article>`;
+      const leadBadge = item.lead ? '<span class="badge green">Lead</span>' : (item.exhausted ? '<span class="badge off">Exhausted</span>' : `<span class="badge">${escape(item.inferenceStatus === 'rejected' ? 'Model rejected' : item.inferenceStatus === 'verified' ? 'Inference verified' : 'Inference unverified')}</span>`);
+      return `<article class="dash-model state-${escape(item.state || 'idle')}${item.lead ? ' is-lead' : ''}"><header><strong>${escape(item.label)}</strong>${leadBadge}</header><p class="muted">${escape(item.plan || '—')} · ${escape(item.role || 'Worker')}</p>${PlanwharfQuota.html(planById(item.plan))}<p>${escape(availabilityText)}</p>${item.inferenceStatus === 'rejected' && !item.catalogExcluded ? `<button type="button" class="secondary compact" data-inference-retry="${escape(item.id)}">Allow retry of exact model</button>` : ''}${item.availabilityCheckedAt ? `<p class="muted">Availability checked: ${escape(new Date(item.availabilityCheckedAt).toLocaleString('en-GB'))}</p>` : ''}${pids ? `<p class="muted">${escape(pids)}</p>` : ''}${rolesSupported ? `<fieldset class="model-role-flags"><legend>Allowed roles</legend>${roleFlags}</fieldset>` : ''}</article>`;
     }).join('')}</div></section>`;
     const processes = `<section class="dash-section dash-zone-procs"><h3>Processes</h3><div class="dash-procs">${rows.map(row => {
       const parts = row.dispatch || [];
@@ -870,6 +871,14 @@
       finally { control.disabled = false; }
     });
     $('orchestrator').addEventListener('click', async event => {
+      const retry = event.target.closest('[data-inference-retry]');
+      if (retry) {
+        retry.disabled = true;
+        try { orchestra = await post('/api/models/inference-retry', { id: retry.dataset.inferenceRetry }); render(); notice('Exact model retry allowed. Inference remains unverified until a request succeeds.'); }
+        catch (error) { notice(error.message); }
+        finally { retry.disabled = false; }
+        return;
+      }
       const bulk = event.target.closest('[data-role-bulk]');
       if (bulk) {
         if (bulk.dataset.roleBulk === 'supervisor' && !(orchestra.models || []).some(model => model.roleEligibility?.supervisor === true && typeof model.roles?.supervisor === 'boolean')) { notice('This backend has no eligible Supervisor model. No role changes were sent.'); return; }

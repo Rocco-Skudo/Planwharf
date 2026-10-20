@@ -49,16 +49,17 @@ function catalogEntries(result) {
 }
 function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFile }) {
   const states = new Map(), restored = new Set(), stateScopes = new Map(), generations = new Map(), observedScopes = new Map(), blockedScopes = new Set(); let inflight, saving = Promise.resolve();
-  let cache = {};
+  let cache = {}, inference = {};
   if (cacheFile) try {
     const saved = JSON.parse(require('node:fs').readFileSync(cacheFile, 'utf8'));
     if (saved.schema === 1 && saved.catalogs && typeof saved.catalogs === 'object') {
       cache = saved.catalogs;
+      inference = saved.inference && typeof saved.inference === 'object' ? saved.inference : {};
       for (const key of saved.invalidatedScopes || []) if (typeof key === 'string' && /^[a-f0-9]{64}$/.test(key)) blockedScopes.add(key);
     }
   } catch { /* A missing or unreadable cache cannot verify provider access. */ }
   function cacheKey(provider) {
-    return require('node:crypto').createHash('sha256').update(JSON.stringify([provider.id, provider.adapter, provider.account?.key || null, require('./provider-catalog.cjs').providerConfiguration(provider)])).digest('hex');
+    return require('node:crypto').createHash('sha256').update(JSON.stringify([provider.id, provider.adapter, provider.account?.key || null, provider.adapter === 'codex' ? require('./provider-runtime.cjs').cliVersion('codex') : null, require('./provider-catalog.cjs').providerConfiguration(provider)])).digest('hex');
   }
   for (const provider of providers) observedScopes.set(provider.id, cacheKey(provider));
   function block(provider) {
@@ -91,6 +92,41 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFi
     if (changed) void saveCache();
   }
   const observeScope = providerId => ensureScopes(providerId);
+  function applyInference(provider, model) {
+    const state = inference[cacheKey(provider)]?.[model.cli];
+    model.inferenceStatus = state?.status || 'unverified';
+    if (state?.status === 'rejected') {
+      model.available = false;
+      model.unavailableReason = state.message;
+    }
+    model.availabilityWarning = model.inferenceStatus === 'verified' ? null : state?.status === 'rejected' ? state.message : 'Catalog listed; model inference has not been verified for this account and CLI.';
+  }
+  function inferenceScope(id) {
+    const model = models.find(model => model.id === id);
+    const provider = providers.find(provider => provider.id === model?.providerId);
+    return provider ? cacheKey(provider) : null;
+  }
+  async function recordInference(id, diagnostic, scope = inferenceScope(id)) {
+    const model = models.find(model => model.id === id);
+    const provider = providers.find(provider => provider.id === model?.providerId);
+    if (!provider || diagnostic && diagnostic.code !== 'PROVIDER_MODEL_UNAVAILABLE') return;
+    const key = cacheKey(provider);
+    if (scope !== key) return; // An old account/CLI response cannot verify the active route.
+    inference[key] ||= {};
+    inference[key][model.cli] = diagnostic ? { status: 'rejected', message: diagnostic.message } : { status: 'verified' };
+    applyInference(provider, model);
+    await saveCache(true);
+  }
+  async function allowInferenceRetry(id) {
+    const model = models.find(model => model.id === id);
+    const key = inferenceScope(id);
+    if (!key || blockedScopes.has(key) || model.catalogExcluded || inference[key]?.[model.cli]?.status !== 'rejected') return false;
+    delete inference[key][model.cli];
+    model.available = true; model.unavailableReason = null;
+    applyInference(providers.find(provider => provider.id === model.providerId), model);
+    await saveCache(true);
+    return true;
+  }
   function applyCatalog(provider, entries, checkedAt, verified) {
     for (const model of models.filter(m => m.providerId === provider.id)) {
       model.available = entries.some(m => m.cli === model.cli);
@@ -110,7 +146,7 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFi
       const temporary = cacheFile + '.' + require('node:crypto').randomUUID() + '.tmp';
       try {
         await fs.mkdir(require('node:path').dirname(cacheFile), { recursive: true });
-        await fs.writeFile(temporary, JSON.stringify({ schema: 1, catalogs: cache, invalidatedScopes: [...blockedScopes] }), { encoding: 'utf8', flag: 'wx' });
+        await fs.writeFile(temporary, JSON.stringify({ schema: 1, catalogs: cache, invalidatedScopes: [...blockedScopes], inference }), { encoding: 'utf8', flag: 'wx' });
         await fs.rename(temporary, cacheFile);
       } catch { if (strict) throw new Error('Provider access invalidation could not be persisted. Access remains blocked; retry before accepting the account change.'); }
       finally { try { await fs.rm(temporary, { force: true }); } catch {} }
@@ -134,6 +170,7 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFi
           const saved = cache[key], entries = saved && catalogEntries({ models: saved.models });
           if (!blockedScopes.has(key) && entries && typeof saved.checkedAt === 'string') {
             applyCatalog(provider, entries, saved.checkedAt, false);
+            for (const model of models.filter(model => model.providerId === provider.id)) applyInference(provider, model);
             states.set(provider.id, { providerId: provider.id, label: provider.label || provider.id, status: 'unread', checkedAt: saved.checkedAt, reason: 'Using the last verified catalog until startup discovery completes.', ids: entries.map(m => m.cli), preservingPreviousAvailability: true });
             stateScopes.set(provider.id, key);
           }
@@ -159,6 +196,8 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFi
           model.availabilityVerified = result.ok === true;
           model.availabilityCheckedAt = checkedAt;
           model.availabilityWarning = result.ok ? null : result.reason || 'Model catalog check failed; previous availability is retained.';
+          applyInference(provider, model);
+          if (!result.ok && model.inferenceStatus !== 'rejected') model.availabilityWarning = result.reason || 'Model catalog check failed; previous availability is retained.';
         }
         if (result.ok) {
           blockedScopes.delete(key);
@@ -174,6 +213,6 @@ function createCatalogDiscovery(models, providers, { discover, now, ttl, cacheFi
     return inflight;
   }
   function snapshot() { ensureScopes(); const list = providers.map(p => states.get(p.id) || { providerId: p.id, label: p.label || p.id, status: p.enabled === false ? 'disabled' : 'unknown', checkedAt: null, ids: [] }); return { providers: list, checking: Boolean(inflight), status: list.every(s => ['current', 'disabled'].includes(s.status)) ? 'current' : 'unread' }; }
-  return { refresh, snapshot, invalidate, observeScope };
+  return { refresh, snapshot, invalidate, observeScope, recordInference, inferenceScope, allowInferenceRetry };
 }
 module.exports = { createProviderModels, listGrok };

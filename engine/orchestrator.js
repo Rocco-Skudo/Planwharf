@@ -790,6 +790,7 @@ function fleetOf(models, projects, leadId, plans) {
       catalogExcluded: item.catalogExcluded === true,
       availabilityVerified: item.availabilityVerified === true,
       availabilityCheckedAt: item.availabilityCheckedAt || null,
+      inferenceStatus: item.inferenceStatus || 'unverified',
       availabilityWarning: item.availabilityWarning || null,
       accountType: item.accountType || 'unread',
       accountKey: item.accountKey || null,
@@ -2598,6 +2599,7 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
         };
         try {
           invokedLead = lead;
+          const inferenceScope = opts.inferenceScope?.(lead.id);
           const spoken = await opts.askModel({
             question: q,
             model: lead,
@@ -2635,7 +2637,8 @@ Orchestrator: ${turn.answer}`).join('\n\n').slice(-24000);
           thinking = unpacked.thinking;
           ms = unpacked.ms;
           diagnostic = spoken?.diagnostic || null;
-          if (diagnostic?.code === 'PROVIDER_MODEL_UNAVAILABLE') {
+          if (!spoken?.failure || diagnostic?.code === 'PROVIDER_MODEL_UNAVAILABLE') await opts.recordInference?.(lead.id, diagnostic, inferenceScope);
+          if (diagnostic?.code === 'PROVIDER_MODEL_UNAVAILABLE' && (!opts.inferenceScope || opts.inferenceScope(lead.id) === inferenceScope)) {
             const rejected = models.find(model => model.id === lead.id);
             if (rejected) { rejected.available = false; rejected.unavailableReason = diagnostic.message; }
           }
