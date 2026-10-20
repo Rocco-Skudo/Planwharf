@@ -24,6 +24,7 @@ node('worker-state-filter').value = 'all';
   assert.ok(page.includes(`id="${embedded ? 'dashboard-' : ''}orch-request-mode"`));
   assert.ok(page.includes(`id="${embedded ? 'dashboard-' : ''}orch-gold-hint"`));
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'quota.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'model-policy-ui.js'), 'utf8'), context);
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'orch.js'), 'utf8'), context);
   await flush();
   assert.match(workerSection(), /No workers launched/);

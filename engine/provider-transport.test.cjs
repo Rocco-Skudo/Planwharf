@@ -109,10 +109,10 @@ async function main() {
       assert.equal(received.input.split('\n').filter(Boolean).length, 1, 'AGY gets exactly one complete JSON user event');
       assert.equal(JSON.parse(received.input).event, 'user');
     }
-    const opts = { folder, result: path.join(folder, 'result.txt'), title: 'Isolated implementation', detail, worker: 'Fixture', attempt: 'fixture', model };
+    const opts = { linkedFolder: folder, folder, result: path.join(folder, 'result.txt'), title: 'Isolated implementation', detail, worker: 'Fixture', attempt: 'fixture', model };
     fs.writeFileSync(path.join(folder, 'job.json'), JSON.stringify(opts));
     const bootstrap = path.join(folder, 'bootstrap.cjs');
-    fs.writeFileSync(bootstrap, `const opts=require('./job.json');const args=['node','runner'];for(const key of ['folder','result','title','detail','worker','attempt'])args.push('--'+key,opts[key]);args.push('--model-json',JSON.stringify(opts.model));require(${JSON.stringify(path.join(__dirname, 'runner.cjs'))}).run(args);`);
+    fs.writeFileSync(bootstrap, `const opts=require('./job.json');const args=['node','runner','--linked-folder',opts.linkedFolder];for(const key of ['folder','result','title','detail','worker','attempt'])args.push('--'+key,opts[key]);args.push('--model-json',JSON.stringify(opts.model));require(${JSON.stringify(path.join(__dirname, 'runner.cjs'))}).run(args);`);
     const worker = spawnSync(process.execPath, [bootstrap], { encoding: 'utf8', timeout: 10000, env: process.env });
     assert.equal(worker.error, undefined); assert.equal(worker.status, 0, provider + ': ' + worker.stderr);
     assert.match(fs.readFileSync(opts.result, 'utf8'), /STATUS: COMPLETE/);

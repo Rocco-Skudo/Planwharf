@@ -22,13 +22,13 @@ async function until(check) { for (let n = 0; n < 200; n++) { if (check()) retur
     const expected = { resultId: info.resultId, attemptId: info.attemptId, subTaskId: info.subTaskId, megaTaskId: info.megaTaskId,
       status: mode === 'blocked' ? 'BLOCKED' : mode === 'failed' ? 'FAILED' : 'COMPLETE', summary: 'Isolated provider wrote its structured findings.', filesChanged: [], tests: [], blockers: [], nextAction: 'Review findings.', createdAt: new Date().toISOString() };
     fs.writeFileSync(path.join(folder, 'fixture.json'), JSON.stringify({ mode, expected, structuredResultPath }));
-    fs.writeFileSync(path.join(folder, 'exec'), `const fs=require('fs'); const fixture=JSON.parse(fs.readFileSync('fixture.json')); let prompt='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync('received.json',JSON.stringify({prompt,args:process.argv.slice(2)}));if(fixture.mode!=='missing'){if(fixture.mode.includes('wrong-identity'))fixture.expected.megaTaskId='MT-wrong-project';fs.writeFileSync(fixture.structuredResultPath,(fixture.mode.startsWith('bom')?'\uFEFF':'')+JSON.stringify(fixture.expected));}console.log('Isolated provider finished');});`);
+    fs.writeFileSync(path.join(folder, 'exec'), `const fs=require('fs'); const fixture=JSON.parse(fs.readFileSync('fixture.json')); let prompt='';process.stdin.setEncoding('utf8');process.stdin.on('data',chunk=>prompt+=chunk);process.stdin.on('end',()=>{fs.writeFileSync('received.json',JSON.stringify({prompt,args:process.argv.slice(2)}));if(fixture.mode!=='missing'){if(fixture.mode.includes('wrong-identity'))fixture.expected.megaTaskId='MT-wrong-project';fs.writeFileSync(process.argv[process.argv.indexOf('--output-last-message')+1],(fixture.mode.startsWith('bom')?'\uFEFF':'')+JSON.stringify(fixture.expected));}console.log('Isolated provider finished');});`);
     const launched = spawnWorker(info); pids.push(launched.pid);
     const opts = parseArgs(['node', 'runner', '--job-file', launched.inputPath]);
     await until(() => fs.existsSync(exitPath) && fs.existsSync(resultPath) && /STATUS: (COMPLETE|FAILED|BLOCKED)/.test(fs.readFileSync(resultPath, 'utf8')));
     const received = JSON.parse(fs.readFileSync(path.join(folder, 'received.json')));
     assert.ok(received.prompt.length > 32767);
-    assert.equal(received.prompt, promptFor(opts));
+    assert.equal(received.prompt, promptFor({ ...opts, resultTransport: 'codex-final-response' }));
     assert.equal(received.args[received.args.indexOf('-m') + 1], 'gpt-6-luna');
     assert.ok(received.args.every(arg => arg.length < 32767));
     const status = ['valid', 'bom'].includes(mode) ? 'COMPLETE' : mode === 'blocked' ? 'BLOCKED' : 'FAILED';

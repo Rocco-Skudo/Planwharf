@@ -6,6 +6,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { projectHome, localGit } = require('./project-home.cjs');
+const { metadataLink } = require('./test-links.cjs');
 const { homeNext } = require('./execution-next.cjs');
 async function fixture(t) { const root = await fs.mkdtemp(path.join(os.tmpdir(), 'planwharf-home-containment-')); t.after(() => fs.rm(root, { recursive: true, force: true })); return root; }
 const item = folder => ({ project: { id: 'alpha', folder }, revisions: [{ id: 1, title: 'Plan', direction: 'Goal', state: '', open: ['First question?', 'Second question?'], closed: [] }] });
@@ -56,12 +57,15 @@ test('linked project inspection does not fingerprint files through a directory s
   execFileSync('git', ['-C', alpha, 'add', '.']); execFileSync('git', ['-C', alpha, 'commit', '-qm', 'Fixture']);
   await fs.rm(path.join(alpha, 'linked'), { recursive: true });
   await fs.writeFile(path.join(beta, 'data'), 'sibling secret');
-  try { await fs.symlink(beta, path.join(alpha, 'linked'), 'dir'); } catch (error) { if (error.code === 'EPERM') { t.skip('Directory symlinks unavailable'); return; } throw error; }
+  await fs.symlink(beta, path.join(alpha, 'linked'), process.platform === 'win32' ? 'junction' : 'dir');
+  assert.equal((await fs.lstat(path.join(alpha, 'linked'))).isSymbolicLink(), true);
   const before = await localGit(alpha);
   await fs.writeFile(path.join(beta, 'data'), 'changed sibling secret');
   const after = await localGit(alpha);
-  assert.equal(after.fingerprint, before.fingerprint);
-  assert.equal(after.files.find(file => file.path === 'linked/data')?.fingerprint, 'deleted');
+  assert.equal(before.readable, false, 'Do not let Git traverse a foreign directory redirect');
+  assert.equal(before.reason, 'Contained local Git history unavailable.');
+  assert.deepEqual(after, before, 'Sibling changes cannot alter inspection evidence');
+  assert.equal(after.fingerprint, undefined);
 });
 
 test('current durable MegaTask outranks stale row flags and another project or later task', async t => {
@@ -78,7 +82,7 @@ test('Git metadata symlink and gitdir redirect to another project fail closed', 
   execFileSync('git', ['init', '-q', beta]);
   await fs.writeFile(path.join(beta, 'private'), 'sibling-only content');
   try {
-    await fs.symlink(path.join(beta, '.git'), path.join(alpha, '.git'), 'dir');
+    await fs.symlink(path.join(beta, '.git'), path.join(alpha, '.git'), process.platform === 'win32' ? 'junction' : 'dir');
     assert.equal((await localGit(alpha)).readable, false);
     await fs.unlink(path.join(alpha, '.git'));
   } catch (error) { if (error.code !== 'EPERM') throw error; t.diagnostic('Directory symlink unavailable; gitdir redirect still tested.'); }
@@ -91,8 +95,10 @@ test('Git inspection rejects redirected HEAD metadata before reading another pro
   execFileSync('git', ['init', '-q', alpha]);
   await fs.writeFile(path.join(beta, 'private-head'), 'ref: refs/heads/private\n');
   await fs.unlink(path.join(alpha, '.git', 'HEAD'));
-  try { await fs.symlink(path.join(beta, 'private-head'), path.join(alpha, '.git', 'HEAD')); } catch (error) { if (error.code === 'EPERM') { t.skip('File symlinks unavailable'); return; } throw error; }
-  assert.equal((await localGit(alpha)).readable, false);
+  metadataLink(path.join(beta, 'private-head'), path.join(alpha, '.git', 'HEAD'), t);
+  const state = await localGit(alpha);
+  assert.equal(state.readable, false);
+  assert.equal(state.reason, 'Contained local Git history unavailable.', 'Reject before invoking Git, rather than failing on an invalid HEAD later');
 });
 
 test('Git inspection ignores a submodule redirected to another project but observes local edits', async t => {
