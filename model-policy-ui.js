@@ -30,7 +30,7 @@
   }
   function routingReceipt(r) {
     if (!r?.assessment || !r?.limits) return '';
-    return `<details class="routing-receipt"><summary>Routing: ${escape(r.mode)} · ${escape(r.tier)} · ${escape(r.assessment.level)}</summary><p>${escape(r.provider)}/${escape(r.cli)} (${escape(r.modelId)})</p><p>${escape(r.assessment.reason)}</p><p>${escape(r.reason)}</p>${r.restriction ? `<p>${escape(r.restriction)}</p>` : ''}<p class="muted">${escape(r.assessment.decomposition)} Quota remaining: ${r.remainingPercent === null ? 'unread' : escape(r.remainingPercent) + '% at assignment'}. Limits: ${r.limits.maxPremiumPerMegaTask ?? 'no extra'} per MegaTask; ${r.limits.maxPremiumConcurrent ?? 'existing'} simultaneous.</p></details>`;
+    return `<details class="routing-receipt"><summary>Routing: ${escape(r.mode)} · ${escape(r.tier)} · ${escape(r.assessment.level)}</summary><p>${escape(r.provider)}/${escape(r.cli)} (${escape(r.modelId)})</p><p>${escape(r.assessment.reason)}</p><p>${escape(r.reason)}</p>${r.restriction ? `<p>${escape(r.restriction)}</p>` : ''}<p class="muted">${escape(r.assessment.decomposition)} Quota remaining: ${r.remainingPercent === null ? 'unread' : escape(r.remainingPercent) + '% at assignment'}. Limits: ${escape(r.limits.maxPremiumPerMegaTask ?? 'no extra')} per MegaTask; ${escape(r.limits.maxPremiumConcurrent ?? 'existing')} simultaneous.</p></details>`;
   }
   function routingSection(config, models) {
     const c = config || { mode: 'catalog', fallback: 'standard' };
