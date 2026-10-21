@@ -1,6 +1,6 @@
 # Controlled single-model benchmark
 
-Compare direct Codex CLI with the actual Planwharf project, approval, worker and persistence lifecycle. The [post-setup six-trial pilot](POST_SETUP.md) records the latest results after native Windows access was restored. Earlier blocked and partial attempts remain as historical evidence. This is an experimental harness; no production performance optimization or general savings claim is established.
+Compare direct Codex CLI with the actual Planwharf lifecycle. The full 30-trial study is [paused at the operator's request](RESUME.md), with 20 completed trial rows preserved. Protocol revision 2 corrects REST grading and recovery usage accounting; historical pilots remain separate.
 
 ## Run without provider access
 
