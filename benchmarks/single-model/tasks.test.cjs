@@ -162,3 +162,22 @@ test('grader rejects in-workspace evidence and invalid execution bounds', async 
   await assert.rejects(evaluateTask('config', workspace, { evidenceDir: path.join(workspace, 'evidence') }), /outside/);
   await assert.rejects(evaluateTask('config', workspace, { timeoutMs: 0 }), /timeoutMs/);
 });
+
+
+test('REST acceptance permits unsorted durable items while HTTP lists stay sorted', async t => {
+  const root = temporary(t);
+  const source = API.replace("next.items.sort((a,b)=>a.id.localeCompare(b.id));", '');
+  assert.notEqual(source, API, 'Fixture removes only non-contract disk sorting');
+  const workspace = output(root, 'rest-api', source);
+  const report = await evaluateTask('rest-api', workspace, { evidenceDir: path.join(root, 'unsorted-store') });
+  assert.equal(report.passed, report.total, JSON.stringify(report.checks));
+});
+
+
+test('repaired historical REST fixture handles duplicate rejections and validates corrupt stores synchronously', async t => {
+  const root = temporary(t);
+  const source = fs.readFileSync(path.join(__dirname, 'regressions/rest-pilot-fixed.cjs'), 'utf8');
+  const workspace = output(root, 'rest-api', source);
+  const report = await evaluateTask('rest-api', workspace, { evidenceDir: path.join(root, 'repaired-pilot') });
+  assert.equal(report.passed, report.total, JSON.stringify(report.checks));
+});

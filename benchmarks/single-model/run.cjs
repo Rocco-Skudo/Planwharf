@@ -3,6 +3,7 @@ const fs=require('node:fs'),path=require('node:path'),os=require('node:os'),cryp
 const {spawn}=require('node:child_process');
 const tasks=require('./tasks.cjs'),R=require('./runtime.cjs'),A=require('./analysis.cjs');
 const runner=require('../../engine/runner.cjs');
+const usageLedger=require('./usage.cjs');
 const RECOVERY='Continue the interrupted task from the existing files and the unchanged TASK.md. Complete all requirements, run your own tests and review your work. Do not open any visible windows or inspect other workspaces.';
 const delay=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 function save(file,value){fs.mkdirSync(path.dirname(file),{recursive:true});fs.writeFileSync(file,JSON.stringify(value,null,2)+'\n');}
@@ -28,7 +29,8 @@ async function direct(options,workspace,privateDir,scenario){
   calls.push(result);
   if(result.interrupted&&result.threadId&&options.maxCalls>1){const remaining=Math.floor(options.timeoutMs-(performance.now()-started));if(remaining>1000){result=await R.runCli({workspace,prompt:RECOVERY,model:options.model,artifactDir:path.join(privateDir,'call-2'),timeoutMs:remaining,resumeId:result.threadId});calls.push(result);}}
   const diagnostic=calls.map((c,i)=>[failureText(path.join(privateDir,'call-'+(i+1))),...c.failure,...c.diagnostics].join('\n')).join('\n');
-  return{completed:result.completed,timedOut:result.timedOut,blocked:!result.completed&&environmentBlocked(diagnostic),calls:calls.map(c=>({usage:c.usage,wallMs:c.wallMs,exitCode:c.exitCode,threadId:c.threadId})),
+  const accounted=usageLedger.allocate(calls);save(path.join(privateDir,'usage-ledger.json'),accounted.map(c=>({threadId:c.threadId,exitCode:c.exitCode,usage:c.usage,responseReceipt:c.responseReceipt,newResponseIds:c.newResponseIds,accounting:c.accounting})));
+  return{completed:result.completed,timedOut:result.timedOut,blocked:!result.completed&&environmentBlocked(diagnostic),calls:accounted.map(c=>({usage:c.usage,wallMs:c.wallMs,exitCode:c.exitCode,threadId:c.threadId,newResponseIds:c.newResponseIds,accounting:c.accounting})),
     invocations:calls.length,usageScope:'all_calls',faultInjected:fault,recoveryAttempted:calls.length>1,restarts:calls.length-1,initialApprovals:0,scriptedRecoveryActions:calls.length-1,diagnostic:A.sanitizeEvidence(diagnostic),
     timing:{cliWallMs:calls.reduce((n,c)=>n+c.wallMs,0),modelMs:null,waitingMs:null,retryMs:null,processLaunchMs:null}};
 }
@@ -77,11 +79,12 @@ async function planwharf(options,workspace,privateDir,scenario){
     let log='';try{log=fs.readFileSync(event.logPath,'utf8');}catch{}diagnostic+=log+'\n';
     const sessionId=log.match(/session id:\s*([a-f0-9-]{36})/i)?.[1]||null;
     let exit=null;try{exit=JSON.parse(fs.readFileSync(event.exitPath,'utf8'));}catch{}
-    calls.push({role:'worker',exactModel:event.exactModel,attemptId:event.attemptId,usage:exit?.exitCode===0?receiptSession(sessionId,profile):null,exitCode:exit?.exitCode??null,sessionId,launchMs:event.launchMs});
+    calls.push({role:'worker',exactModel:event.exactModel,attemptId:event.attemptId,responseReceipt:usageLedger.readReceipt(sessionId,profile),usage:exit?.exitCode===0?receiptSession(sessionId,profile):null,exitCode:exit?.exitCode??null,sessionId,launchMs:event.launchMs});
   }
   for(const event of raw.filter(e=>e.kind==='lead-start')){const finish=raw.find(e=>e.kind==='lead-finish'&&e.id===event.id);diagnostic+='\n'+JSON.stringify({failure:finish?.failure,diagnostic:finish?.diagnostic,error:finish?.error});calls.push({role:'lead',exactModel:event.exactModel,usage:finish?.tokens?{inputTokens:finish.tokens.input,outputTokens:finish.tokens.output,cachedInputTokens:finish.tokens.cachedInput??null,reasoningTokens:null}:null,wallMs:finish?.wallMs??null});}
+  const accounted=usageLedger.allocate(calls);save(path.join(privateDir,'usage-ledger.json'),accounted);
   if(!completed&&environmentBlocked(diagnostic))blocked=true;
-  return{completed,timedOut,blocked,calls,invocations:calls.length,usageScope:'all_calls',faultInjected:fault,recoveryAttempted,restarts:recoveryAttempted?1:0,initialApprovals:approvals,scriptedRecoveryActions:recoveryAttempted?2:0,
+  return{completed,timedOut,blocked,calls:accounted.map(({responseReceipt,...call})=>call),invocations:calls.length,usageScope:'all_calls',faultInjected:fault,recoveryAttempted,restarts:recoveryAttempted?1:0,initialApprovals:approvals,scriptedRecoveryActions:recoveryAttempted?2:0,
     diagnostic:A.sanitizeEvidence(diagnostic.slice(-16000)),httpEvents:A.sanitizeEvidence(events),lifecycle:final?{status:final.status,megaTaskId:final.megaTaskId,subTasks:final.subTasks?.map(s=>({type:s.type,status:s.status}))}:null,
     timing:{modelMs:null,waitingMs:null,retryMs:null,processLaunchMs:calls.length&&calls.every(c=>Number.isFinite(c.launchMs))?calls.reduce((n,c)=>n+c.launchMs,0):null}};
 }
@@ -89,8 +92,8 @@ async function execute(options){
   bounded(options);const output=path.resolve(options.output);if(fs.existsSync(output))throw Error('Output directory must not already exist; evidence is append-only per study');fs.mkdirSync(output,{recursive:true});
   const list=schedule(options.pairs),studyId=crypto.randomUUID(),environment=await R.environment(options.model);
   if(!environment.modelInAuthenticatedCatalog||!environment.cli.authenticated)throw Error('Exact model/account access is not verified');
-  const manifest={schema:1,studyId,startedAt:new Date().toISOString(),kind:'LIVE_PILOT',baseline:environment.baseline,model:options.model,options,environment,schedule:list,
-    specificationHashes:tasks.listTasks(),sealedGraderHash:R.sha(fs.readFileSync(path.join(__dirname,'tasks.cjs'))),protocol:{acceptance:'All presealed deterministic checks pass AND transport completes successfully; incomplete outcomes retain resource use',timeBoundMs:options.timeoutMs,callBound:options.maxCalls,
+  const manifest={schema:1,studyId,startedAt:new Date().toISOString(),kind:options.pairs===5?'LIVE_FULL_STUDY':'LIVE_PILOT',protocolRevision:2,baseline:environment.baseline,model:options.model,options,environment,schedule:list,
+    specificationHashes:tasks.listTasks(),sealedGraderHash:R.sha(fs.readFileSync(path.join(__dirname,'tasks.cjs'))),protocol:{accounting:'Native provider per-response receipts, including interrupted responses, deduplicated by response ID across resume. Unreported provider usage remains UNKNOWN.',acceptance:'All presealed deterministic checks pass AND transport completes successfully; incomplete outcomes retain resource use',timeBoundMs:options.timeoutMs,callBound:options.maxCalls,
       interventions:'One predeclared recovery on first source change for medium/complex, no ad hoc fixes or hidden grader feedback',windows:'No visible windows. Only server.cjs and noninteractive CLI are used.',humanEffort:'Scripted HTTP/CLI actions recorded; actual human-time savings UNKNOWN',fullStudy:'Target five pairs per task only after an accepted pilot and explicit --pairs 5 invocation; no automatic provider spending'}};
   save(path.join(output,'manifest-private.json'),manifest);save(path.join(output,'manifest.json'),A.sanitizeEvidence(manifest));
   const preflight=await require('./preflight.cjs').checkCapabilities({model:options.model,directory:path.join(output,'private','preflight'),timeoutMs:Math.min(options.timeoutMs,90000)});

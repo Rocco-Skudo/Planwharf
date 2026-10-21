@@ -6,6 +6,7 @@ const crypto = require('node:crypto');
 const { spawn, spawnSync } = require('node:child_process');
 const runtime = require('../../engine/provider-runtime.cjs');
 const runner = require('../../engine/runner.cjs');
+const usageLedger = require('./usage.cjs');
 const sha = value => crypto.createHash('sha256').update(value).digest('hex');
 function cliEnvironment() {
   // Configure the CLI's existing profile explicitly, without changing the user's profile.
@@ -69,7 +70,10 @@ async function runCli({ workspace, prompt, model, artifactDir, timeoutMs, onStar
     child.stderr.on('data',chunk=>{bytes+=chunk.length;if(bytes<=16*1024*1024)stderr.write(chunk);else stop();});
     child.on('error',e=>diagnostics.push(e.message));
     child.once('close',(exitCode,signal)=>{clearTimeout(timer);if(forced)clearTimeout(forced);if(tick)clearInterval(tick);if(pending.trim())try{events.push(JSON.parse(pending));}catch{}stdout.end();stderr.end();
-      resolve({exitCode,signal,wallMs:performance.now()-started,timedOut,interrupted,diagnostics,threadId:events.find(e=>e.type==='thread.started')?.thread_id||null,
+      const threadId=events.find(e=>e.type==='thread.started')?.thread_id||null;
+      const responseReceipt=usageLedger.readReceipt(threadId,cliEnvironment().CODEX_HOME);
+      if(responseReceipt)fs.writeFileSync(path.join(artifactDir,'usage-receipt.json'),JSON.stringify(responseReceipt,null,2)+'\n');
+      resolve({responseReceipt,exitCode,signal,wallMs:performance.now()-started,timedOut,interrupted,diagnostics,threadId:events.find(e=>e.type==='thread.started')?.thread_id||null,
         usage:usageFromEvents(events),eventTypes:events.map(e=>e.type),completed:exitCode===0&&events.some(e=>e.type==='turn.completed')&&!events.some(e=>e.type==='turn.failed'||e.type==='error'),failure:events.filter(e=>e.type==='error'||e.type==='turn.failed').map(e=>e.message||e.error?.message||e.type),command:{executable,args},startedAt:new Date(Date.now()-(performance.now()-started)).toISOString()});
     });
     child.stdin.on('error',()=>{});child.stdin.end(prompt);
