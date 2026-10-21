@@ -1,3 +1,13 @@
+# Continuation completed on the office machine
+
+The ten remaining logical slots finished on 2026-10-21: nine accepted and one defective scheduler output. Together with the unchanged home checkpoint, all 30 logical slots now have outcomes (26 accepted, four defective). See the [final results and evidence limitations](evidence/office-completed-2026-10-21/RESULTS.md), [all 30 rows](evidence/office-completed-2026-10-21/combined-runs.json), [cohort mapping](evidence/office-completed-2026-10-21/cohorts.json) and [office native usage audit](evidence/office-completed-2026-10-21/usage-audit.json).
+
+The pinned CLI and native capability check passed. All seven frozen source hashes matched before/after execution. The office audit validates 20 launches over ten trials, including interrupted response usage, with no missing reported receipts. The complete offline engineering suite passed with no failures or skips. Only hidden background processes were used. The old aborted attempt and its known consumption remain separate; pair 1 is excluded from paired resource analysis. Full home raw logs remain unavailable on this machine and were not newly uploaded. Keep PR #23 in draft; no merge or release was requested.
+
+The following is the original pause checkpoint, retained for history. Its instructions to wait for the user were superseded by the explicit office continuation request.
+
+---
+
 # Resume checkpoint: full study paused by the operator
 
 The user requested pausing on 2026-10-21 to leave and resume from the office. The owned benchmark process tree has stopped. **20 of 30 scheduled trials completed: 17 accepted, three defective REST outputs.** The first scheduler direct attempt was interrupted by this operator pause; its artifacts and reported usage were preserved separately. Nine trials had not started. This is not a completed 30-trial comparison.

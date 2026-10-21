@@ -1,6 +1,6 @@
 # Controlled single-model benchmark
 
-Compare direct Codex CLI with the actual Planwharf lifecycle. The full 30-trial study is [paused at the operator's request](RESUME.md), with 20 completed trial rows preserved. Protocol revision 2 corrects REST grading and recovery usage accounting; historical pilots remain separate.
+Compare direct Codex CLI with the actual Planwharf lifecycle. [All 30 logical trial slots now have outcomes](evidence/office-completed-2026-10-21/RESULTS.md): 26 accepted and four defective. The original 20 home rows were preserved without rerunning them; ten scheduler slots completed on the office machine. Home and office resource comparisons remain separate, and the operator-replacement pair is excluded from paired resource analysis. Protocol revision 2 corrects REST grading and recovery usage accounting; historical pilots remain separate.
 
 ## Run without provider access
 
