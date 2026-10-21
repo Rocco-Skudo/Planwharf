@@ -19,6 +19,8 @@ function sanitizeEvidence(value) {
     /^(?:authorization|cookie|set-cookie|password|secret|token|api[_-]?key|access[_-]?token|refresh[_-]?token|id[_-]?token|env|environmentVariables)$|(?:[_-](?:API[_-]?KEY|TOKEN|SECRET|PASSWORD)$)|(?:clientSecret$)/i.test(key) ? '[REDACTED]' : sanitizeEvidence(item)]));
   if (typeof value !== 'string') return value;
   return value
+    // Native plugin diagnostics may contain signed download URLs.
+    .replace(/(\bhttps?:\/\/[^\\\s"'<>?]+)\?[^\\\s"'<>]*/gi, '$1?[REDACTED QUERY]')
     .replace(/\b(?:Bearer|Basic)\s+[A-Za-z0-9+/_=.-]+/gi, '[REDACTED AUTH]')
     .replace(/\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+|sk-[A-Za-z0-9_-]{12,})\b/g, '[REDACTED SECRET]')
     .replace(/\b((?:[A-Z_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)|authorization)\s*[=:]\s*)[^\s,;]+/gi, '$1[REDACTED]')

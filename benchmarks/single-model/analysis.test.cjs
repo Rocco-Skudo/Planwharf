@@ -167,3 +167,19 @@ test('plain report remains compact for an all-blocked three-category pilot', () 
   for (const row of a.runs) assert.ok(report.includes(row.id));
   assert.ok(a.categories.complex.arms.planwharf.allRunsMetrics.wallMs, 'Machine analysis retains full detail');
 });
+
+
+test('publication removes signed URL queries in parsed and raw native diagnostics', () => {
+  const link = 'https://example.com/file?se=2030-01-01&sig=sensitive%2Bsignature';
+  for (const raw of [link, JSON.stringify({ diagnostic: link })]) {
+    const safe = sanitizeEvidence(raw);
+    assert.ok(!safe.includes('sensitive'));
+    assert.ok(!safe.includes('sig='));
+    assert.ok(safe.includes('https://example.com/file?[REDACTED QUERY]'));
+  }
+  const nested = JSON.stringify({ diagnostic: JSON.stringify({ url: link }) });
+  assert.doesNotThrow(() => JSON.parse(sanitizeEvidence(nested)));
+  assert.equal(JSON.parse(JSON.parse(sanitizeEvidence(nested)).diagnostic).url, 'https://example.com/file?[REDACTED QUERY]');
+  assert.equal(sanitizeEvidence('https://example.com/docs'), 'https://example.com/docs');
+  assert.equal(sanitizeEvidence({ diagnostic: link, inputTokens: 123 }).inputTokens, 123);
+});

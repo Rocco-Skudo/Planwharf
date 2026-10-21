@@ -1,5 +1,7 @@
 # CLI repair and rerun: initialization restored, native tools still blocked
 
+Historical repair attempt retained below. See [the completed post-setup pilot](POST_SETUP.md) for the later native-access repair and six scheduled task outcomes.
+
 The follow-up on 2026-10-20 restored CLI initialization and authenticated inference. **The requested paired performance rerun could not proceed:** native Windows sandbox editing and command execution remain unavailable in this session. PR #23 retains the original six blocked trials and adds the new evidence rather than replacing historical outcomes or inventing task results.
 
 ## What was fixed

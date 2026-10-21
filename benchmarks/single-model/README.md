@@ -1,6 +1,6 @@
 # Controlled single-model benchmark
 
-Compare direct Codex CLI with the actual Planwharf project, approval, worker and persistence lifecycle. This is an experimental harness, not a performance optimization. The original six-run pilot is inconclusive. The [subsequent repair and rerun](RERUN.md) fixed CLI initialization using a private runtime profile, but native Windows sandbox operations remain blocked. No performance advantage is established.
+Compare direct Codex CLI with the actual Planwharf project, approval, worker and persistence lifecycle. The [post-setup six-trial pilot](POST_SETUP.md) records the latest results after native Windows access was restored. Earlier blocked and partial attempts remain as historical evidence. This is an experimental harness; no production performance optimization or general savings claim is established.
 
 ## Run without provider access
 
@@ -32,7 +32,7 @@ After a passed check, this opts into sequential provider use: six runs, each wit
 node benchmarks/single-model/export.cjs ../benchmark-private-new ../benchmark-sanitized-new
 ```
 
-The exporter excludes workspaces, Git directories, symlinks, unsupported/big files and credentials, and applies redaction to text and parsed JSON receipts. Sanitization is best effort; manually review the output. Do not publish a profile, environment dump or private study directory.
+The exporter excludes workspaces, Git directories, symlinks, unsupported/big files, credentials and acceptance scratch databases. It preserves independent acceptance reports, parses JSONL before redaction, and redacts signed URL queries. Sanitization is best effort; manually review the output. Do not publish a profile, environment dump or private study directory.
 
 ## Protocol frozen before trial execution
 
